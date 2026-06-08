@@ -354,6 +354,7 @@ static void run_command(const pp_cmd_t *cmd)
             prefs_set_logo((pp_logo_t)val);
             pt_display_schedule_ui(ui_apply_logo, NULL);   /* relayout on the LVGL task */
         }
+        else if (pref == PP_PREF_AUTOUPDATE) { prefs_set_auto_update(val != 0); }
         return;
     }
     }

@@ -43,6 +43,7 @@ static int       s_byline_count;
 static lv_obj_t *s_pref_sort_dd;
 static lv_obj_t *s_pref_logo_dd;
 static lv_obj_t *s_pref_hideoff_sw;
+static lv_obj_t *s_pref_autoupd_sw;
 
 /* printer picker + add form */
 static lv_obj_t *s_pr_list;
@@ -1466,6 +1467,11 @@ static void on_pref_logo_changed(lv_event_t *e)
 {
     app_state_set_pref(PP_PREF_LOGO, (int)lv_dropdown_get_selected(lv_event_get_target(e)));
 }
+static void on_pref_autoupd_changed(lv_event_t *e)
+{
+    app_state_set_pref(PP_PREF_AUTOUPDATE,
+                       lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0);
+}
 
 static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
 {
@@ -1527,6 +1533,13 @@ static void build_prefs_screen(void)
     lv_obj_align(s_pref_logo_dd, LV_ALIGN_TOP_LEFT, 24, 318);
     dropdown_dark(s_pref_logo_dd);
     lv_obj_add_event_cb(s_pref_logo_dd, on_pref_logo_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Automatic updates (opt-in; off by default) */
+    pref_label(s_scr_prefs, "Automatic firmware updates", 392);
+    s_pref_autoupd_sw = lv_switch_create(s_scr_prefs);
+    lv_obj_align(s_pref_autoupd_sw, LV_ALIGN_TOP_LEFT, 24, 418);
+    lv_obj_set_style_bg_color(s_pref_autoupd_sw, PP_ORANGE, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_pref_autoupd_sw, on_pref_autoupd_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void on_prefs_open(lv_event_t *e)
@@ -1536,6 +1549,8 @@ static void on_prefs_open(lv_event_t *e)
     lv_dropdown_set_selected(s_pref_logo_dd, (uint16_t)prefs_logo());
     if (prefs_hide_offline()) lv_obj_add_state(s_pref_hideoff_sw, LV_STATE_CHECKED);
     else                      lv_obj_remove_state(s_pref_hideoff_sw, LV_STATE_CHECKED);
+    if (prefs_auto_update()) lv_obj_add_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
+    else                     lv_obj_remove_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
     lv_screen_load(s_scr_prefs);
 }
 

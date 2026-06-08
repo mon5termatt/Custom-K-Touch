@@ -25,6 +25,7 @@
 #include "printer_store.h"
 #include "app_state.h"
 #include "prefs.h"
+#include "ota_update.h"
 #include "web.h"
 #include "ui.h"
 
@@ -64,6 +65,7 @@ void app_main(void)
     wifi_init_start();
     app_state_start();
     web_start();   /* on-device web UI: settings + status + firmware OTA */
+    ota_update_start_auto();   /* opt-in background auto-updater (off by default) */
 
     /* We reached a healthy run state — confirm this app so the bootloader won't
      * roll back (relevant after an OTA when rollback is enabled). No-op otherwise. */

@@ -26,3 +26,7 @@ void prefs_set_hide_offline(bool v);     /* persists */
 
 pp_logo_t prefs_logo(void);
 void      prefs_set_logo(pp_logo_t l);   /* persists */
+
+/* Opt-in automatic firmware updates from GitHub Releases (default off). */
+bool prefs_auto_update(void);
+void prefs_set_auto_update(bool v);      /* persists */

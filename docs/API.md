@@ -87,12 +87,19 @@ Pair these two endpoints to script UI walkthroughs: nav → wait → screen.bmp.
 
 ## Firmware update (OTA)
 
+Updates pull the standalone **app** image (`prusa-touch-app.bin`) from the latest GitHub
+Release and flash it into the inactive OTA slot via `esp_https_ota`, with an app-identity
+check and a bootloader rollback safety net. Manual updates (below) work regardless of the
+auto-update setting; **automatic** updates are opt-in (off by default) — enable
+*Preferences → Automatic firmware updates* on the device. When enabled, the device checks
+GitHub roughly every 6 hours and applies any release with a newer version tag.
+
 ### `GET /api/update/check`
 Checks the GitHub Releases of `nomadsgalaxy/Prusa-Connect-Touch` for a newer build.
 
 ### `POST /api/update/apply`
 Triggers the self-update (download + flash via `esp_https_ota`, with an app-identity check
-and rollback safety net).
+and rollback safety net). Unaffected by the auto-update opt-in.
 
 ### `POST /update`
 Manual firmware upload — POST a raw `prusa-touch.bin` app image (multipart/binary) to flash

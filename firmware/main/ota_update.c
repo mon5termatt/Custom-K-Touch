@@ -11,8 +11,12 @@
 #include "esp_system.h"
 #include "cJSON.h"
 #include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "pandaprusa.h"   /* PP_FW_VERSION */
+#include "prefs.h"        /* prefs_auto_update() — opt-in gate */
+#include "wifi.h"         /* wifi_is_connected() */
 
 static const char *TAG = "ota_update";
 
@@ -94,8 +98,12 @@ bool ota_update_check(ota_check_t *out)
             cJSON_ArrayForEach(a, assets) {
                 const cJSON *name = cJSON_GetObjectItem(a, "name");
                 const cJSON *dl = cJSON_GetObjectItem(a, "browser_download_url");
-                if (cJSON_IsString(name) && cJSON_IsString(dl) &&
-                    strstr(name->valuestring, ".bin")) {
+                if (!cJSON_IsString(name) || !cJSON_IsString(dl)) continue;
+                /* esp_https_ota writes ONLY the app partition, so we need the
+                 * standalone app image (prusa-touch-app.bin) — never the merged
+                 * full image (bootloader@0x0), the bootloader, or the partition
+                 * table, all of which also end in ".bin". Match "app.bin" only. */
+                if (strstr(name->valuestring, "app.bin")) {
                     strlcpy(out->url, dl->valuestring, sizeof(out->url));
                     break;
                 }
@@ -134,4 +142,44 @@ void ota_update_apply(const char *bin_url)
     } else {
         ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(e));
     }
+}
+
+/* Background opt-in auto-updater. Does nothing unless the user has turned on
+ * "Automatic updates" in Preferences (default off). When enabled and online, it
+ * checks the GitHub release on a slow cadence and OTA-flashes a newer build. */
+#define OTA_AUTO_FIRST_DELAY_MS   60000      /* let WiFi associate after boot      */
+#define OTA_AUTO_PERIOD_MS        21600000   /* 6 h — well under GitHub's 60 req/h  */
+
+/* vTaskDelay in <=10 min chunks: pdMS_TO_TICKS(ms) computes ms*HZ, which overflows
+ * uint32_t for multi-hour values (collapsing a 6 h wait to ~2 min). */
+static void ota_sleep_ms(uint32_t ms)
+{
+    const uint32_t chunk = 600000;   /* 10 min */
+    while (ms) {
+        uint32_t s = ms < chunk ? ms : chunk;
+        vTaskDelay(pdMS_TO_TICKS(s));
+        ms -= s;
+    }
+}
+
+static void ota_auto_task(void *arg)
+{
+    (void)arg;
+    ota_sleep_ms(OTA_AUTO_FIRST_DELAY_MS);
+    for (;;) {
+        if (prefs_auto_update() && wifi_is_connected()) {
+            ota_check_t c;
+            if (ota_update_check(&c) && c.available && c.url[0]) {
+                ESP_LOGI(TAG, "auto-update enabled: %s -> %s, applying",
+                         c.current, c.latest);
+                ota_update_apply(c.url);   /* reboots on success */
+            }
+        }
+        ota_sleep_ms(OTA_AUTO_PERIOD_MS);
+    }
+}
+
+void ota_update_start_auto(void)
+{
+    xTaskCreate(ota_auto_task, "ota_auto", 8192, NULL, 3, NULL);
 }

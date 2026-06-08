@@ -21,7 +21,7 @@ typedef enum {
 
 /* Preference writes are routed through the net task because the LVGL task's stack
  * lives in PSRAM and cannot perform flash/NVS writes. */
-typedef enum { PP_PREF_SORT, PP_PREF_HIDE_OFFLINE, PP_PREF_LOGO } pp_pref_kind_t;
+typedef enum { PP_PREF_SORT, PP_PREF_HIDE_OFFLINE, PP_PREF_LOGO, PP_PREF_AUTOUPDATE } pp_pref_kind_t;
 void app_state_set_pref(pp_pref_kind_t pref, int value);
 
 typedef struct {

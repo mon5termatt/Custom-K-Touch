@@ -21,8 +21,8 @@ Connect-style fleet dashboard** right on the desk.
 - **Multi-printer** — add as many as you like, on the screen or from the built-in web UI.
 - **Just works on the network** — Wi-Fi onboarding on-device; if there's no known
   network it opens its own `PrusaTouch-XXXX` hotspot so you can set it up from a phone.
-- **Updates over the air** — pulls new firmware from GitHub Releases; also flashable
-  from its web page.
+- **Updates over the air** — flash new firmware from its web page any time, or opt in to
+  **automatic updates** (off by default) to have it pull new releases from GitHub on its own.
 
 ## Supported printers
 

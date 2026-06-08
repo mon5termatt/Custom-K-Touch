@@ -7,6 +7,7 @@
 static pp_sort_t s_sort = PP_SORT_STATUS;
 static bool      s_hide_offline = false;
 static pp_logo_t s_logo = PP_LOGO_STACKED;
+static bool      s_auto_update = false;   /* opt-in: off by default */
 
 static void save_u8(const char *key, uint8_t v)
 {
@@ -26,6 +27,7 @@ void prefs_load(void)
     if (nvs_get_u8(h, "sort", &v) == ESP_OK && v < PP_SORT_COUNT) s_sort = (pp_sort_t)v;
     if (nvs_get_u8(h, "hideoff", &v) == ESP_OK) s_hide_offline = (v != 0);
     if (nvs_get_u8(h, "logo", &v) == ESP_OK && v <= PP_LOGO_SINGLE) s_logo = (pp_logo_t)v;
+    if (nvs_get_u8(h, "autoupd", &v) == ESP_OK) s_auto_update = (v != 0);
     nvs_close(h);
 }
 
@@ -37,3 +39,6 @@ void prefs_set_hide_offline(bool v) { s_hide_offline = v; save_u8("hideoff", v ?
 
 pp_logo_t prefs_logo(void) { return s_logo; }
 void prefs_set_logo(pp_logo_t l) { s_logo = l; save_u8("logo", (uint8_t)l); }
+
+bool prefs_auto_update(void) { return s_auto_update; }
+void prefs_set_auto_update(bool v) { s_auto_update = v; save_u8("autoupd", v ? 1 : 0); }
