@@ -46,7 +46,7 @@ static const char INDEX_HTML[] =
 "<header>PRUSA CONNECT TOUCH</header>"
 "<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
 "<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a></nav>"
-"<div class=tab id=t0><div class=card id=st>Loading...</div><div class=card id=dev></div></div>"
+"<div class=tab id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1><div class=card><b id=pftitle>Add printer</b>"
 "<input id=pn placeholder=Name><input id=ph placeholder='IP / host'>"
 "<input id=pk placeholder='API key (blank = keep when editing)'>"
@@ -72,10 +72,10 @@ static const char INDEX_HTML[] =
 "function t(i){for(let n=0;n<5;n++){document.getElementById('t'+n).className='tab'+(n==i?' on':'');"
 "document.querySelectorAll('nav a')[n].className=(n==i?'on':'')}if(i==1)lp();if(i==4)shot()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
-"async function st(){let r=await fetch('/api/status').then(x=>x.json());"
-"document.getElementById('st').innerHTML='<b>'+r.name+'</b> &mdash; '+(r.online?r.state:'offline')+"
+"async function st(){let L=await fetch('/api/fleet').then(x=>x.json());"
+"document.getElementById('stlist').innerHTML=L.map(r=>'<div class=card><b>'+r.name+'</b> &mdash; '+(r.online?r.state:'offline')+"
 "'<div class=muted>Nozzle '+r.nozzle+'/'+r.tnozzle+'&deg; &nbsp; Bed '+r.bed+'/'+r.tbed+'&deg;</div>'+"
-"(r.has_job?('<p>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'+r.progress+'%'):'');"
+"(r.printing?('<p class=muted>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'+r.progress+'%'):'')+'</div>').join('')||'<div class=card>No printers yet.</div>';"
 "try{let d=await fetch('/api/info').then(x=>x.json());document.getElementById('dev').innerHTML="
 "'<span class=muted>'+d.name+' '+d.fw+' &middot; heap '+Math.round(d.heap_free/1024)+'KB &middot; up '+d.uptime_s+'s</span>'}catch(e){}}"
 "let PL=[],EI=-1;"
@@ -85,7 +85,8 @@ static const char INDEX_HTML[] =
 "+'<button onclick=usep('+p.i+')>Use</button> <button onclick=editp('+p.i+')>Edit</button> <button onclick=delp('+p.i+')>Remove</button></div>').join('')}"
 "function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;pn.value=p.name;ph.value=p.host;pk.value='';pftitle.textContent='Edit '+p.name+' (key blank = keep)'}"
 "async function savp(){let m=EI<0?{name:pn.value,host:ph.value,key:pk.value}:{i:EI,name:pn.value,host:ph.value,key:pk.value};"
-"await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});newp();lp()}"
+"let r=await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});"
+"if(r.status>=400)alert(await r.text());else{newp();lp()}}"
 "async function delp(i){await fetch('/api/printers/remove',{method:'POST',body:JSON.stringify({i:i})});if(EI==i)newp();lp()}"
 "async function usep(i){await fetch('/api/printers/active',{method:'POST',body:JSON.stringify({i:i})});lp()}"
 "async function savew(){await fetch('/api/wifi',{method:'POST',body:JSON.stringify({ssid:ws.value,pass:wp.value})});alert('Saved; connecting...')}"
@@ -188,7 +189,15 @@ static esp_err_t printers_post(httpd_req_t *req)
             strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
             if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
             p.port = 80;
-            if (p.host[0]) { printer_store_add(&p); app_state_printers_changed(); }
+            if (p.host[0]) {
+                if (printer_store_add(&p) < 0) {
+                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Printer limit reached");
+                    cJSON_Delete(j);
+                    free(body);
+                    return ESP_FAIL;
+                }
+                app_state_printers_changed();
+            }
             cJSON_Delete(j);
         }
         free(body);
@@ -428,9 +437,12 @@ static esp_err_t fleet_get(httpd_req_t *req)
         cJSON_AddBoolToObject(e, "online", arr[i].online);
         cJSON_AddStringToObject(e, "state", arr[i].state);
         cJSON_AddNumberToObject(e, "nozzle", (int)arr[i].temp_nozzle);
+        cJSON_AddNumberToObject(e, "tnozzle", (int)arr[i].target_nozzle);
         cJSON_AddNumberToObject(e, "bed", (int)arr[i].temp_bed);
+        cJSON_AddNumberToObject(e, "tbed", (int)arr[i].target_bed);
         cJSON_AddBoolToObject(e, "printing", arr[i].has_job);
         cJSON_AddNumberToObject(e, "progress", (int)(arr[i].progress + 0.5f));
+        cJSON_AddStringToObject(e, "job", arr[i].job_name);
         cJSON_AddItemToArray(a, e);
     }
     char *js = cJSON_PrintUnformatted(a);
