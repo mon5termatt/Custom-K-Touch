@@ -1,0 +1,6 @@
+## Managed component dependencies for the Prusa-Touch app.
+## The PandaTouch_IDF BSP (local, in components/) pulls the LCD/touch/USB stack;
+## we pin LVGL here so its Kconfig surfaces at the project level.
+dependencies:
+  idf: ">=5.1"
+  lvgl/lvgl: "~9.2"

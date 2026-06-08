@@ -1,0 +1,51 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets / device config (never commit API keys or IPs)
+firmware/main/printers.h
+
+# Image-asset sources. The generated firmware/main/pt_*.c ARE committed so the
+# firmware builds out of the box; the raw PNG sources they were rasterized from
+# are kept locally only.
+firmware/assets/
+
+# Local research / scratch (not needed to flash or install)
+spike/
+tmp_*
+*/tmp_*
+tmp_save_xl.py
+
+# Working notes kept locally, not part of the shipped repo
+PROJECT_PLAN.md
+ROADMAP.md
+FINDINGS.md
+UI_DESIGN.md
+PRUSALINK_PARITY.md
+
+# Build / flash / capture logs + screenshots (dev only)
+firmware/*.txt
+firmware/*.bmp
+firmware/*.png
+firmware/flash_log_*
+firmware/build_log_*

@@ -1,0 +1,66 @@
+# This file was generated using idf.py save-defconfig. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 5.3.1 Project Minimal Configuration
+#
+CONFIG_BOOTLOADER_FLASH_DC_AWARE=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_120M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_SPEED_120M=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+CONFIG_LV_COLOR_MIX_ROUND_OFS=0
+CONFIG_LV_USE_LODEPNG=y
+CONFIG_LV_USE_SYSMON=y
+CONFIG_LV_USE_PERF_MONITOR=y
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_LV_BUILD_DEMOS=n
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+
+# ---- Prusa-Touch additions ----
+# Larger main task stack: LVGL UI construction + TLS to PrusaLink.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# HTTP client (PrusaLink REST). TLS kept on for https-capable printers.
+CONFIG_ESP_TLS_INSECURE=y
+CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
+
+# Fonts used by the Prusa-Touch UI (Connect-style dense cards + large readable type)
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_40=y
+
+# No on-screen FPS/perf overlay in the shipped UI
+CONFIG_LV_USE_PERF_MONITOR=n
+
+# QR code widget — About/License screen links to the GitHub repo
+CONFIG_LV_USE_QRCODE=y
+
+# Custom partition table (bigger app partition; 16MB flash)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# TLS root cert bundle (for GitHub HTTPS auto-update)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# OTA rollback safety net: a freshly OTA'd app must call
+# esp_ota_mark_app_valid_cancel_rollback() (app_main does, once healthy) or the
+# bootloader reverts to the previous slot on next boot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# More LWIP sockets: WiFi + web server + PrusaLink polling + Connect/OAuth TLS
+CONFIG_LWIP_MAX_SOCKETS=16

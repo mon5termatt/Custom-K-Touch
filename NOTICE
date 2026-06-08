@@ -1,0 +1,19 @@
+Prusa-Connect-Touch — NOTICE
+
+Licensed under the Open Community License v1.1 with the Software Attribution
+add-on (OCL v1.1 + SWAtt v1). See LICENSE for full terms.
+
+SWAtt v1 requires derivatives to visibly retain creator attribution in BOTH the
+user interface and the source code. In this firmware the attribution is shown on
+the About screen (Settings -> About / License). If you distribute a derivative you
+must keep an equivalent "built on Prusa-Connect-Touch" attribution in your UI and
+source.
+
+Built on / includes (NOT relicensed under OCL — kept under their own licenses):
+  - PandaTouch_IDF — BigTreeTech, MIT — components/PandaTouch_IDF
+  - ESP-IDF, LVGL, mbedTLS, cJSON — their respective upstream licenses
+
+"Prusa" and "Prusa Connect" are trademarks of Prusa Research a.s. This is an
+independent community project, not affiliated with or endorsed by Prusa Research.
+
+Source: https://github.com/nomadsgalaxy/Prusa-Connect-Touch
