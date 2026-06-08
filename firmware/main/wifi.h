@@ -16,6 +16,10 @@ bool wifi_has_creds(void);
 bool wifi_is_ap_active(void);
 const char *wifi_ap_ssid(void);   /* "PrusaTouch-XXXX" once the hotspot is up */
 
+/* Device's dotted IPv4 once connected (e.g. "192.168.1.42"), else "". Use it to
+ * tell the user where to reach the web UI from a computer on the same network. */
+const char *wifi_ip_str(void);
+
 /* Blocking scan (~2 s). Fills ssids[] (each >=33 bytes); returns count. Run this
  * off the LVGL thread (the network task does). */
 int  wifi_scan(char ssids[][33], int max);

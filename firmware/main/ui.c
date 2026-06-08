@@ -796,6 +796,31 @@ static void on_wifi_connect_clicked(lv_event_t *e)
     lv_screen_load(s_scr_status);
 }
 
+/* Update the Wi-Fi status line. Three states, in priority order: connected (show
+ * the device IP + web-UI URL so the user can reach it from a computer), hotspot up,
+ * or the setup tip. Cheap + idempotent — also called from ui_apply_status each poll
+ * so the IP appears within a cycle of connecting while the screen is open. */
+static void wifi_status_label_refresh(void)
+{
+    if (!s_wifi_ap_lbl) return;
+    if (wifi_is_connected() && wifi_ip_str()[0]) {
+        lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_OK, 0);
+        lv_label_set_text_fmt(s_wifi_ap_lbl,
+            LV_SYMBOL_OK " Connected. From a computer on the same network, open "
+            "http://%s/ to manage printers and update firmware.", wifi_ip_str());
+    } else if (wifi_is_ap_active()) {
+        lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_TEXT_MUTED, 0);
+        lv_label_set_text_fmt(s_wifi_ap_lbl,
+            LV_SYMBOL_WARNING " No network. Hotspot \"%s\" is open - join it from a "
+            "phone and open http://192.168.4.1 to set up Wi-Fi.", wifi_ap_ssid());
+    } else {
+        lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_TEXT_MUTED, 0);
+        lv_label_set_text(s_wifi_ap_lbl,
+            "Tip: if no known network is found, the device opens a \"PrusaTouch-...\" "
+            "hotspot at http://192.168.4.1 for setup.");
+    }
+}
+
 /* Reset the Wi-Fi screen widgets + hotspot hint and kick off a scan. Shared by the
  * menu entry and the test-nav API so the screen is always correctly populated. */
 static void wifi_screen_prepare(void)
@@ -805,17 +830,8 @@ static void wifi_screen_prepare(void)
     lv_textarea_set_text(s_wifi_ta_pass, "");
     lv_obj_clean(s_wifi_list);
 
-    /* Surface the provisioning hotspot when it's up (no network reachable). */
-    if (wifi_is_ap_active()) {
-        lv_label_set_text_fmt(s_wifi_ap_lbl,
-            LV_SYMBOL_WARNING " No network. Hotspot \"%s\" is open - join it from a "
-            "phone and open http://192.168.4.1 to set up Wi-Fi.", wifi_ap_ssid());
-    } else {
-        lv_label_set_text(s_wifi_ap_lbl,
-            "Tip: if no known network is found, the device opens a \"PrusaTouch-...\" "
-            "hotspot at http://192.168.4.1 for setup.");
-    }
-    app_state_wifi_scan();   /* auto-scan */
+    wifi_status_label_refresh();   /* connected IP / hotspot / setup tip */
+    app_state_wifi_scan();         /* auto-scan */
     lv_list_add_text(s_wifi_list, "Scanning...");
 }
 
@@ -1631,6 +1647,7 @@ void ui_apply_status(void *arg)
     }
     strlcpy(s_active_model, s->model, sizeof(s_active_model));
     lv_obj_set_style_bg_color(s_conn_dot, s->online ? PP_OK : PP_ERROR, 0);
+    wifi_status_label_refresh();   /* keep the Wi-Fi screen's IP line current */
 
     /* hero: model render on the orange tile, scaled to fill */
     const lv_image_dsc_t *mimg = model_image(s->model);

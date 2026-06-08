@@ -20,6 +20,7 @@ static volatile bool s_connected;
 static volatile bool s_have_creds;
 static volatile bool s_ap_active;       /* provisioning hotspot is up */
 static char          s_ap_ssid[33];
+static char          s_ip[16];          /* dotted IPv4 once STA has an address */
 static int s_retries;
 
 #define WIFI_AP_FALLBACK_RETRIES 12     /* STA attempts before raising the hotspot */
@@ -103,6 +104,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
+        s_ip[0] = '\0';
         if (s_have_creds) {
             s_retries++;
             if (s_retries == WIFI_AP_FALLBACK_RETRIES) start_ap();  /* raise hotspot once */
@@ -113,6 +115,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got IP " IPSTR, IP2STR(&ev->ip_info.ip));
+        snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
         s_connected = true;
         s_retries = 0;
         stop_ap();
@@ -123,6 +126,7 @@ bool wifi_is_connected(void) { return s_connected; }
 bool wifi_has_creds(void)    { return s_have_creds; }
 bool wifi_is_ap_active(void) { return s_ap_active; }
 const char *wifi_ap_ssid(void) { return s_ap_ssid; }
+const char *wifi_ip_str(void)  { return s_ip; }
 
 void wifi_init_start(void)
 {
