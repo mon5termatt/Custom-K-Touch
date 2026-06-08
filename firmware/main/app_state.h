@@ -16,7 +16,13 @@ typedef enum {
     PP_CMD_GCODE,         /* uses path=gcode string      */
     PP_CMD_PREHEAT,       /* uses index=material_idx     */
     PP_CMD_DASH_REFRESH,
+    PP_CMD_SET_PREF,      /* uses index = packed pref (NVS write off the LVGL task) */
 } pp_cmd_kind_t;
+
+/* Preference writes are routed through the net task because the LVGL task's stack
+ * lives in PSRAM and cannot perform flash/NVS writes. */
+typedef enum { PP_PREF_SORT, PP_PREF_HIDE_OFFLINE, PP_PREF_LOGO } pp_pref_kind_t;
+void app_state_set_pref(pp_pref_kind_t pref, int value);
 
 typedef struct {
     pp_cmd_kind_t kind;

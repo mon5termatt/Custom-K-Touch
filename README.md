@@ -66,6 +66,12 @@ image):
 cd firmware && idf.py set-target esp32s3 && idf.py build
 ```
 
+## Developer API
+
+The device exposes a small HTTP API (status, fleet, printer config, Wi-Fi, OTA, a live
+screen mirror, and remote UI navigation) — useful for integrations and troubleshooting.
+See [`docs/API.md`](docs/API.md).
+
 ## License
 
 [OCL v1.1 + SWAtt v1](LICENSE) — see [`NOTICE`](NOTICE) for attribution. Built on the

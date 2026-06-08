@@ -5,6 +5,7 @@ idf_component_register(
         "prusalink.c"
         "moonraker.c"
         "printer_store.c"
+        "prefs.c"
         "app_state.c"
         "web.c"
         "ota_update.c"

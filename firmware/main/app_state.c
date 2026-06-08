@@ -3,6 +3,7 @@
 #include "prusalink.h"
 #include "moonraker.h"
 #include "printer_store.h"
+#include "prefs.h"
 #include "wifi.h"
 #include "ui.h"
 
@@ -104,6 +105,13 @@ void app_state_select_printer(int index)
 void app_state_refresh_dashboard(void)
 {
     pp_cmd_t cmd = { .kind = PP_CMD_DASH_REFRESH };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_set_pref(pp_pref_kind_t pref, int value)
+{
+    /* Packed so the NVS write happens on this task, not the PSRAM-stack LVGL task. */
+    pp_cmd_t cmd = { .kind = PP_CMD_SET_PREF, .index = ((int)pref << 8) | (value & 0xFF) };
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -338,6 +346,16 @@ static void run_command(const pp_cmd_t *cmd)
     case PP_CMD_DASH_REFRESH:
         publish_dashboard();
         return;
+    case PP_CMD_SET_PREF: {
+        int pref = cmd->index >> 8, val = cmd->index & 0xFF;   /* NVS write on net task */
+        if (pref == PP_PREF_SORT) { prefs_set_sort((pp_sort_t)val); publish_dashboard(); }
+        else if (pref == PP_PREF_HIDE_OFFLINE) { prefs_set_hide_offline(val != 0); publish_dashboard(); }
+        else if (pref == PP_PREF_LOGO) {
+            prefs_set_logo((pp_logo_t)val);
+            pt_display_schedule_ui(ui_apply_logo, NULL);   /* relayout on the LVGL task */
+        }
+        return;
+    }
     }
     /* Reflect the effect of the command quickly on the active printer. */
     poll_active_and_publish();

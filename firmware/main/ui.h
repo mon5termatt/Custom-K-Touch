@@ -40,3 +40,7 @@ void ui_apply_thumb_dash(void *arg);          /* arg: pp_thumb_dash_t* */
 void ui_request_screen(const char *name);
 const char *ui_current_screen(void);          /* active screen name (test verify) */
 
+/* Apply the logo preference (show/hide wordmark bylines). Scheduled on the LVGL
+ * thread by app_state after the NVS write. arg unused. */
+void ui_apply_logo(void *unused);
+

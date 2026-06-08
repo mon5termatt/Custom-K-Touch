@@ -4,6 +4,7 @@
 #include "printer_store.h"
 #include "pandaprusa_theme.h"
 #include "wifi.h"
+#include "prefs.h"
 #include "pandatouch_display.h"   /* pt_display_schedule_ui — for the test nav API */
 
 #include <stdio.h>
@@ -29,9 +30,19 @@ static lv_obj_t *s_scr_files;
 static lv_obj_t *s_scr_printers;
 static lv_obj_t *s_scr_addform;
 static lv_obj_t *s_scr_about;
+static lv_obj_t *s_scr_prefs;      /* Preferences (sort/filter/logo) */
 
 /* header title (shows active printer name) */
 static lv_obj_t *s_title_lbl;
+
+/* Wordmark bylines across all headers — toggled by the logo preference. */
+static lv_obj_t *s_bylines[12];
+static int       s_byline_count;
+
+/* Preferences widgets */
+static lv_obj_t *s_pref_sort_dd;
+static lv_obj_t *s_pref_logo_dd;
+static lv_obj_t *s_pref_hideoff_sw;
 
 /* printer picker + add form */
 static lv_obj_t *s_pr_list;
@@ -101,6 +112,7 @@ static void on_printers_clicked(lv_event_t *e);
 static void refresh_printers_list(void);
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
+static void on_prefs_open(lv_event_t *e);
 static void thumb_clear(void);
 static lv_obj_t *make_header(lv_obj_t *parent, const char *text);
 static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
@@ -603,6 +615,11 @@ static void refresh_printers_list(void)
     lv_obj_set_style_bg_color(wf, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(wf, PP_TEXT, 0);
     lv_obj_add_event_cb(wf, on_wifi_open, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *pf = lv_list_add_button(s_pr_list, LV_SYMBOL_SETTINGS, "Preferences");
+    lv_obj_set_style_bg_color(pf, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(pf, PP_TEXT, 0);
+    lv_obj_add_event_cb(pf, on_prefs_open, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *ab = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "About / License");
     lv_obj_set_style_bg_color(ab, PP_SURFACE_HI, 0);
@@ -1139,7 +1156,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
 static void make_wordmark(lv_obj_t *parent)
 {
     lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_set_size(box, LV_SIZE_CONTENT, 46);
+    lv_obj_set_size(box, LV_SIZE_CONTENT, LV_SIZE_CONTENT);   /* shrinks when byline hidden */
     lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(box, PP_WHITE, 0);
     lv_obj_set_style_border_width(box, 2, 0);
@@ -1190,6 +1207,24 @@ static void make_wordmark(lv_obj_t *parent)
     lv_obj_set_style_text_color(by, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(by, &lv_font_montserrat_12, 0);
     lv_obj_add_flag(by, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    /* Track for the logo preference; hide the byline in single-line mode. */
+    if (s_byline_count < (int)(sizeof(s_bylines) / sizeof(s_bylines[0])))
+        s_bylines[s_byline_count++] = by;
+    if (prefs_logo() == PP_LOGO_SINGLE) lv_obj_add_flag(by, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Show/hide all wordmark bylines to match the current logo preference. Scheduled on
+ * the LVGL thread by app_state (after the NVS write on the net task). arg unused. */
+void ui_apply_logo(void *unused)
+{
+    (void)unused;
+    bool single = (prefs_logo() == PP_LOGO_SINGLE);
+    for (int i = 0; i < s_byline_count; i++) {
+        if (!s_bylines[i] || !lv_obj_is_valid(s_bylines[i])) continue;
+        if (single) lv_obj_add_flag(s_bylines[i], LV_OBJ_FLAG_HIDDEN);
+        else        lv_obj_remove_flag(s_bylines[i], LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void build_dashboard_screen(void)
@@ -1209,17 +1244,71 @@ static void build_dashboard_screen(void)
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 }
 
+/* Lower rank sorts earlier when grouping by status. */
+static int dash_state_rank(const pp_status_t *s)
+{
+    if (!s->online) return 5;
+    switch (pp_state_class(s->state)) {
+    case PP_SC_ORANGE: return 0;   /* printing / attention */
+    case PP_SC_YELLOW: return 1;   /* paused */
+    case PP_SC_RED:    return 2;   /* error / stopped */
+    case PP_SC_GREEN:  return 3;   /* finished */
+    case PP_SC_OLIVE:  return 4;   /* ready */
+    default:           return 4;   /* idle / busy */
+    }
+}
+
+static const pp_status_t *s_dash_sort_items;   /* set before qsort (single-threaded UI) */
+static int dash_order_cmp(const void *pa, const void *pb)
+{
+    const pp_status_t *a = &s_dash_sort_items[*(const int *)pa];
+    const pp_status_t *b = &s_dash_sort_items[*(const int *)pb];
+    switch (prefs_sort()) {
+    case PP_SORT_NAME:
+        return strcmp(a->printer_name, b->printer_name);
+    case PP_SORT_MODEL: {
+        int m = strcmp(a->model, b->model);
+        return m ? m : strcmp(a->printer_name, b->printer_name);
+    }
+    case PP_SORT_PROGRESS: {
+        int aj = a->online && a->has_job, bj = b->online && b->has_job;
+        if (aj && bj) { float d = b->progress - a->progress; return (d > 0) - (d < 0); }
+        if (aj != bj) return bj - aj;                    /* printing first */
+        int r = dash_state_rank(a) - dash_state_rank(b);
+        return r ? r : strcmp(a->printer_name, b->printer_name);
+    }
+    case PP_SORT_STATUS:
+    default: {
+        int r = dash_state_rank(a) - dash_state_rank(b);
+        return r ? r : strcmp(a->printer_name, b->printer_name);
+    }
+    }
+}
+
 void ui_apply_dashboard(void *arg)
 {
     pp_dash_t *d = (pp_dash_t *)arg;
     lv_obj_clean(s_dash_grid);
     s_dash_count = d->count;
-    for (int i = 0; i < d->count && i < PP_MAX_PRINTERS; i++) {
-        make_printer_card(s_dash_grid, &d->items[i], i);
+
+    int n = d->count; if (n > PP_MAX_PRINTERS) n = PP_MAX_PRINTERS;
+    int order[PP_MAX_PRINTERS];
+    for (int i = 0; i < n; i++) order[i] = i;
+    s_dash_sort_items = d->items;
+    if (n > 1) qsort(order, n, sizeof(int), dash_order_cmp);
+
+    bool hide_off = prefs_hide_offline();
+    int shown = 0;
+    for (int k = 0; k < n; k++) {
+        int idx = order[k];                              /* original store index */
+        if (hide_off && !d->items[idx].online) continue;
+        make_printer_card(s_dash_grid, &d->items[idx], idx);
+        shown++;
     }
-    if (d->count == 0) {
+    if (shown == 0) {
         lv_obj_t *l = lv_label_create(s_dash_grid);
-        lv_label_set_text(l, "No printers yet — add one in Settings.");
+        lv_label_set_text(l, d->count == 0 ? "No printers yet — add one in Settings."
+                                           : "No printers match the current filter.");
         lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     }
     free(d);
@@ -1360,6 +1449,96 @@ static void build_about_screen(void)
     lv_obj_align(url, LV_ALIGN_TOP_RIGHT, -55, 314);
 }
 
+/* ---------- Preferences (sort / filter / logo) ---------- */
+static void on_prefs_back(lv_event_t *e) { (void)e; lv_screen_load(s_scr_printers); }
+
+/* All pref writes go through the net task (PSRAM-stack LVGL task can't touch flash). */
+static void on_pref_sort_changed(lv_event_t *e)
+{
+    app_state_set_pref(PP_PREF_SORT, (int)lv_dropdown_get_selected(lv_event_get_target(e)));
+}
+static void on_pref_hideoff_changed(lv_event_t *e)
+{
+    app_state_set_pref(PP_PREF_HIDE_OFFLINE,
+                       lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0);
+}
+static void on_pref_logo_changed(lv_event_t *e)
+{
+    app_state_set_pref(PP_PREF_LOGO, (int)lv_dropdown_get_selected(lv_event_get_target(e)));
+}
+
+static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 24, y);
+    return l;
+}
+
+/* Dark-theme a dropdown (closed button + open list) to match the Connect UI. */
+static void dropdown_dark(lv_obj_t *dd)
+{
+    lv_obj_set_style_bg_color(dd, PP_SURFACE, 0);
+    lv_obj_set_style_text_color(dd, PP_TEXT, 0);
+    lv_obj_set_style_border_color(dd, PP_BORDER, 0);
+    lv_obj_set_style_border_width(dd, 1, 0);
+    lv_obj_set_style_radius(dd, 4, 0);
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    if (list) {
+        lv_obj_set_style_bg_color(list, PP_SURFACE, 0);
+        lv_obj_set_style_text_color(list, PP_TEXT, 0);
+        lv_obj_set_style_border_color(list, PP_BORDER, 0);
+        lv_obj_set_style_bg_color(list, PP_ORANGE, LV_PART_SELECTED | LV_STATE_CHECKED);
+    }
+}
+
+static void build_prefs_screen(void)
+{
+    s_scr_prefs = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_prefs, PP_BG, 0);
+    lv_obj_clear_flag(s_scr_prefs, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *bar = make_header(s_scr_prefs, "Preferences");
+    lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_prefs_back, NULL, 100);
+    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
+
+    /* Sort fleet by */
+    pref_label(s_scr_prefs, "Sort fleet by", 84);
+    s_pref_sort_dd = lv_dropdown_create(s_scr_prefs);
+    lv_dropdown_set_options(s_pref_sort_dd, "Status\nName\nModel\nCompletion %");
+    lv_obj_set_width(s_pref_sort_dd, 320);
+    lv_obj_align(s_pref_sort_dd, LV_ALIGN_TOP_LEFT, 24, 112);
+    dropdown_dark(s_pref_sort_dd);
+    lv_obj_add_event_cb(s_pref_sort_dd, on_pref_sort_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Hide offline */
+    pref_label(s_scr_prefs, "Hide offline printers", 188);
+    s_pref_hideoff_sw = lv_switch_create(s_scr_prefs);
+    lv_obj_align(s_pref_hideoff_sw, LV_ALIGN_TOP_LEFT, 24, 214);
+    lv_obj_set_style_bg_color(s_pref_hideoff_sw, PP_ORANGE, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(s_pref_hideoff_sw, on_pref_hideoff_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Header logo */
+    pref_label(s_scr_prefs, "Header logo", 290);
+    s_pref_logo_dd = lv_dropdown_create(s_scr_prefs);
+    lv_dropdown_set_options(s_pref_logo_dd, "PRUSA|TOUCH + byline\nPRUSA|TOUCH (single line)");
+    lv_obj_set_width(s_pref_logo_dd, 320);
+    lv_obj_align(s_pref_logo_dd, LV_ALIGN_TOP_LEFT, 24, 318);
+    dropdown_dark(s_pref_logo_dd);
+    lv_obj_add_event_cb(s_pref_logo_dd, on_pref_logo_changed, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+static void on_prefs_open(lv_event_t *e)
+{
+    (void)e;
+    lv_dropdown_set_selected(s_pref_sort_dd, (uint16_t)prefs_sort());
+    lv_dropdown_set_selected(s_pref_logo_dd, (uint16_t)prefs_logo());
+    if (prefs_hide_offline()) lv_obj_add_state(s_pref_hideoff_sw, LV_STATE_CHECKED);
+    else                      lv_obj_remove_state(s_pref_hideoff_sw, LV_STATE_CHECKED);
+    lv_screen_load(s_scr_prefs);
+}
+
 void ui_init(void)
 {
     card_thumbs_clear();
@@ -1372,6 +1551,7 @@ void ui_init(void)
     build_control_screen();
     build_wifi_screen();
     build_about_screen();
+    build_prefs_screen();
     /* persistent bottom nav on the primary screens */
     make_nav(s_scr_dash, 0);
     make_nav(s_scr_status, 1);
@@ -1393,6 +1573,7 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "files"))  { app_state_post_cmd(PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
+        else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
         else if (!strcmp(name, "wifi"))   { wifi_screen_prepare(); lv_screen_load(s_scr_wifi); }
     }
     free(name);
@@ -1418,6 +1599,7 @@ const char *ui_current_screen(void)
     if (s == s_scr_printers)   return "printers";
     if (s == s_scr_addform)    return "addform";
     if (s == s_scr_about)      return "about";
+    if (s == s_scr_prefs)      return "prefs";
     if (s == s_scr_wifi)       return "wifi";
     return "unknown";
 }

@@ -24,6 +24,7 @@
 #include "prusalink.h"
 #include "printer_store.h"
 #include "app_state.h"
+#include "prefs.h"
 #include "web.h"
 #include "ui.h"
 
@@ -39,6 +40,8 @@ void app_main(void)
         nvs = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs);   /* fail loudly on any other NVS init error */
+
+    prefs_load();   /* user prefs (sort/filter/logo) — before the UI is built */
 
     /* Display + LVGL + GT911 (BSP registers the touch indev). */
     if (pt_display_init() != ESP_OK) {
