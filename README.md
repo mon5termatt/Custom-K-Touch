@@ -40,22 +40,48 @@ Connect-style fleet dashboard** right on the desk.
 
 ## Install (prebuilt image)
 
-1. Download the latest **`prusa-touch-full.bin`** from the
-   [Releases page](https://github.com/nomadsgalaxy/Prusa-Connect-Touch/releases).
-2. Install [esptool](https://github.com/espressif/esptool) (`pip install esptool`).
-3. Connect the touchscreen over USB-C and flash the full image at offset `0x0`:
+Get the latest **`prusa-touch-full.bin`** from the [Releases page](https://github.com/nomadsgalaxy/Prusa-Connect-Touch/releases).
 
+### Option A: Web Serial (Easiest - All Platforms)
+No command line required. Use a Chromium-based browser (Chrome, Edge, or Brave).
+1. Go to the [ESP Web Flasher](https://espressif.github.io/esptool-js/).
+2. Connect your touchscreen to your computer via USB-C.
+3. Click **Connect**, select the serial port (see "Finding your Port" below).
+4. Set the address to `0x0` and select your downloaded `prusa-touch-full.bin`.
+5. Click **Program**.
+
+### Option B: Windows GUI
+Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/other-tools).
+1. Select **ESP32-S3** and **WorkMode: Develop**.
+2. Check the first row, select the `.bin` file, and set the address to `0x0`.
+3. Select the correct **COM port** and set the baud rate to `460800`.
+4. Click **Start**.
+
+### Option C: Command Line (esptool)
+Best for power users on any platform.
+
+1. Install `esptool`: `pip install esptool`.
+2. Connect the screen and flash:
    ```bash
    esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 prusa-touch-full.bin
    ```
 
-   `<PORT>` is e.g. `/dev/ttyACM0` (Linux), `/dev/cu.usbserial-*` (macOS) or `COM5`
-   (Windows). If it doesn't enter download mode on its own, hold **BOOT** and tap reset.
-4. On first boot, pick your Wi-Fi (or join the `PrusaTouch-XXXX` hotspot and open
-   `http://192.168.4.1`), then add a printer.
+#### Finding your `<PORT>`
+- **Windows:** Check *Device Manager* under "Ports (COM & LPT)". It will be something like `COM3`.
+- **macOS:** Open Terminal and run `ls /dev/cu.*`. Look for `/dev/cu.usbserial-*` or `/dev/cu.usbmodem*`.
+- **Linux:** Open Terminal and run `ls /dev/ttyACM*`. Usually it is `/dev/ttyACM0`.
 
+### First Boot & Setup
+1. On first boot, the screen will show a Wi-Fi setup page.
+2. Either pick your network on-screen, or join the `PrusaTouch-XXXX` hotspot from your phone and open `http://192.168.4.1`.
+3. Once connected, add your printers by entering their IP addresses and API keys.
+
+---
+
+> [!IMPORTANT]
 > **Back up the stock firmware first** — flashing replaces BigTreeTech's firmware.
-> `esptool.py -p <PORT> -b 460800 read_flash 0 0x1000000 ktouch_stock_backup.bin`.
+> `esptool.py -p <PORT> -b 460800 read_flash 0 0x1000000 ktouch_stock_backup.bin`
+> If the device doesn't enter download mode on its own, hold the **BOOT** button while tapping **RESET**.
 
 ## Build from source
 
