@@ -57,15 +57,28 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(15));
     }
 
-    /* Bring up state + polling first; WiFi connects in the background (or via the
-     * on-screen WiFi setup if no credentials are stored yet). The UI shows offline
-     * until a connection + first successful poll land. */
+    /* Bring up state + polling; update the boot screen as we go. */
+    ui_boot_update(10, "Initializing store...");
     printer_store_init();
-    prusalink_init();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ui_boot_update(30, "Connecting WiFi...");
     wifi_init_start();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    ui_boot_update(50, "Starting services...");
+    prusalink_init();
     app_state_start();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ui_boot_update(80, "Starting web UI...");
     web_start();   /* on-device web UI: settings + status + firmware OTA */
     ota_update_start_auto();   /* opt-in background auto-updater (off by default) */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ui_boot_update(100, "Ready");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ui_request_screen("dash");
 
     /* We reached a healthy run state — confirm this app so the bootloader won't
      * roll back (relevant after an OTA when rollback is enabled). No-op otherwise. */

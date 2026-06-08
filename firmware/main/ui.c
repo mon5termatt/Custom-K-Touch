@@ -19,6 +19,10 @@
 static const char *TAG = "ui";
 
 /* ---- screens ---- */
+static lv_obj_t *s_scr_boot;       /* splash / loading        */
+static lv_obj_t *s_boot_bar;
+static lv_obj_t *s_boot_status;
+
 static lv_obj_t *s_scr_dash;       /* fleet dashboard (home)  */
 static lv_obj_t *s_dash_grid;      /* scrollable card grid    */
 static int       s_dash_count;
@@ -1583,9 +1587,55 @@ static void on_prefs_open(lv_event_t *e)
     lv_screen_load(s_scr_prefs);
 }
 
+static void build_boot_screen(void)
+{
+    s_scr_boot = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_boot, lv_color_hex(0x111316), 0);
+    lv_obj_clear_flag(s_scr_boot, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* PRUSA | TOUCH */
+    lv_obj_t *l1 = lv_label_create(s_scr_boot);
+    lv_label_set_text(l1, "PRUSA | TOUCH");
+    lv_obj_set_style_text_font(l1, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_color(l1, lv_color_white(), 0);
+    lv_obj_align(l1, LV_ALIGN_CENTER, 0, -40);
+
+    /* By NomadsGalaxy */
+    lv_obj_t *l2 = lv_label_create(s_scr_boot);
+    lv_label_set_text(l2, "By NomadsGalaxy");
+    lv_obj_set_style_text_font(l2, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(l2, PP_ORANGE, 0);
+    lv_obj_align(l2, LV_ALIGN_CENTER, 0, 10);
+
+    /* Loading bar */
+    s_boot_bar = lv_bar_create(s_scr_boot);
+    lv_obj_set_size(s_boot_bar, 400, 12);
+    lv_obj_align(s_boot_bar, LV_ALIGN_CENTER, 0, 80);
+    lv_obj_set_style_bg_color(s_boot_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_boot_bar, PP_ORANGE, LV_PART_INDICATOR);
+    lv_bar_set_value(s_boot_bar, 0, LV_ANIM_OFF);
+
+    s_boot_status = lv_label_create(s_scr_boot);
+    lv_label_set_text(s_boot_status, "Starting...");
+    lv_obj_set_style_text_font(s_boot_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_boot_status, PP_TEXT_MUTED, 0);
+    lv_obj_align(s_boot_status, LV_ALIGN_CENTER, 0, 110);
+}
+
+void ui_boot_update(int progress, const char *status)
+{
+    PT_LVGL_SCOPE_LOCK() {
+        if (s_boot_bar) lv_bar_set_value(s_boot_bar, progress, LV_ANIM_OFF);
+        if (s_boot_status && status) lv_label_set_text(s_boot_status, status);
+    }
+}
+
 void ui_init(void)
 {
     card_thumbs_clear();
+    build_boot_screen();
+    lv_screen_load(s_scr_boot);
+
     build_dashboard_screen();
     build_status_screen();
     build_files_screen();
@@ -1601,7 +1651,6 @@ void ui_init(void)
     make_nav(s_scr_status, 1);
     make_nav(s_scr_files, 2);
     make_nav(s_scr_printers, 3);
-    lv_screen_load(s_scr_dash);   /* fleet dashboard is home */
 }
 
 /* ---------- test/automation nav API ----------

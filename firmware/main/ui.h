@@ -22,6 +22,9 @@ typedef struct {
 /* Build the UI. Must run on the LVGL thread (call under PT_LVGL_SCOPE_LOCK). */
 void ui_init(void);
 
+/* Update the boot screen progress (0..100) and status text. Thread-safe. */
+void ui_boot_update(int progress, const char *status);
+
 /* Scheduled appliers — run on the LVGL thread, take ownership of arg, free it. */
 void ui_apply_status(void *status_copy);     /* arg: pp_status_t*     */
 void ui_apply_files(void *file_list_copy);    /* arg: pp_file_list_t*  */
