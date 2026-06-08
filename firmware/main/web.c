@@ -132,8 +132,10 @@ static const char INDEX_HTML[] =
 "if(r.checking&&n++<6){setTimeout(poll,2000);return;}"
 "document.getElementById('gh').textContent='Current '+r.current+' / latest '+(r.latest||'?')+(r.available?' \\u2014 update available!':' \\u2014 up to date');"
 "GU=r.url;document.getElementById('ub').style.display=r.available?'inline-block':'none'};poll()}"
-"async function applyu(){if(!GU)return;document.getElementById('gh').textContent='Updating; device will reboot...';"
-"await fetch('/api/update/apply',{method:'POST',body:JSON.stringify({url:GU})})}"
+"async function applyu(){if(!GU)return;document.getElementById('gh').innerHTML='Updating... <div class=bar id=upb><i style=width:0%></i></div>';"
+"await fetch('/api/update/apply',{method:'POST',body:JSON.stringify({url:GU})});"
+"const p=async()=>{let r=await fetch('/api/update/progress').then(x=>x.json());"
+"if(r.progress>=0){document.getElementById('upb').firstChild.style.width=r.progress+'%';setTimeout(p,1000)}};p()}"
 "st();setInterval(st,3000);"
 "</script></body></html>";
 
@@ -408,6 +410,18 @@ static esp_err_t update_check_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t update_progress_get(httpd_req_t *req)
+{
+    int p = ota_update_get_progress();
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "progress", p);
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(o);
+    return ESP_OK;
+}
+
 static void ota_apply_task(void *arg)
 {
     char *url = arg;
@@ -643,6 +657,7 @@ void web_start(void)
         { .uri="/update",       .method=HTTP_POST, .handler=ota_post },
         { .uri="/api/update/check", .method=HTTP_GET,  .handler=update_check_get },
         { .uri="/api/update/apply", .method=HTTP_POST, .handler=update_apply_post },
+        { .uri="/api/update/progress", .method=HTTP_GET, .handler=update_progress_get },
         { .uri="/api/info",         .method=HTTP_GET,  .handler=info_get },
         { .uri="/api/fleet",        .method=HTTP_GET,  .handler=fleet_get },
         { .uri="/api/screen.bmp",   .method=HTTP_GET,  .handler=screen_get },

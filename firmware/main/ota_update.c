@@ -124,10 +124,16 @@ bool ota_update_check(ota_check_t *out)
     return ok;
 }
 
+static int s_progress = -1;
+
+int ota_update_get_progress(void) { return s_progress; }
+
 void ota_update_apply(const char *bin_url)
 {
     if (!bin_url || !bin_url[0]) return;
     ESP_LOGI(TAG, "OTA from %s", bin_url);
+    s_progress = 0;
+
     esp_http_client_config_t http = {
         .url = bin_url,
         .crt_bundle_attach = esp_crt_bundle_attach,
@@ -135,13 +141,39 @@ void ota_update_apply(const char *bin_url)
         .keep_alive_enable = true,
     };
     esp_https_ota_config_t cfg = { .http_config = &http };
-    esp_err_t e = esp_https_ota(&cfg);
-    if (e == ESP_OK) {
-        ESP_LOGI(TAG, "OTA ok — rebooting");
-        esp_restart();
-    } else {
-        ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(e));
+    
+    esp_https_ota_handle_t ota = NULL;
+    esp_err_t e = esp_https_ota_begin(&cfg, &ota);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "OTA begin failed: %s", esp_err_to_name(e));
+        s_progress = -1;
+        return;
     }
+
+    int total = esp_https_ota_get_image_size(ota);
+    while (1) {
+        e = esp_https_ota_perform(ota);
+        if (e != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
+        
+        int read = esp_https_ota_get_image_len_read(ota);
+        if (total > 0) {
+            s_progress = (read * 100) / total;
+        }
+    }
+
+    if (e == ESP_OK) {
+        e = esp_https_ota_finish(ota);
+        if (e == ESP_OK) {
+            s_progress = 100;
+            ESP_LOGI(TAG, "OTA ok — rebooting");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            esp_restart();
+        }
+    }
+
+    ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(e));
+    s_progress = -1;
+    esp_https_ota_abort(ota);
 }
 
 /* Background opt-in auto-updater. Does nothing unless the user has turned on

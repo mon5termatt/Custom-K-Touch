@@ -17,6 +17,9 @@ bool ota_update_check(ota_check_t *out);
  * call from a dedicated task, not the LVGL thread. */
 void ota_update_apply(const char *bin_url);
 
+/* Current update progress (0..100), or -1 if no update in progress. */
+int ota_update_get_progress(void);
+
 /* Start the background opt-in auto-updater task. It stays idle unless the user
  * enables "Automatic updates" in Preferences (default off); when enabled and
  * online it periodically checks GitHub and OTA-flashes a newer release. */
