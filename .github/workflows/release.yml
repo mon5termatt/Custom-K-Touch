@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# GitHub forces JS actions onto Node 24 from 2026-06-16; opt in now so releases
+# keep working (and to validate checkout/upload-artifact/gh-release on Node 24).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: ubuntu-latest
