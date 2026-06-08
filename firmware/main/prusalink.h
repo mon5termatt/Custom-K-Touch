@@ -35,5 +35,8 @@ esp_err_t prusalink_list(const char *path, pp_file_t *arr, int max, int *count);
 /* Start printing a stored file: POST /api/v1/files/{storage}/{path}. */
 esp_err_t prusalink_print(const char *path);
 
+/* Upload a local file to the printer's active storage. */
+esp_err_t prusalink_upload(const char *local_path, const char *dest_name);
+
 /* Send raw G-code (OctoPrint-style /api/printer/command). */
 esp_err_t prusalink_gcode(const char *gcode);

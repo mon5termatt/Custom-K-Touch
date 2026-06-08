@@ -8,6 +8,8 @@ typedef enum {
     PP_CMD_STOP,
     PP_CMD_PRINT,         /* uses path  */
     PP_CMD_LIST,          /* list active storage root */
+    PP_CMD_LIST_USB,      /* list local USB drive      */
+    PP_CMD_UPLOAD,        /* upload path to printer    */
     PP_CMD_SET_PRINTER,   /* uses index */
     PP_CMD_WIFI_SCAN,     /* scan -> ui_apply_wifi_list */
     PP_CMD_WIFI_CONNECT,  /* uses path=ssid, arg2=password */

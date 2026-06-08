@@ -98,6 +98,7 @@ static char      s_active_printer[24];    /* mirror of active printer name/model
 static char      s_active_model[28];
 static pp_file_t s_files[PP_MAX_FILES];
 static int       s_file_count;
+static bool      s_files_usb_mode = false;
 
 /* ---- file-detail (gcode preview) screen ---- */
 static lv_obj_t      *s_scr_filedetail;
@@ -415,6 +416,21 @@ static void build_status_screen(void)
     lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -72);
     lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
 }
+static void on_storage_toggle(lv_event_t *e)
+{
+    s_files_usb_mode = !s_files_usb_mode;
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    if (s_files_usb_mode) {
+        lv_label_set_text(lbl, LV_SYMBOL_USB " USB");
+        lv_label_set_text(s_files_banner, "Local files on USB drive");
+        app_state_post_cmd(PP_CMD_LIST_USB, NULL);
+    } else {
+        lv_label_set_text(lbl, LV_SYMBOL_IMAGE " Printer");
+        lv_label_set_text(s_files_banner, "Files on this printer");
+        app_state_post_cmd(PP_CMD_LIST, NULL);
+    }
+}
 
 static void build_files_screen(void)
 {
@@ -425,7 +441,12 @@ static void build_files_screen(void)
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_back_clicked, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
+    lv_obj_t *toggle = make_barbtn(bar, LV_SYMBOL_IMAGE " Printer", on_storage_toggle, NULL, 120);
+    lv_obj_align(toggle, LV_ALIGN_RIGHT_MID, -116, 0);
+
     /* Printer-context banner — makes it explicit that files live on the active printer. */
+...
+
     lv_obj_t *banner = lv_obj_create(s_scr_files);
     lv_obj_set_size(banner, LV_PCT(100), 34);
     lv_obj_align(banner, LV_ALIGN_TOP_MID, 0, 56);
@@ -463,7 +484,13 @@ static void on_fd_back(lv_event_t *e)
 static void on_fd_print(lv_event_t *e)
 {
     (void)e;
-    if (s_sel_path[0]) app_state_post_cmd(PP_CMD_PRINT, s_sel_path);
+    if (s_sel_path[0]) {
+        if (s_files_usb_mode) {
+            app_state_post_cmd(PP_CMD_UPLOAD, s_sel_path);
+        } else {
+            app_state_post_cmd(PP_CMD_PRINT, s_sel_path);
+        }
+    }
     lv_screen_load(s_scr_status);
 }
 
@@ -921,7 +948,7 @@ static void build_wifi_screen(void)
 /* ---------- bottom navigation (persistent, Panda-Touch style) ---------- */
 static void nav_dash(lv_event_t *e)     { lv_screen_load(s_scr_dash); }
 static void nav_detail(lv_event_t *e)   { lv_screen_load(s_scr_status); }
-static void nav_files(lv_event_t *e)    { app_state_post_cmd(PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
+static void nav_files(lv_event_t *e)    { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
 static void nav_settings(lv_event_t *e) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
 
 static void make_nav(lv_obj_t *scr, int active)
@@ -1663,7 +1690,7 @@ static void ui_apply_nav(void *arg)
         if      (!strcmp(name, "dash")   || !strcmp(name, "fleet"))   lv_screen_load(s_scr_dash);
         else if (!strcmp(name, "status") || !strcmp(name, "printer")) lv_screen_load(s_scr_status);
         else if (!strcmp(name, "control"))                            lv_screen_load(s_scr_control);
-        else if (!strcmp(name, "files"))  { app_state_post_cmd(PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
+        else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);

@@ -285,6 +285,78 @@ esp_err_t moonraker_print(const pp_printer_t *pr, const char *path)
     return post(pr, url);
 }
 
+esp_err_t moonraker_upload(const pp_printer_t *pr, const char *local_path, const char *dest_name)
+{
+    FILE *f = fopen(local_path, "rb");
+    if (!f) return ESP_FAIL;
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    const char *boundary = "----PrusaTouchBoundary";
+    char preamble[256];
+    int preamble_len = snprintf(preamble, sizeof(preamble),
+                                "--%s\r\n"
+                                "Content-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+                                "Content-Type: application/octet-stream\r\n\r\n",
+                                boundary, dest_name);
+
+    char epilogue[128];
+    int epilogue_len = snprintf(epilogue, sizeof(epilogue), "\r\n--%s--\r\n", boundary);
+
+    long total_size = preamble_len + file_size + epilogue_len;
+
+    esp_http_client_config_t http_cfg = {
+        .host = pr->host,
+        .port = pr->port ? pr->port : MOONRAKER_PORT_DEFAULT,
+        .path = "/server/files/upload",
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 30000,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&http_cfg);
+    if (!c) { fclose(f); return ESP_FAIL; }
+
+    if (pr->api_key[0]) esp_http_client_set_header(c, "X-Api-Key", pr->api_key);
+    char ct[64];
+    snprintf(ct, sizeof(ct), "multipart/form-data; boundary=%s", boundary);
+    esp_http_client_set_header(c, "Content-Type", ct);
+
+    esp_err_t err = esp_http_client_open(c, total_size);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(c);
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_write(c, preamble, preamble_len);
+
+    char *buf = malloc(4096);
+    if (!buf) { esp_http_client_cleanup(c); fclose(f); return ESP_ERR_NO_MEM; }
+
+    while (!feof(f)) {
+        size_t read = fread(buf, 1, 4096, f);
+        if (read > 0) {
+            if (esp_http_client_write(c, buf, read) < 0) {
+                err = ESP_FAIL;
+                break;
+            }
+        }
+    }
+    free(buf);
+    fclose(f);
+
+    if (err == ESP_OK) {
+        esp_http_client_write(c, epilogue, epilogue_len);
+        esp_http_client_fetch_headers(c);
+        int sc = esp_http_client_get_status_code(c);
+        if (sc < 200 || sc >= 300) err = ESP_FAIL;
+    }
+
+    esp_http_client_cleanup(c);
+    return err;
+}
+
 esp_err_t moonraker_gcode(const pp_printer_t *pr, const char *gcode)
 {
     if (!gcode || !gcode[0]) return ESP_FAIL;

@@ -30,4 +30,5 @@ esp_err_t moonraker_print(const pp_printer_t *pr, const char *path);  /* /printe
 esp_err_t moonraker_pause(const pp_printer_t *pr);                    /* /printer/print/pause  */
 esp_err_t moonraker_resume(const pp_printer_t *pr);                   /* /printer/print/resume */
 esp_err_t moonraker_stop(const pp_printer_t *pr);                     /* /printer/print/cancel */
+esp_err_t moonraker_upload(const pp_printer_t *pr, const char *local_path, const char *dest_name);
 esp_err_t moonraker_gcode(const pp_printer_t *pr, const char *gcode); /* /printer/gcode/script */

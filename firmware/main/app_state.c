@@ -6,6 +6,8 @@
 #include "prefs.h"
 #include "wifi.h"
 #include "ui.h"
+#include "ota_update.h"
+#include "pandatouch_msc.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -233,6 +235,47 @@ static bool poll_printer(int i)
 }
 
 /* Poll the active printer and publish both views (after a command, or on switch). */
+static void refresh_files_usb(const char *path)
+{
+    pp_file_list_t *fl = malloc(sizeof(pp_file_list_t));
+    if (!fl) return;
+    fl->count = 0;
+    
+    int err = 0;
+    pt_usb_dir_list_t *list = pt_usb_list_dir(path ? path : "/usb", &err);
+    if (list) {
+        for (int i = 0; i < list->count && fl->count < PP_MAX_FILES; i++) {
+            pt_usb_dir_entry_t *e = &list->entries[i];
+            if (e->is_hidden) continue;
+            
+            bool is_gcode = false;
+            const char *ext = strrchr(e->name, '.');
+            if (ext) {
+                if (!strcasecmp(ext, ".gcode") || !strcasecmp(ext, ".g") || 
+                    !strcasecmp(ext, ".bgcode") || !strcasecmp(ext, ".gco")) is_gcode = true;
+            }
+            if (!e->is_dir && !is_gcode) continue;
+
+            pp_file_t *f = &fl->items[fl->count];
+            memset(f, 0, sizeof(*f));
+            strlcpy(f->path, e->path, sizeof(f->path));
+            strlcpy(f->display, e->name, sizeof(f->display));
+            f->is_folder = e->is_dir;
+            f->is_print = !e->is_dir;
+            if (!e->is_dir) {
+                if (e->size < 1024) snprintf(f->meta, sizeof(f->meta), "%u B", (unsigned)e->size);
+                else if (e->size < 1024*1024) snprintf(f->meta, sizeof(f->meta), "%.1f KB", (float)e->size/1024.0f);
+                else snprintf(f->meta, sizeof(f->meta), "%.1f MB", (float)e->size/(1024.0f*1024.0f));
+            }
+            fl->count++;
+        }
+        pt_usb_dir_list_free(list);
+    }
+    if (pt_display_schedule_ui(ui_apply_files, fl) != LV_RESULT_OK) {
+        free(fl);
+    }
+}
+
 static void poll_active_and_publish(void)
 {
     int a = printer_store_active();
@@ -331,6 +374,24 @@ static void run_command(const pp_cmd_t *cmd)
             } else {
                 free(list);
             }
+        }
+        break;
+    }
+    case PP_CMD_LIST_USB:
+        refresh_files_usb(cmd->path);
+        break;
+    case PP_CMD_UPLOAD: {
+        const char *name = strrchr(cmd->path, '/');
+        name = name ? name + 1 : cmd->path;
+        esp_err_t err;
+        if (moon) {
+            err = moonraker_upload(&apr, cmd->path, name);
+        } else {
+            err = prusalink_upload(cmd->path, name);
+        }
+        if (err == ESP_OK) {
+            /* If upload succeeded, start printing it. */
+            moon ? moonraker_print(&apr, name) : prusalink_print(name);
         }
         break;
     }

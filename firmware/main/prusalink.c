@@ -335,6 +335,75 @@ esp_err_t prusalink_print(const char *path)
     return (err == ESP_OK && (sc == 204 || sc == 200)) ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t prusalink_upload(const char *local_path, const char *dest_name)
+{
+    pp_printer_t pr;
+    if (!printer_store_active_get(&pr)) return ESP_FAIL;
+
+    FILE *f = fopen(local_path, "rb");
+    if (!f) return ESP_FAIL;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char url[300], enc[220];
+    url_encode_path(dest_name, enc, sizeof(enc));
+    snprintf(url, sizeof(url), "/api/v1/files/%s/%s", s_storage, enc);
+
+    const bool use_apikey = (pr.api_key[0] != '\0');
+    esp_http_client_config_t cfg = {
+        .host = pr.host,
+        .port = pr.port ? pr.port : 80,
+        .path = url,
+        .method = HTTP_METHOD_PUT,
+        .auth_type = use_apikey ? HTTP_AUTH_TYPE_NONE : HTTP_AUTH_TYPE_DIGEST,
+        .username = CONFIG_PP_PRINTER_USER,
+        .password = CONFIG_PP_PRINTER_PASSWORD,
+        .timeout_ms = 30000,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) { fclose(f); return ESP_FAIL; }
+
+    if (use_apikey) esp_http_client_set_header(c, "X-Api-Key", pr.api_key);
+    esp_http_client_set_header(c, "Content-Type", "application/octet-stream");
+
+    esp_err_t err = esp_http_client_open(c, size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(c);
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(4096);
+    if (!buf) { esp_http_client_cleanup(c); fclose(f); return ESP_ERR_NO_MEM; }
+
+    int total_sent = 0;
+    while (!feof(f)) {
+        size_t read = fread(buf, 1, 4096, f);
+        if (read > 0) {
+            int sent = esp_http_client_write(c, buf, read);
+            if (sent < 0) {
+                err = ESP_FAIL;
+                break;
+            }
+            total_sent += sent;
+        }
+    }
+    free(buf);
+    fclose(f);
+
+    if (err == ESP_OK) {
+        esp_http_client_fetch_headers(c);
+        int sc = esp_http_client_get_status_code(c);
+        if (sc < 200 || sc >= 300) err = ESP_FAIL;
+    }
+
+    esp_http_client_cleanup(c);
+    return err;
+}
+
 esp_err_t prusalink_gcode(const char *gcode)
 {
     pp_printer_t pr;

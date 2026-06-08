@@ -28,6 +28,8 @@
 #include "ota_update.h"
 #include "web.h"
 #include "ui.h"
+#include "pandatouch_msc.h"
+#include "pandatouch_lvgl_msc.h"
 
 static const char *TAG = "prusa-touch";
 
@@ -50,6 +52,7 @@ void app_main(void)
         while (1) vTaskDelay(pdMS_TO_TICKS(1000));
     }
     PT_LVGL_SCOPE_LOCK() {
+        pt_lvgl_stdio_fs_init();   /* mount LVGL FS driver for /usb/ paths */
         ui_init();
     }
     for (uint32_t pct = 0; pct <= 100; pct += 10) {
@@ -73,6 +76,7 @@ void app_main(void)
 
     ui_boot_update(80, "Starting web UI...");
     web_start();   /* on-device web UI: settings + status + firmware OTA */
+    pt_usb_start();            /* start the USB host stack */
     ota_update_start_auto();   /* opt-in background auto-updater (off by default) */
     vTaskDelay(pdMS_TO_TICKS(100));
 
