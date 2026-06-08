@@ -920,6 +920,7 @@ extern const lv_image_dsc_t pt_core_one_l;
 extern const lv_image_dsc_t pt_mini;
 extern const lv_image_dsc_t pt_mk4s;
 extern const lv_image_dsc_t pt_xl;
+extern const lv_image_dsc_t pt_fluidd;   /* Klipper / Moonraker printers */
 
 /* Pick the model image for a friendly model string (NULL → show placeholder). */
 static const lv_image_dsc_t *model_image(const char *model)
@@ -930,6 +931,7 @@ static const lv_image_dsc_t *model_image(const char *model)
     if (strstr(model, "MINI"))       return &pt_mini;
     if (strstr(model, "MK4S"))       return &pt_mk4s;
     if (strstr(model, "XL"))         return &pt_xl;
+    if (strstr(model, "Klipper"))    return &pt_fluidd;       /* Moonraker backend */
     return NULL;
 }
 
@@ -1143,6 +1145,9 @@ static void make_wordmark(lv_obj_t *parent)
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_align(box, LV_ALIGN_LEFT_MID, 8, 0);
+    /* Tapping the wordmark always returns to the fleet dashboard (home). */
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(box, nav_dash, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *p = lv_label_create(box);
     lv_label_set_text(p, "PRUSA");

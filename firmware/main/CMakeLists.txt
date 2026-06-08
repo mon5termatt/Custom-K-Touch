@@ -3,6 +3,7 @@ idf_component_register(
         "app_main.c"
         "wifi.c"
         "prusalink.c"
+        "moonraker.c"
         "printer_store.c"
         "app_state.c"
         "web.c"
@@ -16,6 +17,7 @@ idf_component_register(
         "pt_ic_nozzle.c"
         "pt_ic_bed.c"
         "pt_ic_speed.c"
+        "pt_fluidd.c"
     INCLUDE_DIRS "."
     REQUIRES
         PandaTouch_IDF      # display + GT911 touch + backlight + USB-MSC (BTT MIT BSP)

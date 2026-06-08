@@ -1,0 +1,69 @@
+name: Release firmware
+
+# Build the firmware and publish a flashable image. Tag a version to cut a release:
+#   git tag v0.3.0 && git push origin v0.3.0
+# (or run manually from the Actions tab to just get build artifacts).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build firmware + merge a single flashable image
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32s3
+          path: firmware
+          # Build, then merge bootloader + partition table + otadata + app into one
+          # image that flashes at offset 0x0.
+          command: >
+            idf.py set-target esp32s3 build &&
+            cd build &&
+            esptool.py --chip esp32s3 merge_bin --fill-flash-size 16MB
+            -o prusa-touch-full.bin @flash_args &&
+            cp prusa-touch.bin prusa-touch-app.bin
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp firmware/build/prusa-touch-full.bin dist/
+          cp firmware/build/prusa-touch.bin      dist/prusa-touch-app.bin
+          cp firmware/build/bootloader/bootloader.bin dist/
+          cp firmware/build/partition_table/partition-table.bin dist/
+          ls -l dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prusa-touch-firmware
+          path: dist/*
+
+      - name: Attach to GitHub Release (on version tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Flash it
+
+            Download `prusa-touch-full.bin` and flash over USB-C:
+
+            ```
+            esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 prusa-touch-full.bin
+            ```
+
+            See the [README](https://github.com/nomadsgalaxy/Prusa-Connect-Touch#install-prebuilt-image)
+            for details. Back up the stock firmware first.

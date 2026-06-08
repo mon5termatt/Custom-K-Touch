@@ -1,6 +1,7 @@
 /* Prusa-Touch — state, polling, command worker. */
 #include "app_state.h"
 #include "prusalink.h"
+#include "moonraker.h"
 #include "printer_store.h"
 #include "wifi.h"
 #include "ui.h"
@@ -27,7 +28,26 @@ static pp_status_t      s_cache[PP_MAX_PRINTERS];   /* fleet cache (dashboard)  
 static char             s_info_model[PP_MAX_PRINTERS][28];  /* lazy /api/version cache */
 static char             s_info_fw[PP_MAX_PRINTERS][24];
 static bool             s_info_control[PP_MAX_PRINTERS];
+static uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
 static int              s_cache_count;
+
+/* Detect (and cache) whether a printer speaks PrusaLink or Moonraker. Probe runs
+ * once per printer on the net task. NOTE: if a Moonraker printer is unreachable at
+ * first contact it defaults to PrusaLink until the cache resets (printer edit / reboot). */
+static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
+{
+    if (i < 0 || i >= PP_MAX_PRINTERS) return PP_BK_PRUSALINK;
+    if (s_backend[i] == PP_BK_UNKNOWN) {
+        s_backend[i] = moonraker_probe(pr) ? PP_BK_MOONRAKER : PP_BK_PRUSALINK;
+    }
+    return (pp_backend_t)s_backend[i];
+}
+
+/* Send a gcode line to whichever backend the active printer speaks. */
+static esp_err_t be_gcode(pp_backend_t bk, const pp_printer_t *pr, const char *g)
+{
+    return (bk == PP_BK_MOONRAKER) ? moonraker_gcode(pr, g) : prusalink_gcode(g);
+}
 static int              s_poll_idx;                 /* round-robin cursor             */
 static SemaphoreHandle_t s_lock;
 static QueueHandle_t    s_cmds;
@@ -46,6 +66,7 @@ void app_state_printers_changed(void)
     memset(s_info_model, 0, sizeof(s_info_model));   /* re-fetch identity after edits */
     memset(s_info_fw, 0, sizeof(s_info_fw));
     memset(s_info_control, 0, sizeof(s_info_control));
+    memset(s_backend, 0, sizeof(s_backend));   /* re-detect backend after edits */
     s_cache_count = printer_store_count();
     s_poll_idx = 0;
     xSemaphoreGive(s_lock);
@@ -150,8 +171,11 @@ static bool poll_printer(int i)
     pp_printer_t pr;
     if (!printer_store_get(i, &pr)) return false;
     int active = printer_store_active();
+    pp_backend_t bk = detect_backend(i, &pr);
     pp_status_t fresh;
-    if (i == active) {
+    if (bk == PP_BK_MOONRAKER) {
+        moonraker_get_status_of(&pr, &fresh);
+    } else if (i == active) {
         prusalink_get_status(&fresh);          /* active: refreshes s_storage */
     } else {
         prusalink_get_status_of(&pr, &fresh);  /* fleet poll: leaves s_storage */
@@ -163,7 +187,14 @@ static bool poll_printer(int i)
     if (fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
         char m[28] = {0}, fw[24] = {0};
         bool ctl = false;
-        if (prusalink_get_info(&pr, m, sizeof(m), fw, sizeof(fw), &ctl) == ESP_OK && m[0]) {
+        bool got;
+        if (bk == PP_BK_MOONRAKER) {
+            got = (moonraker_get_info(&pr, m, sizeof(m), fw, sizeof(fw)) == ESP_OK);
+            ctl = true;   /* Klipper always accepts gcode/print control */
+        } else {
+            got = (prusalink_get_info(&pr, m, sizeof(m), fw, sizeof(fw), &ctl) == ESP_OK);
+        }
+        if (got && m[0]) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
             strlcpy(s_info_model[i], m, sizeof(s_info_model[i]));
             strlcpy(s_info_fw[i], fw, sizeof(s_info_fw[i]));
@@ -209,11 +240,18 @@ static void run_command(const pp_cmd_t *cmd)
     job_id = s_status.job_id;
     xSemaphoreGive(s_lock);
 
+    /* Resolve the active printer's backend so control/file commands hit the right API. */
+    pp_printer_t apr;
+    bool have_apr = printer_store_active_get(&apr);
+    int aidx = printer_store_active();
+    pp_backend_t abk = (have_apr && aidx >= 0) ? detect_backend(aidx, &apr) : PP_BK_PRUSALINK;
+    bool moon = (abk == PP_BK_MOONRAKER);
+
     switch (cmd->kind) {
-    case PP_CMD_PAUSE:  prusalink_pause(job_id);  break;
-    case PP_CMD_RESUME: prusalink_resume(job_id); break;
-    case PP_CMD_STOP:   prusalink_stop(job_id);   break;
-    case PP_CMD_PRINT:  prusalink_print(cmd->path); break;
+    case PP_CMD_PAUSE:  moon ? moonraker_pause(&apr)  : prusalink_pause(job_id);  break;
+    case PP_CMD_RESUME: moon ? moonraker_resume(&apr) : prusalink_resume(job_id); break;
+    case PP_CMD_STOP:   moon ? moonraker_stop(&apr)   : prusalink_stop(job_id);   break;
+    case PP_CMD_PRINT:  moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path); break;
     case PP_CMD_SET_PRINTER:
         printer_store_set_active(cmd->index);
         break;
@@ -231,7 +269,7 @@ static void run_command(const pp_cmd_t *cmd)
         wifi_save_and_connect(cmd->path, cmd->arg2);
         return;
     case PP_CMD_THUMB: {
-        if (cmd->path[0]) {
+        if (!moon && cmd->path[0]) {   /* Moonraker thumbnails not wired yet */
             uint8_t *buf = NULL; int len = 0;
             if (prusalink_get_blob(cmd->path, &buf, &len) == ESP_OK) {
                 pp_image_t *im = malloc(sizeof(*im));
@@ -248,9 +286,10 @@ static void run_command(const pp_cmd_t *cmd)
     case PP_CMD_THUMB_DASH: {
         if (cmd->path[0]) {
             uint8_t *buf = NULL; int len = 0;
-            /* Fetching a dashboard thumbnail for printer cmd->index. */
+            /* Fetching a dashboard thumbnail for printer cmd->index (PrusaLink only). */
             pp_printer_t pr;
-            if (printer_store_get(cmd->index, &pr)) {
+            if (printer_store_get(cmd->index, &pr) &&
+                detect_backend(cmd->index, &pr) != PP_BK_MOONRAKER) {
                 if (prusalink_get_blob_of(&pr, cmd->path, &buf, &len) == ESP_OK) {
                     pp_image_t *im = malloc(sizeof(*im));
                     pp_thumb_dash_t *td = malloc(sizeof(*td));
@@ -273,7 +312,9 @@ static void run_command(const pp_cmd_t *cmd)
         pp_file_list_t *list = malloc(sizeof(*list));
         if (list) {
             list->count = 0;
-            if (prusalink_list("/", list->items, PP_MAX_FILES, &list->count) == ESP_OK) {
+            esp_err_t lr = moon ? moonraker_list(&apr, list->items, PP_MAX_FILES, &list->count)
+                                : prusalink_list("/", list->items, PP_MAX_FILES, &list->count);
+            if (lr == ESP_OK) {
                 if (pt_display_schedule_ui(ui_apply_files, list) != LV_RESULT_OK) {
                     free(list);
                 }
@@ -284,14 +325,14 @@ static void run_command(const pp_cmd_t *cmd)
         break;
     }
     case PP_CMD_GCODE:
-        prusalink_gcode(cmd->path);
+        be_gcode(abk, &apr, cmd->path);
         break;
     case PP_CMD_PREHEAT: {
         int m = cmd->index;
-        if (m == 0) { prusalink_gcode("M104 S215"); prusalink_gcode("M140 S60"); }
-        else if (m == 1) { prusalink_gcode("M104 S230"); prusalink_gcode("M140 S85"); }
-        else if (m == 2) { prusalink_gcode("M104 S260"); prusalink_gcode("M140 S100"); }
-        else if (m == 3) { prusalink_gcode("M104 S0"); prusalink_gcode("M140 S0"); }
+        if (m == 0) { be_gcode(abk, &apr, "M104 S215"); be_gcode(abk, &apr, "M140 S60"); }
+        else if (m == 1) { be_gcode(abk, &apr, "M104 S230"); be_gcode(abk, &apr, "M140 S85"); }
+        else if (m == 2) { be_gcode(abk, &apr, "M104 S260"); be_gcode(abk, &apr, "M140 S100"); }
+        else if (m == 3) { be_gcode(abk, &apr, "M104 S0"); be_gcode(abk, &apr, "M140 S0"); }
         break;
     }
     case PP_CMD_DASH_REFRESH:

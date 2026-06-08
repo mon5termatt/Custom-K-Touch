@@ -5,6 +5,9 @@
 
 #define PP_FW_VERSION "0.2.0-proto"
 
+/* Which host API a printer speaks (auto-detected on first contact). */
+typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER } pp_backend_t;
+
 /* A configured printer (see printers.h / printers.example.h). */
 typedef struct {
     char name[24];
