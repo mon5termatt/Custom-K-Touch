@@ -41,14 +41,14 @@ One entry per configured printer (drives the dashboard).
 
 ### `GET /api/printers`
 ```json
-[ { "i":0, "name":"Apollo", "host":"192.168.0.92", "active":true, "haskey":true }, ... ]
+[ { "i":0, "name":"Apollo", "host":"192.168.1.50", "active":true, "haskey":true }, ... ]
 ```
 `haskey:true` but `online:false` in `/api/status` → the stored API key is likely wrong
 (re-enter it). For Klipper/Moonraker printers set the host with port `7125`
 (e.g. `192.168.1.50:7125`); the backend is auto-detected.
 
 ### `POST /api/printers`  — add a printer
-Body: `{ "name":"Apollo", "host":"192.168.0.92", "key":"<api-key>" }`
+Body: `{ "name":"Apollo", "host":"192.168.1.50", "key":"<api-key>" }`
 
 ### `POST /api/printers/update`  — edit (key blank = keep existing)
 Body: `{ "i":0, "name":"...", "host":"...", "key":"..." }`
