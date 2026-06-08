@@ -208,13 +208,16 @@ static lv_obj_t *make_card(lv_obj_t *parent, lv_coord_t w, lv_coord_t h)
 static lv_obj_t *make_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_obj_t **out_label)
 {
-    /* Connect-style flat button: dark fill, no border, small radius, orange when pressed. */
+    /* Connect-style ghost button: transparent fill, thin #4E4E4E outline, 4px radius,
+     * white text; fills with surface-hi when pressed (matches Connect's Pause/Stop/Print). */
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_set_size(b, 150, 56);
-    lv_obj_set_style_bg_color(b, PP_SURFACE_HI, 0);
-    lv_obj_set_style_bg_color(b, PP_ORANGE, LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(b, 0, 0);
-    lv_obj_set_style_radius(b, 6, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(b, PP_SURFACE_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(b, PP_BORDER, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 4, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
     lv_obj_t *l = lv_label_create(b);
@@ -479,7 +482,9 @@ static void build_filedetail_screen(void)
     /* PRINT action */
     lv_obj_t *print_btn = make_button(s_scr_filedetail, "PRINT", on_fd_print, NULL, NULL);
     lv_obj_set_size(print_btn, 220, 64);
-    lv_obj_set_style_bg_color(print_btn, PP_ORANGE, 0);
+    lv_obj_set_style_bg_color(print_btn, PP_ORANGE, 0);        /* orange = primary CTA */
+    lv_obj_set_style_bg_opa(print_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(print_btn, 0, 0);
     lv_obj_set_style_bg_color(print_btn, PP_ORANGE_DARK, LV_STATE_PRESSED);
     lv_obj_align(print_btn, LV_ALIGN_BOTTOM_MID, 0, -24);
 }
