@@ -43,8 +43,10 @@ FINDINGS.md
 UI_DESIGN.md
 PRUSALINK_PARITY.md
 
-# Build / flash / capture logs + screenshots (dev only)
+# Build / flash / capture logs + screenshots (dev only).
+# Keep CMakeLists.txt — it's the top-level ESP-IDF project file, not a log.
 firmware/*.txt
+!firmware/CMakeLists.txt
 firmware/*.bmp
 firmware/*.png
 firmware/flash_log_*
