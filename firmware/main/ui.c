@@ -630,7 +630,7 @@ static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
         lv_label_set_text(t, text);
         lv_obj_set_style_text_color(t, PP_TEXT, 0);
         lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
-        lv_obj_align(t, LV_ALIGN_LEFT_MID, 205, 0);    /* right of the wordmark box */
+        lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);        /* page title centered on screen */
     }
     return bar;
 }
@@ -1134,42 +1134,62 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
     }
 }
 
-/* Connect wordmark: white-outlined box [ PRUSA | TOUCH ], white heavy text + divider. */
+/* Wordmark: white-outlined box with [ PRUSA | TOUCH ] over a small "by NomadsGalaxy"
+ * byline, stacked so it fits the standard header height. */
 static void make_wordmark(lv_obj_t *parent)
 {
     lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_set_size(box, LV_SIZE_CONTENT, 38);
+    lv_obj_set_size(box, LV_SIZE_CONTENT, 46);
     lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(box, PP_WHITE, 0);
     lv_obj_set_style_border_width(box, 2, 0);
     lv_obj_set_style_radius(box, 2, 0);
     lv_obj_set_style_pad_hor(box, 10, 0);
-    lv_obj_set_style_pad_ver(box, 0, 0);
-    lv_obj_set_style_pad_column(box, 10, 0);
+    lv_obj_set_style_pad_ver(box, 2, 0);
+    lv_obj_set_style_pad_row(box, 0, 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_align(box, LV_ALIGN_LEFT_MID, 8, 0);
     /* Tapping the wordmark always returns to the fleet dashboard (home). */
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(box, nav_dash, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *p = lv_label_create(box);
+    /* top line: PRUSA | TOUCH */
+    lv_obj_t *row = lv_obj_create(box);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);   /* clicks reach the box -> home */
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *p = lv_label_create(row);
     lv_label_set_text(p, "PRUSA");
     lv_obj_set_style_text_color(p, PP_WHITE, 0);
-    lv_obj_set_style_text_font(p, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(p, &lv_font_montserrat_16, 0);
 
-    lv_obj_t *divr = lv_obj_create(box);
-    lv_obj_set_size(divr, 2, 24);
+    lv_obj_t *divr = lv_obj_create(row);
+    lv_obj_set_size(divr, 2, 18);
     lv_obj_set_style_bg_color(divr, PP_WHITE, 0);
     lv_obj_set_style_border_width(divr, 0, 0);
     lv_obj_set_style_radius(divr, 0, 0);
     lv_obj_clear_flag(divr, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *t = lv_label_create(box);
+    lv_obj_t *t = lv_label_create(row);
     lv_label_set_text(t, "TOUCH");
     lv_obj_set_style_text_color(t, PP_WHITE, 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_16, 0);
+
+    /* bottom line: by NomadsGalaxy */
+    lv_obj_t *by = lv_label_create(box);
+    lv_label_set_text(by, "by NomadsGalaxy");
+    lv_obj_set_style_text_color(by, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(by, &lv_font_montserrat_12, 0);
+    lv_obj_add_flag(by, LV_OBJ_FLAG_EVENT_BUBBLE);
 }
 
 static void build_dashboard_screen(void)
@@ -1249,27 +1269,26 @@ static void build_control_screen(void)
     /* Jog Card */
     lv_obj_t *jog_card = make_card(s_scr_control, 380, 240);
     lv_obj_align(jog_card, LV_ALIGN_TOP_RIGHT, -16, 72);
+    lv_obj_set_style_pad_all(jog_card, 0, 0);   /* predictable absolute coords */
     lv_obj_t *jl = lv_label_create(jog_card);
     lv_label_set_text(jl, "MOVE");
     lv_obj_set_style_text_color(jl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(jl, &lv_font_montserrat_14, 0);
+    lv_obj_align(jl, LV_ALIGN_TOP_LEFT, 12, 8);
 
-    /* X/Y Arrows */
-    lv_obj_t *bxp = make_button(jog_card, LV_SYMBOL_RIGHT " X+", on_jog_clicked, "G1 X10 F3000", NULL);
-    lv_obj_t *bxm = make_button(jog_card, LV_SYMBOL_LEFT " X-", on_jog_clicked, "G1 X-10 F3000", NULL);
-    lv_obj_t *byp = make_button(jog_card, LV_SYMBOL_UP " Y+", on_jog_clicked, "G1 Y10 F3000", NULL);
-    lv_obj_t *bym = make_button(jog_card, LV_SYMBOL_DOWN " Y-", on_jog_clicked, "G1 Y-10 F3000", NULL);
-    lv_obj_set_size(bxp, 80, 60); lv_obj_set_size(bxm, 80, 60);
-    lv_obj_set_size(byp, 80, 60); lv_obj_set_size(bym, 80, 60);
-    lv_obj_align(byp, LV_ALIGN_TOP_MID, 0, 30);
-    lv_obj_align(bym, LV_ALIGN_TOP_MID, 0, 150);
-    lv_obj_align(bxm, LV_ALIGN_LEFT_MID, 50, 10);
-    lv_obj_align(bxp, LV_ALIGN_RIGHT_MID, -50, 10);
-
-    /* Home in center */
-    lv_obj_t *home = make_button(jog_card, LV_SYMBOL_HOME, on_jog_clicked, "G28", NULL);
-    lv_obj_set_size(home, 80, 60);
-    lv_obj_center(home);
+    /* X / Y / home jog pad — clean 3x3 cross with gaps so outlines never touch */
+    lv_obj_t *byp  = make_button(jog_card, LV_SYMBOL_UP   " Y+", on_jog_clicked, "G1 Y10 F3000",  NULL);
+    lv_obj_t *bxm  = make_button(jog_card, LV_SYMBOL_LEFT " X-", on_jog_clicked, "G1 X-10 F3000", NULL);
+    lv_obj_t *home = make_button(jog_card, LV_SYMBOL_HOME,       on_jog_clicked, "G28",           NULL);
+    lv_obj_t *bxp  = make_button(jog_card, LV_SYMBOL_RIGHT " X+",on_jog_clicked, "G1 X10 F3000",  NULL);
+    lv_obj_t *bym  = make_button(jog_card, LV_SYMBOL_DOWN " Y-", on_jog_clicked, "G1 Y-10 F3000", NULL);
+    lv_obj_set_size(byp, 76, 52); lv_obj_set_size(bxm, 76, 52); lv_obj_set_size(home, 76, 52);
+    lv_obj_set_size(bxp, 76, 52); lv_obj_set_size(bym, 76, 52);
+    lv_obj_align(byp,  LV_ALIGN_TOP_LEFT, 152, 40);
+    lv_obj_align(bxm,  LV_ALIGN_TOP_LEFT, 66,  96);
+    lv_obj_align(home, LV_ALIGN_TOP_LEFT, 152, 96);
+    lv_obj_align(bxp,  LV_ALIGN_TOP_LEFT, 238, 96);
+    lv_obj_align(bym,  LV_ALIGN_TOP_LEFT, 152, 152);
 
     /* Z controls */
     lv_obj_t *bzp = make_button(s_scr_control, "Z+ 10", on_jog_clicked, "G1 Z10 F600", NULL);

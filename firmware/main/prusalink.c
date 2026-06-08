@@ -275,15 +275,10 @@ esp_err_t prusalink_get_info(const pp_printer_t *pr, char *model, size_t ml,
     cJSON_Delete(root);
 
     /* 2. Probe for OctoPrint-compat control endpoints (Buddy returns 404) */
-    if (has_control) {
-        int sc2 = 0;
-        if (do_request(pr, HTTP_METHOD_HEAD, "/api/printer", NULL, NULL, &sc2) == ESP_OK) {
-            /* 200 = OK, 401 = Auth needed (exists), 403 = Forbidden (exists) */
-            if (sc2 == 200 || sc2 == 401 || sc2 == 403) {
-                *has_control = true;
-            }
-        }
-    }
+    /* Control stays disabled for PrusaLink. Buddy firmware answers GET /api/printer
+     * but does NOT execute POST /api/printer/command gcode, so the control screen
+     * would be inert. (Klipper/Moonraker control works and is enabled in app_state.)
+     * has_control was initialized to false above. */
 
     return ESP_OK;
 }
