@@ -427,7 +427,9 @@ static esp_err_t info_get(httpd_req_t *req)
 
 static esp_err_t fleet_get(httpd_req_t *req)
 {
-    pp_status_t arr[PP_MAX_PRINTERS];
+    pp_status_t *arr = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
+    if (!arr) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+
     int n = 0;
     app_state_get_fleet(arr, PP_MAX_PRINTERS, &n);
     cJSON *a = cJSON_CreateArray();
@@ -449,6 +451,7 @@ static esp_err_t fleet_get(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
     free(js); cJSON_Delete(a);
+    heap_caps_free(arr);
     return ESP_OK;
 }
 

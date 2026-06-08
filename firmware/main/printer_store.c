@@ -8,6 +8,8 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
+#include "esp_attr.h"
+
 static const char *TAG = "printers";
 #define NS         "pp"
 #define KEY_LIST   "printers"
@@ -16,7 +18,7 @@ static const char *TAG = "printers";
 #define KEY_VER    "store_ver"
 #define STORE_VER  1            /* bump if pp_printer_t layout changes */
 
-static pp_printer_t      s_list[PP_MAX_PRINTERS];
+static EXT_RAM_ATTR pp_printer_t      s_list[PP_MAX_PRINTERS];
 static int               s_count;
 static int               s_active = -1;
 static SemaphoreHandle_t s_mtx;
@@ -30,7 +32,21 @@ static void save_locked(void)
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
     nvs_set_i32(h, KEY_VER, STORE_VER);
-    nvs_set_blob(h, KEY_LIST, s_list, s_count * sizeof(pp_printer_t));
+
+    /* Split the printer list into chunks of 16 to avoid the ~4KB NVS blob limit. */
+    for (int i = 0; i < (PP_MAX_PRINTERS + 15) / 16; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "plist_%d", i);
+        int start = i * 16;
+        if (start < s_count) {
+            int count = s_count - start;
+            if (count > 16) count = 16;
+            nvs_set_blob(h, key, &s_list[start], count * sizeof(pp_printer_t));
+        } else {
+            nvs_erase_key(h, key);
+        }
+    }
+
     nvs_set_i32(h, KEY_COUNT, s_count);
     nvs_set_i32(h, KEY_ACTIVE, s_active);
     nvs_commit(h);
@@ -51,12 +67,23 @@ static void load_locked(void)
     nvs_get_i32(h, KEY_COUNT, &cnt);
     nvs_get_i32(h, KEY_ACTIVE, &act);
     if (cnt > 0 && cnt <= PP_MAX_PRINTERS) {
-        size_t sz = cnt * sizeof(pp_printer_t);
-        size_t expect = sz;
-        if (nvs_get_blob(h, KEY_LIST, s_list, &sz) == ESP_OK && sz == expect) {
-            s_count = cnt;
-            s_active = (act >= 0 && act < cnt) ? act : 0;
+        s_count = 0;
+        for (int i = 0; i < (PP_MAX_PRINTERS + 15) / 16; i++) {
+            char key[16];
+            snprintf(key, sizeof(key), "plist_%d", i);
+            size_t sz = 16 * sizeof(pp_printer_t);
+            if (nvs_get_blob(h, key, &s_list[s_count], &sz) == ESP_OK) {
+                s_count += (sz / sizeof(pp_printer_t));
+            }
         }
+        /* Fallback for legacy single-blob storage if no chunks found. */
+        if (s_count == 0) {
+            size_t sz = cnt * sizeof(pp_printer_t);
+            if (nvs_get_blob(h, KEY_LIST, s_list, &sz) == ESP_OK) {
+                s_count = (int)(sz / sizeof(pp_printer_t));
+            }
+        }
+        s_active = (act >= 0 && act < s_count) ? act : 0;
     }
     nvs_close(h);
 }

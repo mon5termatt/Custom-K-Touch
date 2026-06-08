@@ -14,6 +14,10 @@
 #include "misc/cache/lv_image_cache.h"   /* lv_image_cache_drop (not in lvgl.h) */
 #include "draw/lv_image_decoder.h"       /* lv_image_decoder_get_info           */
 
+#include "esp_attr.h"
+
+static const char *TAG = "ui";
+
 /* ---- screens ---- */
 static lv_obj_t *s_scr_dash;       /* fleet dashboard (home)  */
 static lv_obj_t *s_dash_grid;      /* scrollable card grid    */
@@ -23,7 +27,7 @@ typedef struct {
     lv_image_dsc_t dsc;
     char           url[160];
 } pp_card_thumb_t;
-static pp_card_thumb_t s_card_thumbs[PP_MAX_PRINTERS];
+static EXT_RAM_ATTR pp_card_thumb_t s_card_thumbs[PP_MAX_PRINTERS];
 static lv_obj_t      *s_scr_status;     /* per-printer detail      */
 static lv_obj_t *s_scr_control;    /* preheat/jog/home        */
 static lv_obj_t *s_scr_files;

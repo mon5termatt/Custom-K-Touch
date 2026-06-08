@@ -18,6 +18,8 @@
 
 #include "pandatouch_display.h"   /* pt_display_schedule_ui */
 
+#include "esp_attr.h"
+
 static const char *TAG = "app_state";
 
 /* wifi_scan() writes up to WIFI_MAX_SCAN entries into pp_wifi_list_t.ssids
@@ -25,11 +27,11 @@ static const char *TAG = "app_state";
 _Static_assert(WIFI_MAX_SCAN <= PP_WIFI_MAX_SCAN, "wifi scan cap exceeds ssids[] size");
 
 static pp_status_t      s_status;                  /* active printer (detail screen) */
-static pp_status_t      s_cache[PP_MAX_PRINTERS];   /* fleet cache (dashboard)        */
-static char             s_info_model[PP_MAX_PRINTERS][28];  /* lazy /api/version cache */
-static char             s_info_fw[PP_MAX_PRINTERS][24];
-static bool             s_info_control[PP_MAX_PRINTERS];
-static uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
+static EXT_RAM_ATTR pp_status_t      s_cache[PP_MAX_PRINTERS];   /* fleet cache (dashboard)        */
+static EXT_RAM_ATTR char             s_info_model[PP_MAX_PRINTERS][28];  /* lazy /api/version cache */
+static EXT_RAM_ATTR char             s_info_fw[PP_MAX_PRINTERS][24];
+static EXT_RAM_ATTR bool             s_info_control[PP_MAX_PRINTERS];
+static EXT_RAM_ATTR uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
 static int              s_cache_count;
 
 /* Detect (and cache) whether a printer speaks PrusaLink or Moonraker. Probe runs

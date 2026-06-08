@@ -55,8 +55,8 @@ menu "Prusa-Touch Configuration"
 
     config PP_POLL_INTERVAL_MS
         int "Status poll interval (ms)"
-        default 2000
-        range 500 10000
+        default 1000
+        range 200 10000
         help
             How often to poll /api/v1/status.
 
