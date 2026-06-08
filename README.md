@@ -49,6 +49,14 @@ No command line required. Use a Chromium-based browser (Chrome, Edge, or Brave).
 3. Click **Connect**, select the serial port (see "Finding your Port" below).
 4. Set the address to `0x0` and select your downloaded `prusa-touch-full.bin`.
 5. Click **Program**.
+6. Click Disconnect once the code says;
+   ```
+   File  md5: xxxxxxxxxxxxxxxx
+   Flash md5: xxxxxxxxxxxxxxxx
+   Hash of data verified.
+   Leaving...
+   Hard resetting via RTS pin...
+   ```
 
 ### Option B: Windows GUI
 Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/other-tools).
