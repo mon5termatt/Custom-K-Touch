@@ -1,7 +1,7 @@
 # Prusa Touch
 
 A community touchscreen for your 3D printers, built on the **BigTreeTech K-Touch** (5")
-and **Panda Touch** (7"). It connects straight to your printers over your LAN — no
+and **Panda Touch** (5"). It connects straight to your printers over your LAN — no
 companion app, no cloud account, no extra hardware — and gives you a **Prusa
 Connect-style fleet dashboard** right on the desk.
 
