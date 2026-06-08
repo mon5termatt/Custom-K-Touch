@@ -6,7 +6,7 @@
 #define PP_FW_VERSION "0.3.3"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
-typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER } pp_backend_t;
+typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT } pp_backend_t;
 
 /* A configured printer (see printers.h / printers.example.h). */
 typedef struct {
@@ -36,6 +36,7 @@ typedef struct {
     char   job_thumb[160];     /* refs.thumbnail URL (from /api/v1/job)       */
     char   model[28];         /* friendly model, e.g. "Original Prusa MK4S"  */
     char   firmware[24];      /* firmware version (empty if unavailable)     */
+    char   uuid[40];          /* printer UUID (Prusa Connect)                */
     bool   has_control;       /* supports OctoPrint control endpoints        */
 } pp_status_t;
 

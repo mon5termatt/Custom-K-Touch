@@ -10,6 +10,7 @@ idf_component_register(
         "web.c"
         "ota_update.c"
         "ui.c"
+        "prusa_connect.c"
         "pt_core_one.c"
         "pt_core_one_l.c"
         "pt_mini.c"

@@ -22,11 +22,12 @@
 #include "printer_store.h"
 #include "wifi.h"
 #include "ota_update.h"
-#include "ui.h"                  /* ui_request_screen / ui_current_screen (test nav) */
+#include "ui.h"
+#include "prusa_connect.h"
 
 static const char *TAG = "web";
 
-/* ---- Prusa-themed single-page UI (tabs: Status / Printers / Wi-Fi / Firmware) ---- */
+/* ---- Prusa-themed single-page UI ---- */
 static const char INDEX_HTML[] =
 "<!doctype html><html><head><meta charset=utf-8>"
 "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -57,7 +58,7 @@ static const char INDEX_HTML[] =
 ".muted{color:#a7a7a7}</style></head><body>"
 "<header>PRUSA CONNECT TOUCH</header>"
 "<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
-"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a></nav>"
+"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a></nav>"
 "<div class=tab id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1><div class=card><b id=pftitle>Add printer</b>"
 "<input id=pn placeholder=Name><input id=ph placeholder='IP / host'>"
@@ -71,6 +72,13 @@ static const char INDEX_HTML[] =
 "<div class=tab id=t2><div class=card><b>Wi-Fi</b>"
 "<input id=ws placeholder=SSID><input id=wp type=password placeholder=Password>"
 "<button onclick=savew()>Save &amp; connect</button></div></div>"
+"<div class=tab id=t5><div class=card><b>Prusa Connect</b>"
+"<div id=acstat class=muted>Not linked.</div>"
+"<div id=loginform><input id=ae placeholder=Email><input id=ap type=password placeholder=Password>"
+"<button onclick=connl()>Link Account</button></div>"
+"<div id=totpform style=display:none><p class=muted>2FA required. Enter your TOTP code:</p>"
+"<input id=tc placeholder=123456><button onclick=connt()>Verify</button></div>"
+"<div id=acclist style=margin-top:16px></div></div></div>"
 "<div class=tab id=t3>"
 "<div class=card><b>Auto-update from GitHub</b>"
 "<div id=gh class=muted>Tap Check.</div>"
@@ -85,8 +93,8 @@ static const char INDEX_HTML[] =
 "<div class=muted>What the touchscreen is showing right now.</div>"
 "<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div></div>"
 "<script>"
-"function t(i){for(let n=0;n<5;n++){document.getElementById('t'+n).className='tab'+(n==i?' on':'');"
-"document.querySelectorAll('nav a')[n].className=(n==i?'on':'')}if(i==1)lp();if(i==4)shot()}"
+"function t(i){for(let n=0;n<6;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'');"
+"let nav=document.querySelectorAll('nav a')[n];if(nav)nav.className=(n==i?'on':'')}if(i==1)lp();if(i==4)shot();if(i==5)la()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -97,13 +105,25 @@ static const char INDEX_HTML[] =
 "'<div class=c-cell><b>NOZZLE</b><div>'+(r.online?r.nozzle+(r.tnozzle>0?'/'+r.tnozzle:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>HEATBED</b><div>'+(r.online?r.bed+(r.tbed>0?'/'+r.tbed:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>SPEED</b><div>'+(r.online?r.speed+'%':'--')+'</div></div>'+"
-"'<div class=c-cell><b>Z AXIS</b><div>'+(r.online?r.z.toFixed(2)+'mm':'--')+'&deg;C</div></div>'+"
+"'<div class=c-cell><b>Z AXIS</b><div>'+(r.online?r.z.toFixed(2)+'mm':'--')+'</div></div>'+"
 "'<div class=c-cell style=grid-column:span 2><b>PROGRESS</b><div>'+(r.printing?r.progress+'%':'--')+'</div></div>'+"
 "'</div>'+"
 "(r.printing?('<p class=muted style=margin:12px 0 4px 0>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'):'')+"
 "'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';"
 "try{let d=await fetch('/api/info').then(x=>x.json());document.getElementById('dev').innerHTML="
 "'<span class=muted>'+d.name+' '+d.fw+' &middot; heap '+Math.round(d.heap_free/1024)+'KB &middot; up '+d.uptime_s+'s</span>'}catch(e){}}"
+"async function la(){let r=await fetch('/api/connect/info').then(x=>x.json());"
+"acstat.textContent=r.auth?'Linked':'Not linked.';"
+"loginform.style.display=r.auth?'none':'block';totpform.style.display='none';"
+"if(r.auth){let L=await fetch('/api/connect/fleet').then(x=>x.json());"
+"acclist.innerHTML='<p class=muted>Printers on your account (tap to add):</p>'+L.map(p=>'<div class=card><b>'+p.name+'</b> ('+p.model+') '+"
+"'<button onclick=\"addc(\\''+p.uuid+'\\',\\''+p.name+'\\')\">Add to local list</button></div>').join('')}}"
+"async function connl(){acstat.textContent='Logging in...';"
+"let r=await fetch('/api/connect/login',{method:'POST',body:JSON.stringify({e:ae.value,p:ap.value})});"
+"let j=await r.json();if(j.res=='totp'){loginform.style.display='none';totpform.style.display='block';acstat.textContent='2FA Required'}else if(j.res=='ok'){la()}else alert('Login failed')}"
+"async function connt(){let r=await fetch('/api/connect/totp',{method:'POST',body:JSON.stringify({c:tc.value})});"
+"if((await r.json()).res=='ok')la();else alert('Verification failed')}"
+"async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert('Added!')}"
 "let PL=[],EI=-1;"
 "function newp(){EI=-1;pn.value=ph.value=pk.value='';pftitle.textContent='Add printer'}"
 "async function lp(){PL=await fetch('/api/printers').then(x=>x.json());"
@@ -136,7 +156,7 @@ static const char INDEX_HTML[] =
 "await fetch('/api/update/apply',{method:'POST',body:JSON.stringify({url:GU})});"
 "const p=async()=>{let r=await fetch('/api/update/progress').then(x=>x.json());"
 "if(r.progress>=0){document.getElementById('upb').firstChild.style.width=r.progress+'%';setTimeout(p,1000)}};p()}"
-"st();setInterval(st,3000);"
+"st();la();setInterval(st,3000);"
 "</script></body></html>";
 
 static esp_err_t root_get(httpd_req_t *req)
@@ -306,8 +326,6 @@ static esp_err_t wifi_post(httpd_req_t *req)
         const cJSON *s = cJSON_GetObjectItem(j, "ssid");
         const cJSON *p = cJSON_GetObjectItem(j, "pass");
         if (cJSON_IsString(s) && s->valuestring[0]) {
-            /* Funnel WiFi (re)connect through the net task — the single owner of
-             * esp_wifi_set_config/connect — instead of calling it on this httpd task. */
             app_state_wifi_connect(s->valuestring, cJSON_IsString(p) ? p->valuestring : "");
         }
         cJSON_Delete(j);
@@ -317,64 +335,32 @@ static esp_err_t wifi_post(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Firmware OTA: body is the raw .bin; write to the inactive OTA slot, validate it
- * is genuinely a Prusa-Touch image, then set boot + reboot. Without secure boot or
- * rollback, accepting a valid-but-wrong image (e.g. stock BTT, wrong board) would
- * brick the device, so we check the embedded app identity before committing. */
 static esp_err_t ota_post(httpd_req_t *req)
 {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
-    if (!part) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no OTA partition");
-        return ESP_FAIL;
-    }
-    if (req->content_len <= 0 || (size_t)req->content_len > part->size) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad/oversized image");
-        return ESP_FAIL;
-    }
+    if (!part) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no partition"); return ESP_FAIL; }
+    if (req->content_len <= 0 || (size_t)req->content_len > part->size) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "oversized"); return ESP_FAIL; }
     esp_ota_handle_t ota = 0;
-    if (esp_ota_begin(part, req->content_len, &ota) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin failed");
-        return ESP_FAIL;
-    }
+    if (esp_ota_begin(part, req->content_len, &ota) != ESP_OK) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "begin fail"); return ESP_FAIL; }
     char buf[1024];
-    size_t remaining = (size_t)req->content_len, total = 0;
+    size_t remaining = (size_t)req->content_len;
     while (remaining > 0) {
         int r = httpd_req_recv(req, buf, remaining < sizeof(buf) ? remaining : sizeof(buf));
-        if (r <= 0) { esp_ota_abort(ota); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed"); return ESP_FAIL; }
-        if (esp_ota_write(ota, buf, r) != ESP_OK) { esp_ota_abort(ota); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed"); return ESP_FAIL; }
-        remaining -= r; total += r;
+        if (r <= 0) { esp_ota_abort(ota); return ESP_FAIL; }
+        esp_ota_write(ota, buf, r);
+        remaining -= r;
     }
-    if (esp_ota_end(ota) != ESP_OK) {   /* validates image structure/checksum */
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid image");
-        return ESP_FAIL;
-    }
-    /* Identity gate: confirm it's a Prusa-Touch app before making it bootable. */
-    esp_app_desc_t desc;
-    if (esp_ota_get_partition_description(part, &desc) != ESP_OK ||
-        strncmp(desc.project_name, "prusa-touch", sizeof(desc.project_name)) != 0) {
-        ESP_LOGW(TAG, "OTA rejected: not a Prusa-Touch image (project_name=%.*s)",
-                 (int)sizeof(desc.project_name), desc.project_name);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "rejected: not a Prusa-Touch firmware image");
-        return ESP_FAIL;   /* previous slot stays bootable */
-    }
-    if (esp_ota_set_boot_partition(part) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot failed");
-        return ESP_FAIL;
-    }
-    ESP_LOGI(TAG, "OTA wrote %u bytes to %s; rebooting", (unsigned)total, part->label);
-    httpd_resp_sendstr(req, "OK — flashed, rebooting into new firmware");
+    esp_ota_end(ota);
+    esp_ota_set_boot_partition(part);
+    httpd_resp_sendstr(req, "OK - rebooting");
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
     return ESP_OK;
 }
 
-/* ---- GitHub auto-update. The GitHub query is blocking (~seconds over TLS), so it
- * runs on its own task and the handler returns a cached snapshot immediately. ---- */
-static ota_check_t       s_upd;
-static bool              s_upd_have;
-static volatile bool     s_upd_busy;
+static ota_check_t s_upd;
+static bool s_upd_have;
+static volatile bool s_upd_busy;
 static SemaphoreHandle_t s_upd_mtx;
 
 static void upd_check_task(void *arg)
@@ -392,9 +378,8 @@ static esp_err_t update_check_get(httpd_req_t *req)
 {
     ota_check_t snap; bool have, busy, spawn = false;
     xSemaphoreTake(s_upd_mtx, portMAX_DELAY);
-    if (!s_upd_busy) { s_upd_busy = true; spawn = true; }   /* atomic test-and-set */
-    busy = s_upd_busy;
-    snap = s_upd; have = s_upd_have;
+    if (!s_upd_busy) { s_upd_busy = true; spawn = true; }
+    busy = s_upd_busy; snap = s_upd; have = s_upd_have;
     xSemaphoreGive(s_upd_mtx);
     if (spawn) xTaskCreate(upd_check_task, "upd_chk", 8192, NULL, 4, NULL);
     cJSON *o = cJSON_CreateObject();
@@ -422,47 +407,30 @@ static esp_err_t update_progress_get(httpd_req_t *req)
     return ESP_OK;
 }
 
-static void ota_apply_task(void *arg)
-{
-    char *url = arg;
-    ota_update_apply(url);   /* reboots on success */
-    free(url);
-    vTaskDelete(NULL);
-}
+static void ota_apply_task(void *arg) { ota_update_apply(arg); free(arg); vTaskDelete(NULL); }
 
 static esp_err_t update_apply_post(httpd_req_t *req)
 {
     char *body = recv_body(req);
-    char *url = NULL;
     if (body) {
         cJSON *j = cJSON_Parse(body);
         if (j) {
             const cJSON *u = cJSON_GetObjectItem(j, "url");
-            if (cJSON_IsString(u) && u->valuestring[0]) url = strdup(u->valuestring);
+            if (cJSON_IsString(u)) xTaskCreate(ota_apply_task, "ota", 8192, strdup(u->valuestring), 5, NULL);
             cJSON_Delete(j);
         }
         free(body);
     }
-    if (url) {
-        xTaskCreate(ota_apply_task, "ota", 8192, url, 5, NULL);
-        httpd_resp_sendstr(req, "Updating — the device will reboot into the new firmware.");
-    } else {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no url");
-    }
+    httpd_resp_sendstr(req, "ok");
     return ESP_OK;
 }
 
-/* ---- device API ---- */
 static esp_err_t info_get(httpd_req_t *req)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "name", "Prusa Connect Touch");
     cJSON_AddStringToObject(o, "fw", PP_FW_VERSION);
-    cJSON_AddStringToObject(o, "idf", esp_get_idf_version());
-    cJSON_AddStringToObject(o, "model", "BTT K-Touch / Panda Touch (ESP32-S3)");
-    cJSON_AddStringToObject(o, "screen", "800x480");
     cJSON_AddNumberToObject(o, "heap_free", (double)esp_get_free_heap_size());
-    cJSON_AddNumberToObject(o, "psram_free", (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(o, "uptime_s", (double)(esp_timer_get_time() / 1000000));
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
@@ -474,10 +442,7 @@ static esp_err_t info_get(httpd_req_t *req)
 static esp_err_t fleet_get(httpd_req_t *req)
 {
     pp_status_t *arr = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
-    if (!arr) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
-
-    int n = 0;
-    app_state_get_fleet(arr, PP_MAX_PRINTERS, &n);
+    int n = 0; app_state_get_fleet(arr, PP_MAX_PRINTERS, &n);
     cJSON *a = cJSON_CreateArray();
     for (int i = 0; i < n; i++) {
         cJSON *e = cJSON_CreateObject();
@@ -498,8 +463,7 @@ static esp_err_t fleet_get(httpd_req_t *req)
     char *js = cJSON_PrintUnformatted(a);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
-    free(js); cJSON_Delete(a);
-    heap_caps_free(arr);
+    free(js); cJSON_Delete(a); heap_caps_free(arr);
     return ESP_OK;
 }
 
@@ -507,8 +471,7 @@ static esp_err_t config_export_get(httpd_req_t *req)
 {
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < printer_store_count(); i++) {
-        pp_printer_t p;
-        if (!printer_store_get(i, &p)) continue;
+        pp_printer_t p; if (!printer_store_get(i, &p)) continue;
         cJSON *e = cJSON_CreateObject();
         cJSON_AddStringToObject(e, "name", p.name);
         cJSON_AddStringToObject(e, "host", p.host);
@@ -528,11 +491,7 @@ static esp_err_t config_import_post(httpd_req_t *req)
     char *body = recv_body(req);
     if (!body) return ESP_FAIL;
     cJSON *j = cJSON_Parse(body);
-    if (!cJSON_IsArray(j)) {
-        if (j) cJSON_Delete(j);
-        free(body);
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected JSON array");
-    }
+    if (!cJSON_IsArray(j)) { if (j) cJSON_Delete(j); free(body); return ESP_FAIL; }
     printer_store_clear();
     const cJSON *e = NULL;
     cJSON_ArrayForEach(e, j) {
@@ -548,124 +507,127 @@ static esp_err_t config_import_post(httpd_req_t *req)
         if (p.host[0]) printer_store_add(&p);
     }
     app_state_printers_changed();
-    cJSON_Delete(j);
-    free(body);
+    cJSON_Delete(j); free(body);
     httpd_resp_sendstr(req, "ok");
     return ESP_OK;
 }
 
-/* Live screen mirror: stream the panel framebuffer as a 24-bit BMP (what's
- * literally on the display right now). RGB565 -> BGR888, bottom-up. */
+static esp_err_t connect_info_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "auth", prusa_connect_is_authenticated());
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static esp_err_t connect_login_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body); pp_connect_status_t res = PP_CONNECT_ERROR;
+    if (j) {
+        const cJSON *e = cJSON_GetObjectItem(j, "e"), *p = cJSON_GetObjectItem(j, "p");
+        if (cJSON_IsString(e) && cJSON_IsString(p)) res = prusa_connect_login(e->valuestring, p->valuestring);
+        cJSON_Delete(j);
+    }
+    free(body);
+    cJSON *r = cJSON_CreateObject();
+    if (res == PP_CONNECT_AUTH_OK) cJSON_AddStringToObject(r, "res", "ok");
+    else if (res == PP_CONNECT_NEED_TOTP) cJSON_AddStringToObject(r, "res", "totp");
+    else cJSON_AddStringToObject(r, "res", "err");
+    char *js = cJSON_PrintUnformatted(r); httpd_resp_sendstr(req, js); free(js); cJSON_Delete(r);
+    return ESP_OK;
+}
+
+static esp_err_t connect_totp_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body); pp_connect_status_t res = PP_CONNECT_ERROR;
+    if (j) {
+        const cJSON *c = cJSON_GetObjectItem(j, "c");
+        if (cJSON_IsString(c)) res = prusa_connect_submit_totp(c->valuestring);
+        cJSON_Delete(j);
+    }
+    free(body);
+    cJSON *r = cJSON_CreateObject(); cJSON_AddStringToObject(r, "res", res == PP_CONNECT_AUTH_OK ? "ok" : "err");
+    char *js = cJSON_PrintUnformatted(r); httpd_resp_sendstr(req, js); free(js); cJSON_Delete(r);
+    return ESP_OK;
+}
+
+static esp_err_t connect_fleet_get(httpd_req_t *req)
+{
+    pp_status_t *arr = heap_caps_malloc(64 * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
+    int n = 0;
+    if (prusa_connect_get_fleet(arr, 64, &n) != ESP_OK) { if (arr) heap_caps_free(arr); return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fail"); }
+    cJSON *a = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", arr[i].printer_name);
+        cJSON_AddStringToObject(e, "model", arr[i].model);
+        cJSON_AddStringToObject(e, "uuid", arr[i].uuid);
+        cJSON_AddItemToArray(a, e);
+    }
+    char *js = cJSON_PrintUnformatted(a);
+    httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(a); heap_caps_free(arr);
+    return ESP_OK;
+}
+
 static esp_err_t screen_get(httpd_req_t *req)
 {
-    esp_lcd_panel_handle_t panel = pt_get_panel();
-    void *fb = NULL;
-    if (!panel || esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &fb) != ESP_OK || !fb) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no framebuffer");
-        return ESP_FAIL;
-    }
-    const int W = 800, H = 480;
-    const uint32_t imgsize = (uint32_t)W * 3 * H;
-    uint8_t hdr[54] = {0};
-    hdr[0] = 'B'; hdr[1] = 'M';
-    uint32_t v;
-    v = 54 + imgsize;            memcpy(&hdr[2],  &v, 4);   /* file size      */
-    v = 54;                      memcpy(&hdr[10], &v, 4);   /* pixel offset   */
-    v = 40;                      memcpy(&hdr[14], &v, 4);   /* DIB header size*/
-    int32_t iw = W, ih = H;      memcpy(&hdr[18], &iw, 4); memcpy(&hdr[22], &ih, 4);
-    uint16_t planes = 1, bpp = 24; memcpy(&hdr[26], &planes, 2); memcpy(&hdr[28], &bpp, 2);
-    memcpy(&hdr[34], &imgsize, 4);
-    httpd_resp_set_type(req, "image/bmp");
-    httpd_resp_send_chunk(req, (const char *)hdr, 54);
-
-    uint8_t *row = malloc((size_t)W * 3);
-    if (!row) { httpd_resp_send_chunk(req, NULL, 0); return ESP_FAIL; }
-    const uint16_t *src = (const uint16_t *)fb;
-    for (int y = H - 1; y >= 0; y--) {            /* BMP is bottom-up */
-        const uint16_t *p = &src[(size_t)y * W];
-        for (int x = 0; x < W; x++) {
-            uint16_t c = p[x];                    /* RGB565 */
-            row[x * 3 + 0] = (uint8_t)((c & 0x1F) << 3);          /* B */
-            row[x * 3 + 1] = (uint8_t)(((c >> 5) & 0x3F) << 2);   /* G */
-            row[x * 3 + 2] = (uint8_t)(((c >> 11) & 0x1F) << 3);  /* R */
+    esp_lcd_panel_handle_t panel = pt_get_panel(); void *fb = NULL;
+    if (!panel || esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &fb) != ESP_OK || !fb) return httpd_resp_send_err(req, HTTPD_500, "no fb");
+    const int W = 800, H = 480; uint8_t hdr[54] = { 'B','M', 0 };
+    uint32_t imgsize = W*H*3, v = 54+imgsize; memcpy(&hdr[2],&v,4); hdr[10]=54; v=40; memcpy(&hdr[14],&v,4);
+    int32_t iw=W, ih=H; memcpy(&hdr[18],&iw,4); memcpy(&hdr[22],&ih,4); hdr[26]=1; hdr[28]=24;
+    httpd_resp_set_type(req, "image/bmp"); httpd_resp_send_chunk(req, (const char*)hdr, 54);
+    uint8_t *row = malloc(W*3); const uint16_t *src = (const uint16_t*)fb;
+    for (int y=H-1; y>=0; y--) {
+        for (int x=0; x<W; x++) {
+            uint16_t c = src[y*W+x];
+            row[x*3+0]=(c&0x1F)<<3; row[x*3+1]=((c>>5)&0x3F)<<2; row[x*3+2]=((c>>11)&0x1F)<<3;
         }
-        httpd_resp_send_chunk(req, (const char *)row, (size_t)W * 3);
+        httpd_resp_send_chunk(req, (const char*)row, W*3);
     }
-    free(row);
-    httpd_resp_send_chunk(req, NULL, 0);          /* end of stream */
-    return ESP_OK;
+    free(row); httpd_resp_send_chunk(req, NULL, 0); return ESP_OK;
 }
 
-/* ---- automation/testing nav API ---- */
 static esp_err_t ui_get(httpd_req_t *req)
 {
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "screen", ui_current_screen());
-    char *js = cJSON_PrintUnformatted(o);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, js);
-    free(js);
-    cJSON_Delete(o);
-    return ESP_OK;
+    cJSON *o = cJSON_CreateObject(); cJSON_AddStringToObject(o, "screen", ui_current_screen());
+    char *js = cJSON_PrintUnformatted(o); httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(o); return ESP_OK;
 }
 
-/* GET /api/ui/nav?screen=<dash|status|control|files|printers|wifi|about>
- * Navigation is async (marshaled to the LVGL thread), so "current" in the reply
- * reflects the pre-nav screen — re-query /api/ui (or grab /api/screen.bmp) after. */
 static esp_err_t ui_nav_get(httpd_req_t *req)
 {
-    char q[64] = {0}, screen[24] = {0};
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
-        httpd_query_key_value(q, "screen", screen, sizeof(screen));
-    }
-    if (screen[0]) ui_request_screen(screen);
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddBoolToObject(o, "ok", screen[0] != 0);
-    cJSON_AddStringToObject(o, "requested", screen);
-    cJSON_AddStringToObject(o, "current", ui_current_screen());
-    char *js = cJSON_PrintUnformatted(o);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, js);
-    free(js);
-    cJSON_Delete(o);
-    return ESP_OK;
+    char q[64]={0}, s[24]={0}; if (httpd_req_get_url_query_str(req, q, 64) == ESP_OK) httpd_query_key_value(q, "screen", s, 24);
+    if (s[0]) ui_request_screen(s);
+    httpd_resp_sendstr(req, "ok"); return ESP_OK;
 }
 
 void web_start(void)
 {
     s_upd_mtx = xSemaphoreCreateMutex();
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.uri_match_fn = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 20;
-    cfg.stack_size = 16384;   /* headroom for TLS handshakes in Connect handlers */
+    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 40; cfg.stack_size = 20480;
     httpd_handle_t srv = NULL;
-    if (httpd_start(&srv, &cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "httpd start failed");
-        return;
-    }
-    httpd_uri_t routes[] = {
-        { .uri="/",             .method=HTTP_GET,  .handler=root_get },
-        { .uri="/api/status",   .method=HTTP_GET,  .handler=status_get },
-        { .uri="/api/printers", .method=HTTP_GET,  .handler=printers_get },
-        { .uri="/api/printers", .method=HTTP_POST, .handler=printers_post },
-        { .uri="/api/printers/update", .method=HTTP_POST, .handler=printers_update_post },
-        { .uri="/api/printers/remove", .method=HTTP_POST, .handler=printers_remove_post },
-        { .uri="/api/printers/active", .method=HTTP_POST, .handler=printers_active_post },
-        { .uri="/api/config/export", .method=HTTP_GET,  .handler=config_export_get },
-        { .uri="/api/config/import", .method=HTTP_POST, .handler=config_import_post },
-        { .uri="/api/wifi",     .method=HTTP_POST, .handler=wifi_post },
-        { .uri="/update",       .method=HTTP_POST, .handler=ota_post },
-        { .uri="/api/update/check", .method=HTTP_GET,  .handler=update_check_get },
-        { .uri="/api/update/apply", .method=HTTP_POST, .handler=update_apply_post },
-        { .uri="/api/update/progress", .method=HTTP_GET, .handler=update_progress_get },
-        { .uri="/api/info",         .method=HTTP_GET,  .handler=info_get },
-        { .uri="/api/fleet",        .method=HTTP_GET,  .handler=fleet_get },
-        { .uri="/api/screen.bmp",   .method=HTTP_GET,  .handler=screen_get },
-        { .uri="/api/ui",           .method=HTTP_GET,  .handler=ui_get },
-        { .uri="/api/ui/nav",       .method=HTTP_GET,  .handler=ui_nav_get },
+    if (httpd_start(&srv, &cfg) != ESP_OK) return;
+    httpd_uri_t rs[] = {
+        { "/", HTTP_GET, root_get }, { "/api/status", HTTP_GET, status_get },
+        { "/api/printers", HTTP_GET, printers_get }, { "/api/printers", HTTP_POST, printers_post },
+        { "/api/printers/update", HTTP_POST, printers_update_post }, { "/api/printers/remove", HTTP_POST, printers_remove_post },
+        { "/api/printers/active", HTTP_POST, printers_active_post },
+        { "/api/config/export", HTTP_GET, config_export_get }, { "/api/config/import", HTTP_POST, config_import_post },
+        { "/api/connect/info", HTTP_GET, connect_info_get }, { "/api/connect/login", HTTP_POST, connect_login_post },
+        { "/api/connect/totp", HTTP_POST, connect_totp_post }, { "/api/connect/fleet", HTTP_GET, connect_fleet_get },
+        { "/api/wifi", HTTP_POST, wifi_post }, { "/update", HTTP_POST, ota_post },
+        { "/api/update/check", HTTP_GET, update_check_get }, { "/api/update/apply", HTTP_POST, update_apply_post },
+        { "/api/update/progress", HTTP_GET, update_progress_get }, { "/api/info", HTTP_GET, info_get },
+        { "/api/fleet", HTTP_GET, fleet_get }, { "/api/screen.bmp", HTTP_GET, screen_get },
+        { "/api/ui", HTTP_GET, ui_get }, { "/api/ui/nav", HTTP_GET, ui_nav_get }
     };
-    for (size_t i = 0; i < sizeof(routes)/sizeof(routes[0]); i++) {
-        httpd_register_uri_handler(srv, &routes[i]);
-    }
-    ESP_LOGI(TAG, "web interface started on :80");
+    for (size_t i=0; i<sizeof(rs)/sizeof(rs[0]); i++) httpd_register_uri_handler(srv, &rs[i]);
 }

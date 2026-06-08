@@ -8,6 +8,7 @@
 #include "ui.h"
 #include "ota_update.h"
 #include "pandatouch_msc.h"
+#include "prusa_connect.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ static int              s_cache_count;
 static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
 {
     if (i < 0 || i >= PP_MAX_PRINTERS) return PP_BK_PRUSALINK;
+    if (strncmp(pr->host, "cloud:", 6) == 0) return PP_BK_PRUSA_CONNECT;
     if (s_backend[i] == PP_BK_UNKNOWN) {
         s_backend[i] = moonraker_probe(pr) ? PP_BK_MOONRAKER : PP_BK_PRUSALINK;
     }
@@ -185,7 +187,14 @@ static bool poll_printer(int i)
     int active = printer_store_active();
     pp_backend_t bk = detect_backend(i, &pr);
     pp_status_t fresh;
+
+    if (bk == PP_BK_PRUSA_CONNECT) {
+        /* Cloud printers are updated via fleet poll in net_task. */
+        return false;
+    }
+
     if (bk == PP_BK_MOONRAKER) {
+
         moonraker_get_status_of(&pr, &fresh);
     } else if (i == active) {
         prusalink_get_status(&fresh);          /* active: refreshes s_storage */
@@ -299,12 +308,26 @@ static void run_command(const pp_cmd_t *cmd)
     int aidx = printer_store_active();
     pp_backend_t abk = (have_apr && aidx >= 0) ? detect_backend(aidx, &apr) : PP_BK_PRUSALINK;
     bool moon = (abk == PP_BK_MOONRAKER);
+    bool cloud = (abk == PP_BK_PRUSA_CONNECT);
+    const char *uuid = cloud ? apr.host + 6 : NULL;
 
     switch (cmd->kind) {
-    case PP_CMD_PAUSE:  moon ? moonraker_pause(&apr)  : prusalink_pause(job_id);  break;
-    case PP_CMD_RESUME: moon ? moonraker_resume(&apr) : prusalink_resume(job_id); break;
-    case PP_CMD_STOP:   moon ? moonraker_stop(&apr)   : prusalink_stop(job_id);   break;
-    case PP_CMD_PRINT:  moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path); break;
+    case PP_CMD_PAUSE:
+        if (cloud) prusa_connect_pause(uuid);
+        else moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
+        break;
+    case PP_CMD_RESUME:
+        if (cloud) prusa_connect_resume(uuid);
+        else moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
+        break;
+    case PP_CMD_STOP:
+        if (cloud) prusa_connect_stop(uuid);
+        else moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
+        break;
+    case PP_CMD_PRINT:
+        if (cloud) ESP_LOGW(TAG, "Cloud print not implemented");
+        else moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path);
+        break;
     case PP_CMD_SET_PRINTER:
         printer_store_set_active(cmd->index);
         break;
@@ -362,6 +385,7 @@ static void run_command(const pp_cmd_t *cmd)
         return;
     }
     case PP_CMD_LIST: {
+        if (cloud) break;
         pp_file_list_t *list = malloc(sizeof(*list));
         if (list) {
             list->count = 0;
@@ -396,7 +420,8 @@ static void run_command(const pp_cmd_t *cmd)
         break;
     }
     case PP_CMD_GCODE:
-        be_gcode(abk, &apr, cmd->path);
+        if (cloud) prusa_connect_gcode(uuid, cmd->path);
+        else be_gcode(abk, &apr, cmd->path);
         break;
     case PP_CMD_PREHEAT: {
         int m = cmd->index;
@@ -432,11 +457,41 @@ static void net_task(void *arg)
     for (;;) {
         int n = printer_store_count();
         if (n > 0) {
+            /* If we have cloud printers, poll Connect once per cycle. */
+            bool has_cloud = false;
+            for (int i = 0; i < n; i++) {
+                pp_printer_t pr;
+                if (printer_store_get(i, &pr) && strncmp(pr.host, "cloud:", 6) == 0) {
+                    has_cloud = true; break;
+                }
+            }
+            if (has_cloud && prusa_connect_is_authenticated()) {
+                pp_status_t *fleet = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
+                int count = 0;
+                if (prusa_connect_get_fleet(fleet, PP_MAX_PRINTERS, &count) == ESP_OK) {
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    for (int i = 0; i < n; i++) {
+                        pp_printer_t pr;
+                        if (printer_store_get(i, &pr) && strncmp(pr.host, "cloud:", 6) == 0) {
+                            const char *uuid = pr.host + 6;
+                            for (int j = 0; j < count; j++) {
+                                if (strcmp(fleet[j].uuid, uuid) == 0) {
+                                    s_cache[i] = fleet[j];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    xSemaphoreGive(s_lock);
+                }
+                if (fleet) heap_caps_free(fleet);
+            }
+
             int i = s_poll_idx % n;
             s_poll_idx++;
             bool changed = poll_printer(i);
             if (i == printer_store_active()) publish_status();
-            if (changed) publish_dashboard();   /* only rebuild cards on change */
+            if (changed || has_cloud) publish_dashboard();   /* rebuild cards if cloud updated */
         } else {
             /* No printers configured yet. */
             xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -458,6 +513,7 @@ static void net_task(void *arg)
 
 void app_state_start(void)
 {
+    prusa_connect_init();
     s_lock = xSemaphoreCreateMutex();
     s_cmds = xQueueCreate(8, sizeof(pp_cmd_t));
     memset(&s_status, 0, sizeof(s_status));
