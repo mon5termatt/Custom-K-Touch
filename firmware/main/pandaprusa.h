@@ -54,4 +54,4 @@ typedef struct {
 typedef struct { uint8_t *data; int len; } pp_image_t;
 
 #define PP_MAX_FILES 60
-#define PP_MAX_PRINTERS 8
+#define PP_MAX_PRINTERS 16

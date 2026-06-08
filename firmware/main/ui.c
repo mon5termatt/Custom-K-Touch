@@ -1305,6 +1305,10 @@ static int dash_order_cmp(const void *pa, const void *pb)
 void ui_apply_dashboard(void *arg)
 {
     pp_dash_t *d = (pp_dash_t *)arg;
+    
+    /* Save current scroll position to prevent jumping to top on every refresh. */
+    int32_t scroll_y = lv_obj_get_scroll_y(s_dash_grid);
+    
     lv_obj_clean(s_dash_grid);
     s_dash_count = d->count;
 
@@ -1328,6 +1332,11 @@ void ui_apply_dashboard(void *arg)
                                            : "No printers match the current filter.");
         lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     }
+
+    /* Restore scroll position. */
+    lv_obj_update_layout(s_dash_grid);   /* ensure children positions are calculated */
+    lv_obj_scroll_to_y(s_dash_grid, scroll_y, LV_ANIM_OFF);
+
     free(d);
 }
 
