@@ -82,6 +82,7 @@ static const char INDEX_HTML[] =
 "<div id=acstat class=muted>Not linked.</div>"
 "<button id=lob style='display:none;background:#5a2d2d;width:auto;padding:6px 14px' onclick=logout()>Log out</button>"
 "<div id=loginform><input id=ae placeholder=Email><input id=ap type=password placeholder=Password>"
+"<label style='display:block;margin:6px 0;font-size:13px'><input id=arem type=checkbox checked> Stay signed in (store password on device for automatic re-login)</label>"
 "<button class=p onclick=connl()>Link Account</button></div>"
 "<div id=totpform style=display:none><p class=muted>2FA required. Enter your TOTP code:</p>"
 "<input id=tc placeholder=123456><button class=p onclick=connt()>Verify</button></div>"
@@ -167,7 +168,7 @@ static const char INDEX_HTML[] =
 "let L=await fetch('/api/connect/team_printers?id='+tid).then(x=>x.json());"
 "for(let p of L)await addc(p.uuid,p.name);lp()}"
 "async function connl(){acstat.textContent='Logging in...';"
-"let r=await fetch('/api/connect/login',{method:'POST',body:JSON.stringify({e:ae.value,p:ap.value})});"
+"let r=await fetch('/api/connect/login',{method:'POST',body:JSON.stringify({e:ae.value,p:ap.value,rem:arem.checked})});"
 "let j=await r.json();if(j.res=='totp'){loginform.style.display='none';totpform.style.display='block';acstat.textContent='2FA Required'}else if(j.res=='ok'){la()}else alert('Login failed')}"
 "async function connt(){let r=await fetch('/api/connect/totp',{method:'POST',body:JSON.stringify({c:tc.value})});"
 "if((await r.json()).res=='ok')la();else alert('Verification failed')}"
@@ -601,6 +602,9 @@ static esp_err_t connect_login_post(httpd_req_t *req)
     cJSON *j = cJSON_Parse(body); pp_connect_status_t res = PP_CONNECT_ERROR;
     if (j) {
         const cJSON *e = cJSON_GetObjectItem(j, "e"), *p = cJSON_GetObjectItem(j, "p");
+        const cJSON *rem = cJSON_GetObjectItem(j, "rem");
+        /* Set the remember flag BEFORE login so its success path persists creds (or not). */
+        prusa_connect_set_remember(cJSON_IsBool(rem) ? cJSON_IsTrue(rem) : true);
         if (cJSON_IsString(e) && cJSON_IsString(p)) res = prusa_connect_login(e->valuestring, p->valuestring);
         cJSON_Delete(j);
     }
@@ -737,9 +741,11 @@ static esp_err_t test_orient_get(httpd_req_t *req)
     int o = 0;
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && httpd_query_key_value(q, "o", v, sizeof(v)) == ESP_OK)
         o = atoi(v);
-    app_state_set_pref(PP_PREF_ORIENT, o ? 1 : 0);
+    if (o < 0 || o > 3) o = 0;   /* 0=landscape 1=180 2=portrait 3=portrait-flipped */
+    app_state_set_pref(PP_PREF_ORIENT, o);
+    char body[20]; snprintf(body, sizeof(body), "{\"orient\":%d}", o);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, o ? "{\"orient\":1}" : "{\"orient\":0}");
+    httpd_resp_sendstr(req, body);
     return ESP_OK;
 }
 
@@ -939,16 +945,20 @@ static esp_err_t screen_get(httpd_req_t *req)
     const int W = 800, H = 480; uint8_t hdr[54] = { 'B','M', 0 };
     uint32_t imgsize = W*H*3, v = 54+imgsize; memcpy(&hdr[2],&v,4); hdr[10]=54; v=40; memcpy(&hdr[14],&v,4);
     int32_t iw=W, ih=H; memcpy(&hdr[18],&iw,4); memcpy(&hdr[22],&ih,4); hdr[26]=1; hdr[28]=24;
-    httpd_resp_set_type(req, "image/bmp"); httpd_resp_send_chunk(req, (const char*)hdr, 54);
+    httpd_resp_set_type(req, "image/bmp");
+    if (httpd_resp_send_chunk(req, (const char*)hdr, 54) != ESP_OK) return ESP_FAIL;
     uint8_t *row = malloc(W*3); const uint16_t *src = (const uint16_t*)fb;
-    for (int y=H-1; y>=0; y--) {
+    esp_err_t e = ESP_OK;
+    for (int y=H-1; y>=0 && e==ESP_OK; y--) {
         for (int x=0; x<W; x++) {
             uint16_t c = src[y*W+x];
             row[x*3+0]=(c&0x1F)<<3; row[x*3+1]=((c>>5)&0x3F)<<2; row[x*3+2]=((c>>11)&0x1F)<<3;
         }
-        httpd_resp_send_chunk(req, (const char*)row, W*3);
+        e = httpd_resp_send_chunk(req, (const char*)row, W*3);   /* abort the stream if the client hung up */
     }
-    free(row); httpd_resp_send_chunk(req, NULL, 0); return ESP_OK;
+    free(row);
+    if (e == ESP_OK) httpd_resp_send_chunk(req, NULL, 0);   /* terminate cleanly only on success */
+    return e;
 }
 
 static esp_err_t ui_get(httpd_req_t *req)

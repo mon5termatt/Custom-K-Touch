@@ -25,6 +25,13 @@ pp_connect_status_t prusa_connect_submit_totp(const char *code);
 /* Check if we have a valid (or refreshable) session. */
 bool prusa_connect_is_authenticated(void);
 
+/* Automatic re-authentication (opt-in; credentials stored in NVS). */
+void prusa_connect_set_remember(bool on);          /* enable/disable; off erases saved creds */
+bool prusa_connect_remember(void);
+bool prusa_connect_have_saved_creds(void);
+void prusa_connect_save_creds(void);               /* persist current s_saved_* per the flag */
+pp_connect_status_t prusa_connect_try_saved_login(void);   /* replay login with saved creds */
+
 /* Forget the account: wipe tokens + default team from RAM and NVS. */
 void prusa_connect_logout(void);
 
@@ -73,6 +80,10 @@ esp_err_t prusa_connect_set_bed_temp(const char *uuid, int temp_c);
 esp_err_t prusa_connect_home(const char *uuid, const char *axes);
 esp_err_t prusa_connect_move(const char *uuid, int feedrate, float x, float y);
 esp_err_t prusa_connect_move_z(const char *uuid, int feedrate, float distance);
+
+/* Attention dialogs: fetch the active dialog into *s (ESP_OK if one exists), and respond to it. */
+esp_err_t prusa_connect_get_dialog(const char *uuid, pp_status_t *s);
+esp_err_t prusa_connect_dialog_action(const char *uuid, int dialog_id, const char *button);
 
 /* Fetch teams/organizations for Farm Mode. */
 esp_err_t prusa_connect_get_teams(cJSON **out_json);

@@ -18,6 +18,8 @@ typedef enum {
 typedef enum {
     PP_ORIENT_LANDSCAPE = 0,     /* 800x480 normal (default)      */
     PP_ORIENT_LANDSCAPE_FLIPPED, /* 180° (upside-down mounting)   */
+    PP_ORIENT_PORTRAIT,          /* 90°  — 480x800 (single column)*/
+    PP_ORIENT_PORTRAIT_FLIPPED,  /* 270° — 480x800 (other way up) */
 } pp_orient_t;
 
 /* Load cached prefs from NVS (call once at boot, before the UI is built). */

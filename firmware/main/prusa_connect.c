@@ -41,6 +41,8 @@ static SemaphoreHandle_t s_refresh_mtx;
 #define KEY_RT             "conn_rt"   /* refresh token */
 #define KEY_TEAM           "conn_tid"  /* default team id */
 #define KEY_ORG            "conn_org"  /* farm organization UUID */
+#define KEY_EMAIL          "conn_em"   /* saved account email (auto re-auth) */
+#define KEY_PASS           "conn_pw"   /* saved account password (auto re-auth; opt-in) */
 
 /* Internal state */
 static char s_at[2048];
@@ -53,6 +55,13 @@ static char s_cookies[4096];
 static char s_csrf[128];
 static char s_next[256];
 static char s_totp_url[128];
+/* Saved account credentials for automatic re-authentication (opt-in; stored in NVS).
+ * When the OAuth refresh chain dies, the net task replays the login flow with these so the
+ * cloud session restores with no user action. NB: NVS is not encrypted — a flash dump exposes
+ * these (as it already does the refresh token). 2FA accounts can't auto-complete (need a TOTP). */
+static char s_saved_email[128];
+static char s_saved_pass[128];
+static bool s_remember = true;   /* persist creds on successful login (device-owner opt-in) */
 
 /* ---- response accumulator (heap) ---- */
 typedef struct {
@@ -296,6 +305,9 @@ static pp_connect_status_t try_exchange_code(void)
 
 pp_connect_status_t prusa_connect_login(const char *email, const char *password)
 {
+    /* Stash for credential persistence on success (auto re-auth). */
+    strlcpy(s_saved_email, email ? email : "", sizeof(s_saved_email));
+    strlcpy(s_saved_pass, password ? password : "", sizeof(s_saved_pass));
     s_cookies[0] = s_at[0] = s_rt[0] = '\0';
     generate_pkce();
     
@@ -340,7 +352,45 @@ pp_connect_status_t prusa_connect_login(const char *email, const char *password)
     if (r.body && strstr(r.body, "invalid-feedback")) { free(r.body); return PP_CONNECT_AUTH_FAILED; }
 
     free(r.body);   /* login established the session cookie; the code comes from a fresh authorize */
-    return try_exchange_code();
+    pp_connect_status_t st = try_exchange_code();
+    if (st == PP_CONNECT_AUTH_OK) prusa_connect_save_creds();
+    return st;
+}
+
+/* Persist (or erase) the saved account credentials for auto re-auth. */
+void prusa_connect_save_creds(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    if (s_remember && s_saved_email[0] && s_saved_pass[0]) {
+        nvs_set_str(h, KEY_EMAIL, s_saved_email);
+        nvs_set_str(h, KEY_PASS, s_saved_pass);
+    } else {
+        nvs_erase_key(h, KEY_EMAIL);
+        nvs_erase_key(h, KEY_PASS);
+    }
+    nvs_commit(h); nvs_close(h);
+}
+
+void prusa_connect_set_remember(bool on)
+{
+    s_remember = on;
+    if (!on) { s_saved_email[0] = s_saved_pass[0] = '\0'; prusa_connect_save_creds(); }
+}
+
+bool prusa_connect_remember(void) { return s_remember; }
+bool prusa_connect_have_saved_creds(void) { return s_saved_email[0] && s_saved_pass[0]; }
+
+/* Auto re-auth: replay the login flow with the saved credentials. Returns AUTH_OK on success;
+ * NEED_TOTP if the account has 2FA (can't auto-complete); FAILED/ERROR otherwise. */
+pp_connect_status_t prusa_connect_try_saved_login(void)
+{
+    if (!prusa_connect_have_saved_creds()) return PP_CONNECT_AUTH_FAILED;
+    char em[128], pw[128];
+    strlcpy(em, s_saved_email, sizeof(em));   /* login() overwrites the s_saved_* via its args */
+    strlcpy(pw, s_saved_pass, sizeof(pw));
+    ESP_LOGI(TAG, "auto re-auth: replaying saved login for %.40s", em);
+    return prusa_connect_login(em, pw);
 }
 
 pp_connect_status_t prusa_connect_submit_totp(const char *code)
@@ -363,15 +413,18 @@ bool prusa_connect_is_authenticated(void) { return s_at[0] != '\0' || s_rt[0] !=
 void prusa_connect_logout(void)
 {
     s_at[0] = s_rt[0] = s_team[0] = s_cookies[0] = '\0';
+    s_saved_email[0] = s_saved_pass[0] = '\0';   /* an explicit logout also forgets saved creds */
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_erase_key(h, KEY_AT);
         nvs_erase_key(h, KEY_RT);
         nvs_erase_key(h, KEY_TEAM);
+        nvs_erase_key(h, KEY_EMAIL);
+        nvs_erase_key(h, KEY_PASS);
         nvs_commit(h);
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "logged out — tokens cleared");
+    ESP_LOGI(TAG, "logged out — tokens + saved creds cleared");
 }
 
 esp_err_t prusa_connect_refresh_token(void)
@@ -659,6 +712,48 @@ esp_err_t prusa_connect_move_z(const char *uuid, int feedrate, float distance)
     return connect_send_kwargs(uuid, "MOVE_Z", k);
 }
 
+/* Fetch a printer's active attention dialog (dialog_info) from its per-printer endpoint into
+ * the dialog_* fields of *s. ESP_OK if a dialog is present (s->dialog_id != 0), else ESP_FAIL.
+ * dialog_info shape: {id, code, title, text, buttons:[labels...], key}. */
+esp_err_t prusa_connect_get_dialog(const char *uuid, pp_status_t *s)
+{
+    s->dialog_id = 0; s->dialog_btn_count = 0;
+    s->dialog_title[0] = s->dialog_text[0] = '\0';
+    char url[160]; snprintf(url, sizeof(url), "https://connect.prusa3d.com/app/printers/%s", uuid);
+    http_resp_t r = do_http("GET", url, NULL, NULL, true);
+    if (r.code == 401 && prusa_connect_refresh_token() == ESP_OK) { free(r.body); r = do_http("GET", url, NULL, NULL, true); }
+    if (r.code != 200 || !r.body) { free(r.body); return ESP_FAIL; }
+    cJSON *root = cJSON_Parse(r.body);
+    free(r.body);
+    if (!root) return ESP_FAIL;
+    cJSON *di = cJSON_GetObjectItemCaseSensitive(root, "dialog_info");
+    if (cJSON_IsObject(di)) {
+        cJSON *id = cJSON_GetObjectItemCaseSensitive(di, "id");
+        cJSON *ti = cJSON_GetObjectItemCaseSensitive(di, "title");
+        cJSON *tx = cJSON_GetObjectItemCaseSensitive(di, "text");
+        cJSON *bt = cJSON_GetObjectItemCaseSensitive(di, "buttons");
+        if (cJSON_IsNumber(id)) s->dialog_id = id->valueint;
+        if (cJSON_IsString(ti)) strlcpy(s->dialog_title, ti->valuestring, sizeof(s->dialog_title));
+        if (cJSON_IsString(tx)) strlcpy(s->dialog_text, tx->valuestring, sizeof(s->dialog_text));
+        if (cJSON_IsArray(bt)) {
+            cJSON *b = NULL;
+            cJSON_ArrayForEach(b, bt) {
+                if (s->dialog_btn_count >= 3) break;
+                if (cJSON_IsString(b)) strlcpy(s->dialog_btns[s->dialog_btn_count++], b->valuestring, sizeof(s->dialog_btns[0]));
+            }
+        }
+    }
+    cJSON_Delete(root);
+    return (s->dialog_id != 0) ? ESP_OK : ESP_FAIL;
+}
+
+/* Respond to an attention dialog: DIALOG_ACTION {dialog_id:int, button:string(label)}. */
+esp_err_t prusa_connect_dialog_action(const char *uuid, int dialog_id, const char *button)
+{
+    char k[96]; snprintf(k, sizeof(k), "{\"dialog_id\":%d,\"button\":\"%s\"}", dialog_id, button ? button : "");
+    return connect_send_kwargs(uuid, "DIALOG_ACTION", k);
+}
+
 /* Webcam snapshot. Discovered (read-only) from the Connect web app:
  *   GET /app/cameras?limit=100                              -> camera list
  *   GET /thumbnail/camera/{id}?printer_uuid={uuid}          -> snapshot JPEG (404 if none)
@@ -841,6 +936,8 @@ void prusa_connect_init(void)
         sz = sizeof(s_rt); nvs_get_str(h, KEY_RT, s_rt, &sz);
         sz = sizeof(s_team); nvs_get_str(h, KEY_TEAM, s_team, &sz);
         sz = sizeof(s_org); nvs_get_str(h, KEY_ORG, s_org, &sz);
+        sz = sizeof(s_saved_email); nvs_get_str(h, KEY_EMAIL, s_saved_email, &sz);
+        sz = sizeof(s_saved_pass); nvs_get_str(h, KEY_PASS, s_saved_pass, &sz);
         nvs_close(h);
     }
 }

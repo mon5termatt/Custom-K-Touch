@@ -52,6 +52,10 @@ PRUSALINK_PARITY.md
 # Local dev helpers / scratch
 read_logs.py
 
+# UI simulator build output (the sim sources ARE committed; its build artifacts are not)
+firmware/sim/build/
+firmware/sim/out/
+
 # Build / flash / capture logs + screenshots (dev only).
 # Keep CMakeLists.txt — it's the top-level ESP-IDF project file, not a log.
 firmware/*.txt

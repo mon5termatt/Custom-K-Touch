@@ -106,8 +106,12 @@ MINI, CORE One, XL) that you'd otherwise only see in the cloud.
 4. That's it — your printers appear on the dashboard within a few seconds. Tap any one
    for live status, files, and control.
 
-> Your password is used only to sign in and is **never stored on the device** — only the
-> resulting session token is kept, exactly like the Prusa Connect website.
+> By default your password is used only to sign in and isn't kept — only the resulting
+> session token is stored, like the Prusa Connect website. If you tick **"Stay signed in"**
+> on the login form, the device also saves your password (in flash) so it can re-link
+> automatically if the session ever fully expires. Convenient for a device you control;
+> leave it unticked if the device's flash could be read by someone else. (Either way the
+> session token is already stored in flash, so treat the device as holding account access.)
 
 ### Staying connected when your sign-in expires
 
@@ -117,7 +121,12 @@ time it sees the printer after you link your account. If your Connect sign-in la
 lapses, it transparently falls back to talking to each printer **directly over your LAN**
 — status, files, and control keep working.
 
-When that happens you'll also see a one-line banner on the dashboard:
+If you ticked **"Stay signed in"** when linking your account, the device goes a step
+further: when the session expires it **re-links automatically** using your saved login,
+with no action from you at all. (This can't happen if your account uses two-factor
+authentication, since that needs a fresh code each time.)
+
+Otherwise, you'll see a one-line banner on the dashboard:
 
 > ⚠ *Prusa Connect sign-in expired. Reconnect from http://&lt;device-ip&gt;/ → Account.
 > Local printers stay reachable.*

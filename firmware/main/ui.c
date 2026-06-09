@@ -19,6 +19,14 @@
 
 static const char *TAG = "ui";
 
+/* ---- display geometry (orientation-aware) ----
+ * Screens are built once at boot AFTER ui_apply_orient() sets the rotation, so these report the
+ * active logical resolution: 800x480 landscape, 480x800 portrait. Builders use these (and
+ * ui_portrait()) to lay out single-column in portrait instead of hardcoding 800/480. */
+static inline int32_t scr_w(void) { return lv_display_get_horizontal_resolution(lv_display_get_default()); }
+static inline int32_t scr_h(void) { return lv_display_get_vertical_resolution(lv_display_get_default()); }
+static inline bool    ui_portrait(void) { return scr_w() < 600; }   /* 480 portrait vs 800 landscape */
+
 /* ---- screens ---- */
 static lv_obj_t *s_scr_boot;       /* splash / loading        */
 static lv_obj_t *s_boot_bar;
@@ -97,6 +105,15 @@ static lv_obj_t *s_pct_lbl;
 static lv_obj_t *s_eta_lbl;
 static lv_obj_t *s_btn_pause_lbl;
 static lv_obj_t *s_btn_control;
+/* ---- attention dialog banner (detail screen) ---- */
+static lv_obj_t *s_jobcard;        /* hidden while an attention dialog is shown */
+static lv_obj_t *s_attn_card;
+static lv_obj_t *s_attn_title;
+static lv_obj_t *s_attn_text;
+static lv_obj_t *s_attn_btns[3];
+static lv_obj_t *s_attn_btn_lbls[3];
+static int       s_attn_dialog_id;            /* current dialog id (for the action) */
+static char      s_attn_btn_text[3][24];      /* current button labels (for the action) */
 
 /* ---- file screen ---- */
 static lv_obj_t *s_file_list;
@@ -210,6 +227,14 @@ static void on_control_clicked(lv_event_t *e)
     if (s_snap_ph) lv_label_set_text(s_snap_ph, "Loading webcam\xE2\x80\xA6");
     app_state_fetch_snapshot();    /* load immediately; the 7s timer keeps it live */
     lv_screen_load(s_scr_control);
+}
+
+/* Attention-banner button: answer the active printer's Connect dialog with the tapped label. */
+static void on_attn_btn_clicked(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx > 2 || !s_attn_dialog_id) return;
+    app_state_dialog_action(s_attn_dialog_id, s_attn_btn_text[idx]);
 }
 
 /* Tapping a file opens its detail/preview screen (does NOT start a print). */
@@ -327,6 +352,12 @@ static void build_status_screen(void)
     lv_obj_set_style_bg_color(s_conn_dot, PP_ERROR, 0);
     lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -12, 0);
 
+    /* Portrait (480x800) lays the detail screen out single-column: hero across the top,
+     * 2x2 telemetry, full-width job/attention card, 2x2 action buttons. Landscape keeps the
+     * wide single-row layout. CW = full-width card (16px side margins). */
+    const bool P = ui_portrait();
+    const int  CW = scr_w() - 32;
+
     /* ---- hero: orange model tile + state badge + model line ---- */
     lv_obj_t *tile = lv_obj_create(s_scr_status);
     lv_obj_set_size(tile, 84, 84);
@@ -341,7 +372,7 @@ static void build_status_screen(void)
 
     /* name + state badge on one row (Connect hero) */
     lv_obj_t *herotop = lv_obj_create(s_scr_status);
-    lv_obj_set_size(herotop, 660, 38);
+    lv_obj_set_size(herotop, P ? scr_w() - 128 : 660, 38);
     lv_obj_align(herotop, LV_ALIGN_TOP_LEFT, 112, 66);
     /* State-tinted strip behind name+badge — mirrors the dashboard card header (recolored
      * per-state in ui_apply_status). */
@@ -381,19 +412,29 @@ static void build_status_screen(void)
     lv_obj_set_style_text_color(s_model_lbl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(s_model_lbl, &lv_font_montserrat_14, 0);
     lv_label_set_long_mode(s_model_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_model_lbl, 540);
+    lv_obj_set_width(s_model_lbl, P ? scr_w() - 128 : 540);
     lv_obj_align(s_model_lbl, LV_ALIGN_TOP_LEFT, 112, 114);
 
-    /* ---- telemetry cells (Connect hero row) ---- */
-    s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, "NOZZLE",  &pt_ic_nozzle);
-    s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, "BED", &pt_ic_bed);
-    s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, "SPEED",   &pt_ic_speed);
-    s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, "Z AXIS",  NULL);
+    /* ---- telemetry cells ---- landscape: 4 across; portrait: 2x2 grid ---- */
+    if (P) {
+        int cw2 = (CW - 12) / 2, xa = 16, xb = 16 + cw2 + 12, r0 = 160, r1 = 226;
+        s_nozzle_lbl = detail_cell(s_scr_status, xa, r0, cw2, "NOZZLE", &pt_ic_nozzle);
+        s_bed_lbl    = detail_cell(s_scr_status, xb, r0, cw2, "BED",    &pt_ic_bed);
+        s_speed_lbl  = detail_cell(s_scr_status, xa, r1, cw2, "SPEED",  &pt_ic_speed);
+        s_z_lbl      = detail_cell(s_scr_status, xb, r1, cw2, "Z AXIS", NULL);
+    } else {
+        s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, "NOZZLE",  &pt_ic_nozzle);
+        s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, "BED", &pt_ic_bed);
+        s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, "SPEED",   &pt_ic_speed);
+        s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, "Z AXIS",  NULL);
+    }
 
     /* ---- job / progress card ---- */
     lv_obj_t *jobcard = lv_obj_create(s_scr_status);
-    lv_obj_set_size(jobcard, 768, 88);
-    lv_obj_align(jobcard, LV_ALIGN_TOP_LEFT, 16, 228);
+    s_jobcard = jobcard;
+    const int CARDY = P ? 300 : 228;   /* below the 2x2 telemetry in portrait */
+    lv_obj_set_size(jobcard, P ? CW : 768, 88);
+    lv_obj_align(jobcard, LV_ALIGN_TOP_LEFT, 16, CARDY);
     lv_obj_set_style_bg_color(jobcard, PP_SURFACE, 0);
     lv_obj_set_style_border_width(jobcard, 0, 0);
     lv_obj_set_style_radius(jobcard, 6, 0);
@@ -402,7 +443,7 @@ static void build_status_screen(void)
 
     s_job_lbl = lv_label_create(jobcard);
     lv_label_set_long_mode(s_job_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_job_lbl, 560);
+    lv_obj_set_width(s_job_lbl, P ? CW - 100 : 560);
     lv_label_set_text(s_job_lbl, "");
     lv_obj_set_style_text_color(s_job_lbl, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_job_lbl, &lv_font_montserrat_16, 0);
@@ -415,7 +456,7 @@ static void build_status_screen(void)
     lv_obj_align(s_pct_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     s_bar = lv_bar_create(jobcard);
-    lv_obj_set_size(s_bar, 600, 12);
+    lv_obj_set_size(s_bar, P ? CW - 48 : 600, 12);
     lv_obj_align(s_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_bar_set_range(s_bar, 0, 100);
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
@@ -428,15 +469,57 @@ static void build_status_screen(void)
     lv_obj_set_style_text_font(s_eta_lbl, &lv_font_montserrat_16, 0);
     lv_obj_align(s_eta_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
-    /* ---- action buttons (above the 60px bottom nav) ---- */
+    /* ---- attention dialog banner (overlays the job card when the printer needs attention) ---- */
+    s_attn_card = lv_obj_create(s_scr_status);
+    lv_obj_set_size(s_attn_card, P ? CW : 768, 130);
+    lv_obj_align(s_attn_card, LV_ALIGN_TOP_LEFT, 16, CARDY);
+    lv_obj_set_style_bg_color(s_attn_card, PP_STATE_YELLOW, 0);
+    lv_obj_set_style_bg_opa(s_attn_card, LV_OPA_20, 0);
+    lv_obj_set_style_border_color(s_attn_card, PP_STATE_YELLOW, 0);
+    lv_obj_set_style_border_width(s_attn_card, 1, 0);
+    lv_obj_set_style_radius(s_attn_card, 6, 0);
+    lv_obj_set_style_pad_all(s_attn_card, 10, 0);
+    lv_obj_clear_flag(s_attn_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_attn_card, LV_OBJ_FLAG_HIDDEN);
+
+    s_attn_title = lv_label_create(s_attn_card);
+    lv_label_set_text(s_attn_title, "");
+    lv_obj_set_style_text_color(s_attn_title, PP_TEXT, 0);
+    lv_obj_set_style_text_font(s_attn_title, &lv_font_montserrat_16, 0);
+    lv_obj_align(s_attn_title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_attn_text = lv_label_create(s_attn_card);
+    lv_label_set_long_mode(s_attn_text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_attn_text, (P ? CW : 768) - 28);
+    lv_label_set_text(s_attn_text, "");
+    lv_obj_set_style_text_color(s_attn_text, PP_TEXT, 0);
+    lv_obj_set_style_text_font(s_attn_text, &lv_font_montserrat_14, 0);
+    lv_obj_align(s_attn_text, LV_ALIGN_TOP_LEFT, 0, 24);
+
+    for (int i = 0; i < 3; i++) {
+        s_attn_btns[i] = make_button(s_attn_card, "", on_attn_btn_clicked, (void *)(intptr_t)i, &s_attn_btn_lbls[i]);
+        lv_obj_set_size(s_attn_btns[i], 150, 34);
+        lv_obj_align(s_attn_btns[i], LV_ALIGN_BOTTOM_LEFT, i * 160, 0);
+        lv_obj_add_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* ---- action buttons (above the 60px bottom nav) ---- landscape: 4 in a row;
+     * portrait: 2x2 grid (left column 16, right column flush to the right margin) ---- */
     lv_obj_t *pause_btn = make_button(s_scr_status, "PAUSE", on_pause_clicked, NULL, &s_btn_pause_lbl);
-    lv_obj_align(pause_btn, LV_ALIGN_BOTTOM_LEFT, 16, -72);
-    lv_obj_t *stop_btn = make_button(s_scr_status, "STOP", on_stop_clicked, NULL, NULL);
-    lv_obj_align(stop_btn, LV_ALIGN_BOTTOM_LEFT, 180, -72);
+    lv_obj_t *stop_btn  = make_button(s_scr_status, "STOP", on_stop_clicked, NULL, NULL);
     lv_obj_t *files_btn = make_button(s_scr_status, "FILES", on_files_clicked, NULL, NULL);
-    lv_obj_align(files_btn, LV_ALIGN_BOTTOM_LEFT, 344, -72);
     s_btn_control = make_button(s_scr_status, "CONTROL", on_control_clicked, NULL, NULL);
-    lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -72);
+    if (P) {
+        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT,  16, -140);
+        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_RIGHT, -16, -140);
+        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT,  16, -72);
+        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_RIGHT, -16, -72);
+    } else {
+        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, 16,  -72);
+        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, 180, -72);
+        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, 344, -72);
+        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -72);
+    }
     lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
 }
 static void on_storage_toggle(lv_event_t *e)
@@ -486,7 +569,7 @@ static void build_files_screen(void)
 
     /* Scrollable column of Connect-style file rows. */
     s_file_list = lv_obj_create(s_scr_files);
-    lv_obj_set_size(s_file_list, LV_PCT(100), 480 - 56 - 34 - 60);   /* header+banner+nav */
+    lv_obj_set_size(s_file_list, LV_PCT(100), scr_h() - 56 - 34 - 60);   /* header+banner+nav */
     lv_obj_align(s_file_list, LV_ALIGN_TOP_MID, 0, 90);
     lv_obj_set_style_bg_color(s_file_list, PP_BG, 0);
     lv_obj_set_style_border_width(s_file_list, 0, 0);
@@ -651,6 +734,23 @@ static void refresh_printers_list(void)
     lv_obj_clean(s_pr_list);
     int n = printer_store_count();
     int active = printer_store_active();
+    /* --- Device settings (top) --- */
+    lv_obj_t *hd = lv_list_add_text(s_pr_list, "DEVICE");
+    lv_obj_set_style_text_color(hd, PP_TEXT_MUTED, 0);
+
+    lv_obj_t *pf = lv_list_add_button(s_pr_list, LV_SYMBOL_SETTINGS, "Preferences");
+    lv_obj_set_style_bg_color(pf, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(pf, PP_TEXT, 0);
+    lv_obj_add_event_cb(pf, on_prefs_open, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *wf = lv_list_add_button(s_pr_list, LV_SYMBOL_WIFI, "Wi-Fi setup");
+    lv_obj_set_style_bg_color(wf, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(wf, PP_TEXT, 0);
+    lv_obj_add_event_cb(wf, on_wifi_open, LV_EVENT_CLICKED, NULL);
+
+    /* --- Printer management (beneath) --- */
+    lv_obj_t *hp = lv_list_add_text(s_pr_list, "PRINTERS");
+    lv_obj_set_style_text_color(hp, PP_TEXT_MUTED, 0);
     for (int i = 0; i < n; i++) {
         pp_printer_t p;
         if (!printer_store_get(i, &p)) continue;
@@ -668,16 +768,9 @@ static void refresh_printers_list(void)
     lv_obj_set_style_text_color(add, PP_ORANGE, 0);
     lv_obj_add_event_cb(add, on_add_open, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *wf = lv_list_add_button(s_pr_list, LV_SYMBOL_WIFI, "Wi-Fi setup");
-    lv_obj_set_style_bg_color(wf, PP_SURFACE_HI, 0);
-    lv_obj_set_style_text_color(wf, PP_TEXT, 0);
-    lv_obj_add_event_cb(wf, on_wifi_open, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *pf = lv_list_add_button(s_pr_list, LV_SYMBOL_SETTINGS, "Preferences");
-    lv_obj_set_style_bg_color(pf, PP_SURFACE_HI, 0);
-    lv_obj_set_style_text_color(pf, PP_TEXT, 0);
-    lv_obj_add_event_cb(pf, on_prefs_open, LV_EVENT_CLICKED, NULL);
-
+    /* --- More --- */
+    lv_obj_t *hm = lv_list_add_text(s_pr_list, "MORE");
+    lv_obj_set_style_text_color(hm, PP_TEXT_MUTED, 0);
     lv_obj_t *fm = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "Prusa Farm");
     lv_obj_set_style_bg_color(fm, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(fm, PP_TEXT, 0);
@@ -738,10 +831,10 @@ static void build_printers_screen(void)
 {
     s_scr_printers = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_printers, PP_BG, 0);
-    make_header(s_scr_printers, "Printers");
+    make_header(s_scr_printers, "Settings");
 
     s_pr_list = lv_list_create(s_scr_printers);
-    lv_obj_set_size(s_pr_list, LV_PCT(100), 480 - 56 - 60);   /* header + nav */
+    lv_obj_set_size(s_pr_list, LV_PCT(100), scr_h() - 56 - 60);   /* header + nav */
     lv_obj_align(s_pr_list, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(s_pr_list, PP_BG, 0);
     lv_obj_set_style_border_width(s_pr_list, 0, 0);
@@ -930,28 +1023,28 @@ static void build_wifi_screen(void)
     lv_obj_t *scan = make_barbtn(bar, LV_SYMBOL_REFRESH " Scan", on_wifi_scan_clicked, NULL, 120);
     lv_obj_align(scan, LV_ALIGN_RIGHT_MID, -8, 0);
 
-    s_wifi_list = lv_list_create(s_scr_wifi);
-    lv_obj_set_size(s_wifi_list, 380, 480 - 56);
-    lv_obj_align(s_wifi_list, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(s_wifi_list, PP_BG, 0);
-    lv_obj_set_style_border_width(s_wifi_list, 0, 0);
+    /* Landscape: scan list (left) + selection form (right column at x=396). Portrait stacks
+     * them: the compact form at top, the scan list filling the width below it. */
+    const bool P = ui_portrait();
+    const int  fx = P ? 16 : 396;          /* form column x */
+    const int  fw = P ? scr_w() - 32 : 380;/* form field width */
 
     s_wifi_sel_lbl = lv_label_create(s_scr_wifi);
     lv_label_set_text(s_wifi_sel_lbl, "Network: (tap Scan)");
     lv_obj_set_style_text_color(s_wifi_sel_lbl, PP_TEXT, 0);
-    lv_obj_align(s_wifi_sel_lbl, LV_ALIGN_TOP_LEFT, 396, 72);
+    lv_obj_align(s_wifi_sel_lbl, LV_ALIGN_TOP_LEFT, fx, 72);
 
     s_wifi_ta_pass = lv_textarea_create(s_scr_wifi);
     lv_textarea_set_one_line(s_wifi_ta_pass, true);
     lv_textarea_set_password_mode(s_wifi_ta_pass, true);
     lv_textarea_set_placeholder_text(s_wifi_ta_pass, "password");
-    lv_obj_set_width(s_wifi_ta_pass, 380);
-    lv_obj_align(s_wifi_ta_pass, LV_ALIGN_TOP_LEFT, 396, 104);
+    lv_obj_set_width(s_wifi_ta_pass, fw);
+    lv_obj_align(s_wifi_ta_pass, LV_ALIGN_TOP_LEFT, fx, 104);
     lv_obj_add_event_cb(s_wifi_ta_pass, on_wifi_pass_focus, LV_EVENT_ALL, NULL);
 
     lv_obj_t *conn = lv_button_create(s_scr_wifi);
     lv_obj_set_size(conn, 160, 56);
-    lv_obj_align(conn, LV_ALIGN_TOP_LEFT, 396, 156);
+    lv_obj_align(conn, LV_ALIGN_TOP_LEFT, fx, 156);
     lv_obj_set_style_bg_color(conn, PP_ORANGE, 0);
     lv_obj_add_event_cb(conn, on_wifi_connect_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cl = lv_label_create(conn);
@@ -962,10 +1055,22 @@ static void build_wifi_screen(void)
     s_wifi_ap_lbl = lv_label_create(s_scr_wifi);
     lv_label_set_text(s_wifi_ap_lbl, "");
     lv_label_set_long_mode(s_wifi_ap_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_wifi_ap_lbl, 388);
+    lv_obj_set_width(s_wifi_ap_lbl, fw);
     lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(s_wifi_ap_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_wifi_ap_lbl, LV_ALIGN_TOP_LEFT, 396, 232);
+    lv_obj_align(s_wifi_ap_lbl, LV_ALIGN_TOP_LEFT, fx, 232);
+
+    /* Scan list: left half in landscape, full width below the form in portrait. */
+    s_wifi_list = lv_list_create(s_scr_wifi);
+    if (P) {
+        lv_obj_set_size(s_wifi_list, scr_w(), scr_h() - 300);
+        lv_obj_align(s_wifi_list, LV_ALIGN_TOP_LEFT, 0, 290);
+    } else {
+        lv_obj_set_size(s_wifi_list, 380, 480 - 56);
+        lv_obj_align(s_wifi_list, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    }
+    lv_obj_set_style_bg_color(s_wifi_list, PP_BG, 0);
+    lv_obj_set_style_border_width(s_wifi_list, 0, 0);
 
     s_wifi_kb = lv_keyboard_create(s_scr_wifi);
     lv_obj_add_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
@@ -989,11 +1094,16 @@ static void make_nav(lv_obj_t *scr, int active)
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 4, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_column(bar, 0, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     for (int i = 0; i < 4; i++) {
         lv_obj_t *b = lv_button_create(bar);
-        lv_obj_set_size(b, 188, 52);
+        /* Each tab takes an equal share of the bar width — even in both orientations (fixed-
+         * width tabs overflowed and looked uneven in 480px portrait). */
+        lv_obj_set_height(b, 52);
+        lv_obj_set_width(b, 0);
+        lv_obj_set_flex_grow(b, 1);
         /* Connect-style minimalist nav: transparent items, the active one marked by an
          * orange underline (not a filled pill), inactive labels muted. */
         lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
@@ -1325,9 +1435,14 @@ void ui_apply_logo(void *unused)
 void ui_apply_orient(void *unused)
 {
     (void)unused;
-    lv_display_set_rotation(lv_display_get_default(),
-        prefs_orient() == PP_ORIENT_LANDSCAPE_FLIPPED ? LV_DISPLAY_ROTATION_180
-                                                      : LV_DISPLAY_ROTATION_0);
+    lv_display_rotation_t r;
+    switch (prefs_orient()) {
+        case PP_ORIENT_LANDSCAPE_FLIPPED: r = LV_DISPLAY_ROTATION_180; break;
+        case PP_ORIENT_PORTRAIT:          r = LV_DISPLAY_ROTATION_90;  break;
+        case PP_ORIENT_PORTRAIT_FLIPPED:  r = LV_DISPLAY_ROTATION_270; break;
+        default:                          r = LV_DISPLAY_ROTATION_0;   break;
+    }
+    lv_display_set_rotation(lv_display_get_default(), r);
 }
 
 static void build_dashboard_screen(void)
@@ -1337,7 +1452,7 @@ static void build_dashboard_screen(void)
     make_header(s_scr_dash, NULL);   /* same builder as every screen → wordmark never shifts */
 
     s_dash_grid = lv_obj_create(s_scr_dash);
-    lv_obj_set_size(s_dash_grid, LV_PCT(100), 480 - 56 - 60);   /* header + nav */
+    lv_obj_set_size(s_dash_grid, LV_PCT(100), scr_h() - 56 - 60);   /* fill between header + nav */
     lv_obj_align(s_dash_grid, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(s_dash_grid, PP_BG, 0);
     lv_obj_set_style_border_width(s_dash_grid, 0, 0);
@@ -1511,9 +1626,10 @@ static void build_control_screen(void)
         lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 2) * 180, 30 + (i / 2) * 60);
     }
 
-    /* Jog Card */
+    /* Jog Card — landscape: top-right beside PREHEAT; portrait: stacked below the Z controls. */
     lv_obj_t *jog_card = make_card(s_scr_control, 380, 240);
-    lv_obj_align(jog_card, LV_ALIGN_TOP_RIGHT, -16, 72);
+    if (ui_portrait()) lv_obj_align(jog_card, LV_ALIGN_TOP_LEFT, 16, 326);
+    else               lv_obj_align(jog_card, LV_ALIGN_TOP_RIGHT, -16, 72);
     lv_obj_set_style_pad_all(jog_card, 0, 0);   /* predictable absolute coords */
     lv_obj_t *jl = lv_label_create(jog_card);
     lv_label_set_text(jl, "MOVE");
@@ -1578,7 +1694,10 @@ static void build_about_screen(void)
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_about_back, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
-    /* ---- left column: product + license text ---- */
+    /* Landscape: text left, QR right. Portrait: text on top, QR centered below it. */
+    const bool P = ui_portrait();
+
+    /* ---- product + license text ---- */
     lv_obj_t *title = lv_label_create(s_scr_about);
     lv_label_set_text(title, "Prusa Touch");
     lv_obj_set_style_text_color(title, PP_ORANGE, 0);
@@ -1593,7 +1712,7 @@ static void build_about_screen(void)
 
     lv_obj_t *body = lv_label_create(s_scr_about);
     lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(body, 470);
+    lv_obj_set_width(body, P ? scr_w() - 32 : 470);
     lv_label_set_text(body,
         "Firmware " PP_FW_VERSION "\n"
         "Open-firmware touchscreen for Prusa printers (PrusaLink).\n\n"
@@ -1614,20 +1733,23 @@ static void build_about_screen(void)
     lv_qrcode_update(qr, repo, strlen(repo));
     lv_obj_set_style_border_color(qr, PP_WHITE, 0);
     lv_obj_set_style_border_width(qr, 6, 0);      /* white quiet-zone border */
-    lv_obj_align(qr, LV_ALIGN_TOP_RIGHT, -70, 110);
+    if (P) lv_obj_align(qr, LV_ALIGN_TOP_MID, 0, 340);
+    else   lv_obj_align(qr, LV_ALIGN_TOP_RIGHT, -70, 110);
 
     lv_obj_t *qcap = lv_label_create(s_scr_about);
     lv_label_set_text(qcap, "Scan for the project on GitHub");
     lv_obj_set_style_text_color(qcap, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(qcap, &lv_font_montserrat_14, 0);
-    lv_obj_align(qcap, LV_ALIGN_TOP_RIGHT, -40, 292);
+    if (P) lv_obj_align(qcap, LV_ALIGN_TOP_MID, 0, 524);
+    else   lv_obj_align(qcap, LV_ALIGN_TOP_RIGHT, -40, 292);
 
     lv_obj_t *url = lv_label_create(s_scr_about);
     lv_label_set_text(url, "github.com/nomadsgalaxy/\nPrusa-Connect-Touch");
     lv_obj_set_style_text_color(url, PP_TEXT, 0);
     lv_obj_set_style_text_font(url, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(url, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(url, LV_ALIGN_TOP_RIGHT, -55, 314);
+    if (P) lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 548);
+    else   lv_obj_align(url, LV_ALIGN_TOP_RIGHT, -55, 314);
 }
 
 /* ---------- Prusa Farm (org-wide printer + order status) ---------- */
@@ -1647,11 +1769,11 @@ static void build_farm_screen(void)
     lv_obj_set_style_text_color(s_farm_stat, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_farm_stat, &lv_font_montserrat_16, 0);
     lv_label_set_long_mode(s_farm_stat, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_farm_stat, 768);
+    lv_obj_set_width(s_farm_stat, scr_w() - 32);
     lv_obj_align(s_farm_stat, LV_ALIGN_TOP_LEFT, 16, 70);
 
     s_farm_list = lv_obj_create(s_scr_farm);
-    lv_obj_set_size(s_farm_list, 800, 480 - 132);
+    lv_obj_set_size(s_farm_list, scr_w(), scr_h() - 132);
     lv_obj_align(s_farm_list, LV_ALIGN_TOP_LEFT, 0, 124);
     lv_obj_set_style_bg_color(s_farm_list, PP_BG, 0);
     lv_obj_set_style_border_width(s_farm_list, 0, 0);
@@ -1726,9 +1848,44 @@ static void on_pref_autoupd_changed(lv_event_t *e)
     app_state_set_pref(PP_PREF_AUTOUPDATE,
                        lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0);
 }
+/* Switching between a landscape class (0,1) and a portrait class (2,3) changes the screen
+ * resolution, which needs a reboot to re-lay-out. Warn + confirm first; a same-class flip
+ * (0<->1 / 2<->3) applies live with no reboot. */
+static int s_pending_orient = -1;
+
+static bool orient_is_portrait(int o) { return o == PP_ORIENT_PORTRAIT || o == PP_ORIENT_PORTRAIT_FLIPPED; }
+
+static void orient_confirm_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    if (s_pending_orient >= 0) app_state_set_pref(PP_PREF_ORIENT, s_pending_orient);   /* reboots */
+    lv_msgbox_close(mbox);
+}
+static void orient_cancel_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    lv_dropdown_set_selected(s_pref_orient_dd, (uint16_t)prefs_orient());   /* revert the picker */
+    lv_msgbox_close(mbox);
+}
+
 static void on_pref_orient_changed(lv_event_t *e)
 {
-    app_state_set_pref(PP_PREF_ORIENT, (int)lv_dropdown_get_selected(lv_event_get_target(e)));
+    int sel = (int)lv_dropdown_get_selected(lv_event_get_target(e));
+    if (orient_is_portrait(sel) == orient_is_portrait((int)prefs_orient())) {
+        app_state_set_pref(PP_PREF_ORIENT, sel);   /* same class: live rotate, no reboot */
+        return;
+    }
+    s_pending_orient = sel;
+    lv_obj_t *mbox = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(mbox, "Restart required");
+    lv_msgbox_add_text(mbox, orient_is_portrait(sel)
+        ? "Switching to portrait restarts the device to re-lay-out the screens. Continue?"
+        : "Switching to landscape restarts the device to re-lay-out the screens. Continue?");
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "Restart");
+    lv_obj_set_style_bg_color(ok, PP_ORANGE, 0);
+    lv_obj_add_event_cb(ok, orient_confirm_cb, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(cancel, orient_cancel_cb, LV_EVENT_CLICKED, mbox);
 }
 
 static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
@@ -1767,6 +1924,9 @@ static void build_prefs_screen(void)
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_prefs_back, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
+    /* Landscape uses a 2nd column (x=420) for orientation; portrait stacks it under the rest. */
+    const bool P = ui_portrait();
+
     /* Sort fleet by */
     pref_label(s_scr_prefs, "Sort fleet by", 84);
     s_pref_sort_dd = lv_dropdown_create(s_scr_prefs);
@@ -1799,16 +1959,16 @@ static void build_prefs_screen(void)
     lv_obj_set_style_bg_color(s_pref_autoupd_sw, PP_ORANGE, LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_pref_autoupd_sw, on_pref_autoupd_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* Screen orientation (right column) */
+    /* Screen orientation — landscape: right column; portrait: stacked under auto-updates */
     lv_obj_t *ol = lv_label_create(s_scr_prefs);
     lv_label_set_text(ol, "Screen orientation");
     lv_obj_set_style_text_color(ol, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(ol, &lv_font_montserrat_14, 0);
-    lv_obj_align(ol, LV_ALIGN_TOP_LEFT, 420, 84);
+    lv_obj_align(ol, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 484 : 84);
     s_pref_orient_dd = lv_dropdown_create(s_scr_prefs);
-    lv_dropdown_set_options(s_pref_orient_dd, "Landscape\nLandscape (flipped)");
+    lv_dropdown_set_options(s_pref_orient_dd, "Landscape\nLandscape (flipped)\nPortrait\nPortrait (flipped)");
     lv_obj_set_width(s_pref_orient_dd, 320);
-    lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, 420, 112);
+    lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 512 : 112);
     dropdown_dark(s_pref_orient_dd);
     lv_obj_add_event_cb(s_pref_orient_dd, on_pref_orient_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
@@ -1880,6 +2040,9 @@ static void webcam_refresh_timer_cb(lv_timer_t *t)
 void ui_init(void)
 {
     card_thumbs_clear();
+    /* Apply the saved orientation BEFORE building screens so resolution-aware sizing
+     * (scr_w()/scr_h(), LV_PCT containers) lays out for portrait (480x800) when selected. */
+    ui_apply_orient(NULL);
     build_boot_screen();
     lv_screen_load(s_scr_boot);
 
@@ -2022,6 +2185,32 @@ void ui_apply_status(void *arg)
     /* CONTROL button visibility based on capability probe. */
     if (s->has_control) lv_obj_remove_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
+
+    /* Attention dialog banner: when the printer has an active Connect dialog, surface its
+     * title/text + action buttons over the (empty) job card and wire each button to DIALOG_ACTION. */
+    if (s_attn_card) {
+        if (s->dialog_id) {
+            s_attn_dialog_id = s->dialog_id;
+            lv_label_set_text(s_attn_title, s->dialog_title[0] ? s->dialog_title : "Attention");
+            lv_label_set_text(s_attn_text, s->dialog_text);
+            for (int i = 0; i < 3; i++) {
+                if (i < s->dialog_btn_count && s->dialog_btns[i][0]) {
+                    strlcpy(s_attn_btn_text[i], s->dialog_btns[i], sizeof(s_attn_btn_text[i]));
+                    lv_label_set_text(s_attn_btn_lbls[i], s->dialog_btns[i]);
+                    lv_obj_remove_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    s_attn_btn_text[i][0] = '\0';
+                    lv_obj_add_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+            lv_obj_remove_flag(s_attn_card, LV_OBJ_FLAG_HIDDEN);
+            if (s_jobcard) lv_obj_add_flag(s_jobcard, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            s_attn_dialog_id = 0;
+            lv_obj_add_flag(s_attn_card, LV_OBJ_FLAG_HIDDEN);
+            if (s_jobcard) lv_obj_remove_flag(s_jobcard, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     free(s);
 }

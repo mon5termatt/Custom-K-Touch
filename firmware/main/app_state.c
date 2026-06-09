@@ -17,6 +17,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_system.h"   /* esp_restart (orientation-class relayout) */
 #include "sdkconfig.h"
 
 #include "pandatouch_display.h"   /* pt_display_schedule_ui */
@@ -133,6 +134,13 @@ void app_state_fetch_snapshot(void)
 void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b)
 {
     pp_cmd_t cmd = { .kind = kind, .index = index, .i32a = i32a, .i32b = i32b };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_dialog_action(int dialog_id, const char *button)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_DIALOG_ACTION, .index = dialog_id };
+    strlcpy(cmd.path, button ? button : "", sizeof(cmd.path));
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -276,8 +284,11 @@ static bool poll_printer(int i)
     pp_status_t fresh;
 
     if (bk == PP_BK_PRUSA_CONNECT) {
-        /* If we have a local fallback, try it first. */
-        if (pr.local_host[0]) {
+        /* Local PrusaLink is a FALLBACK, used ONLY when the Connect session has expired.
+         * While Connect is authenticated, cloud printers are updated by the fleet poll in
+         * net_task — hitting each printer's local PrusaLink every cycle (now that the IP/key
+         * are auto-learned for the whole fleet) would waste resources and bypass Connect. */
+        if (pr.local_host[0] && !prusa_connect_is_authenticated()) {
             pp_printer_t lpr = pr;
             strlcpy(lpr.host, pr.local_host, sizeof(lpr.host));
             if (prusalink_get_status_of(&lpr, &fresh) == ESP_OK) {
@@ -290,7 +301,7 @@ static bool poll_printer(int i)
                 return true;
             }
         }
-        /* Cloud printers are otherwise updated via fleet poll in net_task. */
+        /* Authenticated (or no fallback): cloud printers are updated via the fleet poll. */
         return false;
     }
 
@@ -570,6 +581,10 @@ static void run_command(const pp_cmd_t *cmd)
         }
         break;
     }
+    case PP_CMD_DIALOG_ACTION:
+        /* Answer the active printer's attention dialog (cloud only). index=dialog_id, path=button. */
+        if (cloud && cmd->index) prusa_connect_dialog_action(uuid, cmd->index, cmd->path);
+        break;
     case PP_CMD_DASH_REFRESH:
         publish_dashboard();
         return;
@@ -598,8 +613,20 @@ static void run_command(const pp_cmd_t *cmd)
         }
         else if (pref == PP_PREF_AUTOUPDATE) { prefs_set_auto_update(val != 0); }
         else if (pref == PP_PREF_ORIENT) {
+            /* Switching between a landscape class (0,1) and a portrait class (2,3) changes the
+             * logical resolution (800x480 <-> 480x800). Screens are laid out once at boot for the
+             * active resolution, so a class change needs a reboot to relayout; a same-class flip
+             * (0<->1 or 2<->3) is just a live rotation. */
+            bool was_portrait = (prefs_orient() == PP_ORIENT_PORTRAIT || prefs_orient() == PP_ORIENT_PORTRAIT_FLIPPED);
+            bool now_portrait = (val == PP_ORIENT_PORTRAIT || val == PP_ORIENT_PORTRAIT_FLIPPED);
             prefs_set_orient((pp_orient_t)val);
-            pt_display_schedule_ui(ui_apply_orient, NULL);   /* rotate on the LVGL task */
+            if (was_portrait != now_portrait) {
+                ESP_LOGI(TAG, "orientation class changed -> reboot to relayout");
+                vTaskDelay(pdMS_TO_TICKS(400));   /* let the NVS commit + HTTP response flush */
+                esp_restart();
+            } else {
+                pt_display_schedule_ui(ui_apply_orient, NULL);   /* same class: rotate live */
+            }
         }
         return;
     }
@@ -628,6 +655,21 @@ static void net_task(void *arg)
                     has_cloud = true; break;
                 }
             }
+            /* Auto re-authentication: if the Connect session has lapsed but the user opted to
+             * save credentials, replay the login flow to restore it with no manual step. Throttled
+             * (~every 60 s) to avoid hammering the auth server; 2FA accounts can't auto-complete. */
+            static int s_reauth_tick = 0;
+            if (has_cloud && !prusa_connect_is_authenticated() &&
+                prusa_connect_have_saved_creds() && (s_reauth_tick++ % 30) == 0) {
+                pp_connect_status_t st = prusa_connect_try_saved_login();
+                if (st == PP_CONNECT_AUTH_OK) {
+                    ESP_LOGI(TAG, "auto re-auth succeeded");
+                    publish_dashboard();   /* clears the expiry banner */
+                } else if (st == PP_CONNECT_NEED_TOTP) {
+                    ESP_LOGW(TAG, "auto re-auth blocked: account requires 2FA");
+                }
+            }
+
             /* Throttle cloud polling: hitting /app/printers (Cloudflare-fronted) every
              * ~2 s cycle gets the device rate-limited/blocked. Poll Connect ~every 12 s
              * instead (the one call returns the whole fleet). */
@@ -692,6 +734,33 @@ static void net_task(void *arg)
                             ESP_LOGI(TAG, "learned %s local fallback -> %s", pr.name, ip);
                         }
                         break;  /* one per cycle */
+                    }
+                }
+            }
+
+            /* If the active cloud printer is in ATTENTION, pull its dialog_info (omitted from the
+             * bulk list) so the detail screen can surface the attention banner + action buttons.
+             * The fleet merge memset-clears dialog_* each poll, so a resolved dialog auto-clears. */
+            if (did_cloud && prusa_connect_is_authenticated()) {
+                int a = printer_store_active();
+                pp_printer_t apr;
+                if (a >= 0 && printer_store_get(a, &apr) && strncmp(apr.host, "cloud:", 6) == 0) {
+                    bool attn;
+                    xSemaphoreTake(s_lock, portMAX_DELAY);
+                    attn = (strcmp(s_cache[a].state, "ATTENTION") == 0);
+                    xSemaphoreGive(s_lock);
+                    if (attn) {
+                        pp_status_t tmp;
+                        if (prusa_connect_get_dialog(apr.host + 6, &tmp) == ESP_OK) {
+                            xSemaphoreTake(s_lock, portMAX_DELAY);
+                            s_cache[a].dialog_id = tmp.dialog_id;
+                            strlcpy(s_cache[a].dialog_title, tmp.dialog_title, sizeof(s_cache[a].dialog_title));
+                            strlcpy(s_cache[a].dialog_text,  tmp.dialog_text,  sizeof(s_cache[a].dialog_text));
+                            memcpy(s_cache[a].dialog_btns, tmp.dialog_btns, sizeof(s_cache[a].dialog_btns));
+                            s_cache[a].dialog_btn_count = tmp.dialog_btn_count;
+                            s_status = s_cache[a];
+                            xSemaphoreGive(s_lock);
+                        }
                     }
                 }
             }

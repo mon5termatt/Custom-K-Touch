@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.4.0"
+#define PP_FW_VERSION "0.4.1"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT } pp_backend_t;
@@ -45,6 +45,12 @@ typedef struct {
     bool   is_cloud;          /* last update came from Connect cloud         */
     char   local_ip[20];      /* printer's LAN IP (from Connect network_info) — PrusaLink fallback */
     char   link_key[40];      /* printer's PrusaLink API key (from Connect)  — PrusaLink fallback */
+    /* Attention dialog (Connect dialog_info; populated for the active printer in ATTENTION) */
+    int    dialog_id;         /* Connect dialog id (0 = no active dialog)    */
+    char   dialog_title[32];  /* e.g. "Warning"                              */
+    char   dialog_text[160];  /* the message body                            */
+    char   dialog_btns[3][24];/* button labels (Connect sends an array)      */
+    int    dialog_btn_count;  /* number of valid entries in dialog_btns      */
 } pp_status_t;
 
 /* One entry from a folder listing. */

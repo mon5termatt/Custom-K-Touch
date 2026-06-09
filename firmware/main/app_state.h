@@ -23,6 +23,7 @@ typedef enum {
     PP_CMD_SNAPSHOT,      /* fetch active cloud printer's webcam JPEG -> ui_apply_snapshot */
     PP_CMD_HOME,          /* home axes (Connect HOME / gcode G28), no args */
     PP_CMD_MOVE,          /* relative jog: index=axis(0=X,1=Y,2=Z), i32a=dist*100 mm, i32b=feedrate */
+    PP_CMD_DIALOG_ACTION, /* answer the active printer's attention dialog: index=dialog_id, path=button label */
 } pp_cmd_kind_t;
 
 /* Preference writes are routed through the net task because the LVGL task's stack
@@ -54,6 +55,9 @@ void app_state_get_fleet(pp_status_t *arr, int max, int *count);
 void app_state_post_cmd(pp_cmd_kind_t kind, const char *path);
 /* Post a command carrying numeric args (preheat index, jog axis/distance/feedrate). */
 void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b);
+
+/* Answer the active printer's attention dialog (Connect DIALOG_ACTION). */
+void app_state_dialog_action(int dialog_id, const char *button);
 
 /* Switch the active printer (by store index) and refresh. */
 void app_state_select_printer(int index);

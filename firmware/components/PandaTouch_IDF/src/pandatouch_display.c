@@ -183,26 +183,58 @@ static esp_err_t pt_lcd_panel_init(void)
 }
 
 /* ====================== LVGL flush & tick ====================== */
+/* PSRAM scratch for 90/270 software rotation (sized to one LVGL partial buffer; lazy-alloc). */
+static uint16_t *s_rot_buf;
+
 static void pt_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     esp_lcd_panel_handle_t panel = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
     if (panel)
     {
-        lv_area_t a = *area;
-        /* LVGL 9.2 does not rotate pixels for a 180° display rotation: the resolution is
-         * unchanged, so the scene is rendered identically and the driver must flip the output.
-         * A 180° turn of a row-major rectangle is just its reversed pixel array, drawn into the
-         * point-mirrored destination rectangle. (LVGL already flips touch input — see lv_indev.) */
-        if (lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_180)
+        /* LVGL 9.2 does not physically rotate pixels for a display rotation — it only adjusts
+         * layout (180° keeps the resolution; 90/270 swap it) and transforms touch input. The
+         * display driver must rotate the rendered output. */
+        lv_display_rotation_t rot = lv_display_get_rotation(disp);
+        if (rot == LV_DISPLAY_ROTATION_0)
         {
+            /* esp_lcd x2/y2 are exclusive -> +1 */
+            esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
+        }
+        else if (rot == LV_DISPLAY_ROTATION_180)
+        {
+            /* A 180° turn of a row-major rectangle is just its reversed pixel array, drawn into
+             * the point-mirrored destination rectangle. */
             uint16_t *p = (uint16_t *)px_map;
             int32_t n = lv_area_get_size(area);
             for (int32_t i = 0, j = n - 1; i < j; i++, j--) { uint16_t t = p[i]; p[i] = p[j]; p[j] = t; }
-            a.x1 = PT_LCD_H_RES - 1 - area->x2; a.x2 = PT_LCD_H_RES - 1 - area->x1;
-            a.y1 = PT_LCD_V_RES - 1 - area->y2; a.y2 = PT_LCD_V_RES - 1 - area->y1;
+            esp_lcd_panel_draw_bitmap(panel,
+                PT_LCD_H_RES - 1 - area->x2, PT_LCD_V_RES - 1 - area->y2,
+                PT_LCD_H_RES - area->x1,     PT_LCD_V_RES - area->y1, px_map);
         }
-        /* esp_lcd x2/y2 are exclusive -> +1 */
-        esp_lcd_panel_draw_bitmap(panel, a.x1, a.y1, a.x2 + 1, a.y2 + 1, px_map);
+        else
+        {
+            /* 90/270: LVGL renders in the swapped (portrait) resolution; rotate each partial
+             * buffer into PSRAM scratch and place it on the physical (landscape) panel. The dest
+             * rectangle is derived from LVGL's own rotate90/270 pixel mapping (lv_draw_sw.c). */
+            int32_t aw = area->x2 - area->x1 + 1;   /* logical (portrait) area width  */
+            int32_t ah = area->y2 - area->y1 + 1;   /* logical (portrait) area height */
+            /* Scratch is sized for the WHOLE panel so the rotated partial can never overflow it,
+             * regardless of how LVGL splits the portrait buffer. */
+            static const size_t s_rot_cap = (size_t)PT_LCD_H_RES * PT_LCD_V_RES;   /* in pixels */
+            if (!s_rot_buf)
+                s_rot_buf = heap_caps_malloc(s_rot_cap * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            int32_t x1, y1;   /* rotated buffer is ah wide x aw tall on the physical panel */
+            if (rot == LV_DISPLAY_ROTATION_90) { x1 = area->y1;                    y1 = PT_LCD_V_RES - 1 - area->x2; }
+            else /* 270 */                     { x1 = PT_LCD_H_RES - 1 - area->y2; y1 = area->x1; }
+            /* Hard guards: never overflow the scratch buffer or write outside the panel. */
+            if (s_rot_buf && (size_t)aw * (size_t)ah <= s_rot_cap &&
+                x1 >= 0 && y1 >= 0 && (x1 + ah) <= PT_LCD_H_RES && (y1 + aw) <= PT_LCD_V_RES)
+            {
+                lv_draw_sw_rotate(px_map, s_rot_buf, aw, ah, aw * sizeof(uint16_t), ah * sizeof(uint16_t),
+                                  rot, LV_COLOR_FORMAT_RGB565);
+                esp_lcd_panel_draw_bitmap(panel, x1, y1, x1 + ah, y1 + aw, s_rot_buf);
+            }
+        }
     }
     lv_display_flush_ready(disp);
 }
