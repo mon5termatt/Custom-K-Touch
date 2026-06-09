@@ -2402,7 +2402,15 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "addpick"))                            lv_screen_load(s_scr_addpick);
-        else if (!strcmp(name, "addform")) { configure_add_form(2); lv_screen_load(s_scr_addform); }  /* bambu = shows serial */
+        else if (!strcmp(name, "addform")) {   /* add mode, Bambu (shows the Serial field) */
+            s_edit_idx = -1;
+            lv_textarea_set_text(s_ta_name, ""); lv_textarea_set_text(s_ta_host, "");
+            lv_textarea_set_text(s_ta_key, ""); lv_textarea_set_text(s_ta_serial, "");
+            lv_obj_add_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
+            configure_add_form(2);
+            lv_screen_load(s_scr_addform);
+        }
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
         else if (!strcmp(name, "farm"))                               on_farm_open(NULL);

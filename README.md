@@ -9,6 +9,12 @@ fleet dashboard on the desk.
 > Independent, open project. **Not affiliated with or endorsed by Prusa Research.**
 > "Prusa" and "Prusa Connect" are trademarks of Prusa Research.
 
+<img src="docs/img/fleet-dashboard.png" alt="Fleet dashboard" width="640">
+
+More in the **[screenshot gallery](docs/screenshots.md)** — printer detail, control, the guided
+add-a-printer flow, screen lock, and portrait layouts. (All rendered from the firmware's own UI
+with the desktop simulator.)
+
 ## What it does
 
 - **Fleet dashboard.** Every printer at a glance: state, temperatures, progress, the model
