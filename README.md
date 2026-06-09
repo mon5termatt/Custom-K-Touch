@@ -37,13 +37,13 @@ fleet dashboard on the desk.
   default) to have it pull releases from GitHub on its own.
 
 ## Supported printers
-
+- **Prusa Connect** - any printer on your Prusa account, added all at once by signing in (see
+  [Connecting to Prusa Connect](#connecting-to-prusa-connect)).
 - **Prusa** over **PrusaLink** - MK4 / MK4S / MK3.5 / MK3.9 / MINI / CORE One / XL
   (Buddy-embedded PrusaLink), and Pi-hosted PrusaLink. Add the printer's IP + API key.
 - **Klipper** over **Moonraker** - anything you'd reach with Fluidd or Mainsail. Add the host
   with port **7125** (e.g. `192.168.1.50:7125`); the backend is auto-detected.
-- **Prusa Connect** - any printer on your Prusa account, added all at once by signing in (see
-  [Connecting to Prusa Connect](#connecting-to-prusa-connect)).
+
 
 ## Hardware
 
