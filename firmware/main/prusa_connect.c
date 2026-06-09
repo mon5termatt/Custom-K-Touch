@@ -25,6 +25,7 @@ static SemaphoreHandle_t s_http_mtx;
 /* Serializes token refresh so two tasks (net poll + web handler) can't both POST the same
  * single-use refresh token — the 2nd would get 400 and wipe the session the 1st just renewed. */
 static SemaphoreHandle_t s_refresh_mtx;
+static SemaphoreHandle_t s_login_mtx;   /* serializes the multi-step OAuth login flow (net-task auto-reauth vs web login) */
 
 #define PRUSA_AUTH_URL     "https://account.prusa3d.com/o/authorize/"
 #define PRUSA_TOKEN_URL    "https://account.prusa3d.com/o/token/"
@@ -303,7 +304,7 @@ static pp_connect_status_t try_exchange_code(void)
     return PP_CONNECT_AUTH_FAILED;
 }
 
-pp_connect_status_t prusa_connect_login(const char *email, const char *password)
+static pp_connect_status_t login_locked(const char *email, const char *password)
 {
     /* Stash for credential persistence on success (auto re-auth). */
     strlcpy(s_saved_email, email ? email : "", sizeof(s_saved_email));
@@ -357,6 +358,16 @@ pp_connect_status_t prusa_connect_login(const char *email, const char *password)
     return st;
 }
 
+/* The login flow mutates shared OAuth state across several blocking calls; serialize it so the
+ * net-task auto-reauth and a concurrent web login can't interleave and corrupt each other. */
+pp_connect_status_t prusa_connect_login(const char *email, const char *password)
+{
+    if (s_login_mtx) xSemaphoreTake(s_login_mtx, portMAX_DELAY);
+    pp_connect_status_t st = login_locked(email, password);
+    if (s_login_mtx) xSemaphoreGive(s_login_mtx);
+    return st;
+}
+
 /* Persist (or erase) the saved account credentials for auto re-auth. */
 void prusa_connect_save_creds(void)
 {
@@ -395,6 +406,7 @@ pp_connect_status_t prusa_connect_try_saved_login(void)
 
 pp_connect_status_t prusa_connect_submit_totp(const char *code)
 {
+    if (s_login_mtx) xSemaphoreTake(s_login_mtx, portMAX_DELAY);
     char *e_next = url_encode(s_next);
     char body[512];
     snprintf(body, sizeof(body), "csrfmiddlewaretoken=%s&next=%s&otp_token=%s",
@@ -403,7 +415,9 @@ pp_connect_status_t prusa_connect_submit_totp(const char *code)
 
     http_resp_t r = follow_redirects(do_http("POST", s_totp_url, "application/x-www-form-urlencoded", body, false), 10);
     free(r.body);
-    return try_exchange_code();
+    pp_connect_status_t st = try_exchange_code();
+    if (s_login_mtx) xSemaphoreGive(s_login_mtx);
+    return st;
 }
 
 bool prusa_connect_is_authenticated(void) { return s_at[0] != '\0' || s_rt[0] != '\0'; }
@@ -930,6 +944,7 @@ void prusa_connect_init(void)
 {
     if (!s_http_mtx) s_http_mtx = xSemaphoreCreateMutex();
     if (!s_refresh_mtx) s_refresh_mtx = xSemaphoreCreateMutex();
+    if (!s_login_mtx) s_login_mtx = xSemaphoreCreateMutex();
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
         size_t sz = sizeof(s_at); nvs_get_str(h, KEY_AT, s_at, &sz);

@@ -109,7 +109,17 @@ int main(int argc, char **argv) {
     pp_dash_t *d = malloc(sizeof(*d)); build_dash(d); ui_apply_dashboard(d);   /* applier frees */
     pp_status_t *st = malloc(sizeof(*st)); build_status(st); ui_apply_status(st);
 
-    ui_request_screen(screen);
+    /* "lock" preview: render the PIN-unlock overlay over the dashboard */
+    if (!strcmp(screen, "lock")) {
+        extern void sim_set_lock(const char *pin, uint8_t minutes);
+        extern void ui_lock_now(void); extern void ui_show_lock_prompt(void);
+        sim_set_lock("1234", 1);
+        ui_request_screen("dash");
+        ui_lock_now();
+        ui_show_lock_prompt();
+    } else {
+        ui_request_screen(screen);
+    }
 
     /* settle: advance time so bars/anim finish, run the LVGL pipeline */
     for (int i=0;i<50;i++){ s_ms += 30; lv_timer_handler(); }

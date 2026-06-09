@@ -24,6 +24,9 @@ typedef enum {
     PP_CMD_HOME,          /* home axes (Connect HOME / gcode G28), no args */
     PP_CMD_MOVE,          /* relative jog: index=axis(0=X,1=Y,2=Z), i32a=dist*100 mm, i32b=feedrate */
     PP_CMD_DIALOG_ACTION, /* answer the active printer's attention dialog: index=dialog_id, path=button label */
+    PP_CMD_STORE_ADD,     /* add a printer (cmd.printer); routes the NVS write off the LVGL task */
+    PP_CMD_STORE_UPDATE,  /* update printer at cmd.index with cmd.printer                        */
+    PP_CMD_STORE_REMOVE,  /* remove printer at cmd.index                                         */
 } pp_cmd_kind_t;
 
 /* Preference writes are routed through the net task because the LVGL task's stack
@@ -38,7 +41,14 @@ typedef struct {
     int  index;
     int  i32a;   /* generic numeric arg (e.g. jog distance in mm*100) */
     int  i32b;   /* generic numeric arg (e.g. jog feedrate)           */
+    pp_printer_t printer;   /* payload for PP_CMD_STORE_ADD / STORE_UPDATE */
 } pp_cmd_t;
+
+/* Printer-store mutations from the LVGL task MUST go through here (the store's NVS write
+ * can't run on the PSRAM-stacked LVGL task). The net task applies them + republishes. */
+void app_state_store_add(const pp_printer_t *p);
+void app_state_store_update(int idx, const pp_printer_t *p);
+void app_state_store_remove(int idx);
 
 /* Start WiFi-independent state machinery: creates the network task that polls
  * status and drains the command queue. Call after wifi + display are up. */

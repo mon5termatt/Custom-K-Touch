@@ -1,6 +1,7 @@
 #pragma once
 /* Prusa-Touch — user preferences (NVS-backed): dashboard sort/filter + logo style. */
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef enum {
     PP_SORT_STATUS = 0,   /* group by printer state (printing -> error -> ... -> offline) */
@@ -41,3 +42,13 @@ void prefs_set_auto_update(bool v);      /* persists */
 /* Screen orientation (default landscape). */
 pp_orient_t prefs_orient(void);
 void        prefs_set_orient(pp_orient_t o);   /* persists */
+
+/* --- security opt-ins (all off/empty by default) --- */
+/* Auto-lock the touchscreen after N idle minutes (0 = off). While locked, browsing is allowed
+ * but actions need the screen PIN. */
+uint8_t     prefs_lock_min(void);
+void        prefs_set_lock_min(uint8_t m);
+const char *prefs_scrpin(void);                /* on-device unlock PIN ("" = no lock)        */
+void        prefs_set_scrpin(const char *p);
+const char *prefs_web_pass(void);              /* web-interface password ("" = open access)  */
+void        prefs_set_web_pass(const char *p);

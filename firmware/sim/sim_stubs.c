@@ -63,6 +63,9 @@ void app_state_wifi_connect(const char *s, const char *p) { (void)s; (void)p; }
 void app_state_fetch_thumb(const char *r) { (void)r; }
 void app_state_fetch_thumb_dash(const char *r, int i) { (void)r; (void)i; }
 void app_state_set_pref(pp_pref_kind_t pref, int value) { (void)pref; (void)value; }
+void app_state_store_add(const pp_printer_t *p) { (void)p; }
+void app_state_store_update(int idx, const pp_printer_t *p) { (void)idx; (void)p; }
+void app_state_store_remove(int idx) { (void)idx; }
 
 /* ---------- wifi ---------- */
 bool wifi_is_connected(void) { return true; }
@@ -78,6 +81,16 @@ bool        prefs_hide_offline(void){ return false; }
 pp_logo_t   prefs_logo(void)        { return PP_LOGO_STACKED; }
 pp_orient_t prefs_orient(void)      { return PP_ORIENT_LANDSCAPE; }
 bool        prefs_auto_update(void) { return false; }
+/* Security opt-ins: sim hooks let sim_main force the lock overlay for a layout render. */
+static uint8_t s_sim_lockmin = 0;
+static char    s_sim_pin[12] = "";
+uint8_t     prefs_lock_min(void)    { return s_sim_lockmin; }
+const char *prefs_scrpin(void)      { return s_sim_pin; }
+const char *prefs_web_pass(void)    { return ""; }
+void        sim_set_lock(const char *pin, uint8_t minutes) {
+    if (pin) { size_t i=0; for (; pin[i] && i<sizeof(s_sim_pin)-1; i++) s_sim_pin[i]=pin[i]; s_sim_pin[i]='\0'; }
+    s_sim_lockmin = minutes;
+}
 
 /* ---------- display marshal: run inline (single-threaded host) ---------- */
 lv_result_t pt_display_schedule_ui(pt_ui_fn_t fn, void *arg) {

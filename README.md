@@ -28,6 +28,15 @@ fleet dashboard on the desk.
   Buddy-embedded printers you'd otherwise only reach through the cloud. The device quietly
   learns each printer's LAN address and PrusaLink key, so it keeps working locally even if
   your Connect sign-in later expires.
+- **Bambu Lab.** Add Bambu printers over your LAN (X1 / P1 / A1 in LAN + Developer Mode) for
+  live status and pause / resume / stop / preheat / move, right alongside your Prusa fleet.
+  Cloud sign-in is available too (see [Connecting to Bambu Lab](#connecting-to-bambu-lab)).
+- **Guided "Add a printer".** One place to add machines: pick **Cloud accounts** (Prusa or
+  Bambu) or a **Local printer** (Prusa / Klipper / Bambu), and only the fields that type needs
+  appear. Works the same on the touchscreen and the web UI.
+- **Optional security.** Off by default: set a **web password** to put the web interface behind
+  a login, and/or a **screen lock** that asks for a PIN before actions after a few idle minutes
+  (you can still browse the fleet while locked).
 - **Portrait or landscape.** Rotate the UI to match how you mounted the screen. Landscape and
   portrait, each with a 180° flip.
 - **Multi-printer.** Add as many as you like, on the screen or from the built-in web UI.
@@ -43,7 +52,9 @@ fleet dashboard on the desk.
   (Buddy-embedded PrusaLink), and Pi-hosted PrusaLink. Add the printer's IP + API key.
 - **Klipper** over **Moonraker** - anything you'd reach with Fluidd or Mainsail. Add the host
   with port **7125** (e.g. `192.168.1.50:7125`); the backend is auto-detected.
-
+- **Bambu Lab** - X1 / P1 / A1 series over the LAN (add the IP, LAN Access Code, and serial),
+  or via your Bambu account (see [Connecting to Bambu Lab](#connecting-to-bambu-lab)). LAN
+  control needs the printer in **LAN Mode** with **Developer Mode** enabled.
 
 ## Hardware
 
@@ -137,6 +148,53 @@ Otherwise you'll see a one-line banner on the dashboard:
 To restore the cloud link, open the device's web page, go to the **Account** tab, and
 **Link Account** again. You never type credentials on the touchscreen; re-auth happens on a
 real keyboard.
+
+## Connecting to Bambu Lab
+
+Bambu support, like the BigTreeTech Panda Touch had, is built clean-room from the community
+protocol. There are two ways to add Bambu printers.
+
+### LAN (recommended)
+
+Direct, no cloud account. On the printer, enable **LAN Mode** and then **Developer Mode**
+(printer screen → Settings → Network / General). Developer Mode is what opens up local control;
+note it turns off the printer's own cloud connection.
+
+Then on the touchscreen or the web page: **Add a printer → Local printer → Bambu (LAN)**, and
+enter:
+
+- **Printer IP** - shown on the printer's network screen.
+- **LAN Access Code** - the code on the printer's LAN-Mode screen.
+- **Device Serial** - the printer's serial (printer screen → Settings → Device, or on the
+  Handy app).
+
+Status and pause / resume / stop / preheat / move work over the LAN. File browsing and the
+camera aren't wired up yet.
+
+### Cloud (Alpha)
+
+> Bambu's web login sits behind Cloudflare, which an ESP32 can't reliably pass, and there's no
+> working token-refresh. So the dependable path is to **paste an access token** you obtain on a
+> computer. The on-device email + password form is there as a best effort, but expect to fall
+> back to the token. Tokens last about 90 days; when one expires you re-paste a fresh one.
+
+**Add a printer → Cloud accounts → Bambu**, then either sign in, or paste an access token.
+
+**Getting an access token.** The token is the value Bambu's login API returns as
+`accessToken`. Practical ways to get it on a computer:
+
+- **From Bambu's web login (browser DevTools).** Sign in at the Bambu account login in a desktop
+  browser with DevTools open (F12) → **Network** tab. Find the request to
+  `api.bambulab.com/.../user/login`, open its **Response**, and copy the `accessToken` string.
+- **With a helper tool.** Community libraries such as
+  [pybambu](https://github.com/greghesp/ha-bambulab) (used by Home Assistant) and other Bambu API
+  clients perform the login (handling the email verification code) and expose the token; run one
+  on your computer and copy the token it stores. The protocol reference is
+  [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI).
+
+Paste that token into **Account → Bambu Lab Cloud → access token → Use token**, then
+**Add my printers** to pull your fleet in. Keep the token private; it grants access to your
+Bambu account.
 
 ---
 

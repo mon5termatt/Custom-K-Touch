@@ -46,6 +46,7 @@ static lv_obj_t      *s_scr_status;     /* per-printer detail      */
 static lv_obj_t *s_scr_control;    /* preheat/jog/home        */
 static lv_obj_t *s_scr_files;
 static lv_obj_t *s_scr_printers;
+static lv_obj_t *s_scr_addpick;    /* "Add a printer" type picker (Cloud accounts / Local printer) */
 static lv_obj_t *s_scr_addform;
 static lv_obj_t *s_scr_about;
 static lv_obj_t *s_scr_prefs;      /* Preferences (sort/filter/logo) */
@@ -72,6 +73,13 @@ static lv_obj_t *s_pr_list;
 static lv_obj_t *s_ta_name;
 static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_key;
+static lv_obj_t *s_ta_serial;         /* Bambu device serial (hidden for other types) */
+static lv_obj_t *s_lbl_host;          /* relabeled per type (IP / Host:7125 / Printer IP) */
+static lv_obj_t *s_lbl_key;           /* relabeled per type (API key / Access Code)       */
+static lv_obj_t *s_lbl_serial;
+static lv_obj_t *s_btn_save;
+static lv_obj_t *s_btn_cancel;
+static int       s_add_type;          /* 0 = Prusa/PrusaLink, 1 = Klipper, 2 = Bambu LAN */
 static lv_obj_t *s_kb;
 static int       s_edit_idx = -1;     /* -1 = add new; >=0 = editing that printer */
 static lv_obj_t *s_btn_remove;
@@ -149,6 +157,10 @@ static void fmt_eta(int secs, char *out, size_t n)
 /* forward declarations */
 static void on_printers_clicked(lv_event_t *e);
 static void refresh_printers_list(void);
+/* Screen lock: returns true (and pops the PIN prompt) if the screen is locked, so an action
+ * callback can bail. Browsing callbacks don't call it. */
+static bool ui_locked_block(void);
+static void configure_add_form(int type);   /* relabel fields + show/hide serial per add type */
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
 static void on_farm_open(lv_event_t *e);
@@ -189,6 +201,7 @@ static void card_thumbs_clear(void)
 /* ---------- event handlers (LVGL thread) ---------- */
 static void on_pause_clicked(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     /* The label text tells us which action applies. */
     const char *txt = lv_label_get_text(s_btn_pause_lbl);
     if (txt && strcmp(txt, "RESUME") == 0) {
@@ -200,6 +213,7 @@ static void on_pause_clicked(lv_event_t *e)
 
 static void on_stop_clicked(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     app_state_post_cmd(PP_CMD_STOP, NULL);
 }
 
@@ -232,6 +246,7 @@ static void on_control_clicked(lv_event_t *e)
 /* Attention-banner button: answer the active printer's Connect dialog with the tapped label. */
 static void on_attn_btn_clicked(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx > 2 || !s_attn_dialog_id) return;
     app_state_dialog_action(s_attn_dialog_id, s_attn_btn_text[idx]);
@@ -588,6 +603,7 @@ static void on_fd_back(lv_event_t *e)
 static void on_fd_print(lv_event_t *e)
 {
     (void)e;
+    if (ui_locked_block()) return;
     if (s_sel_path[0]) {
         if (s_files_usb_mode) {
             app_state_post_cmd(PP_CMD_UPLOAD, s_sel_path);
@@ -648,26 +664,40 @@ static void on_printers_clicked(lv_event_t *e)
     lv_screen_load(s_scr_printers);
 }
 
-static void on_add_open(lv_event_t *e)   /* add mode */
+static void on_add_open(lv_event_t *e)   /* "+ Add printer" -> the type picker */
 {
+    (void)e;
+    lv_screen_load(s_scr_addpick);
+}
+
+/* Picker: a Local-printer type was chosen -> set up the field form for it. user_data = type. */
+static void on_pick_local(lv_event_t *e)
+{
+    int type = (int)(intptr_t)lv_event_get_user_data(e);
     s_edit_idx = -1;
     lv_textarea_set_text(s_ta_name, "");
     lv_textarea_set_text(s_ta_host, "");
     lv_textarea_set_text(s_ta_key, "");
+    lv_textarea_set_text(s_ta_serial, "");
     lv_obj_add_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
+    configure_add_form(type);
     lv_screen_load(s_scr_addform);
 }
+static void on_pick_cancel(lv_event_t *e) { (void)e; lv_screen_load(s_scr_printers); }
 
-static void on_edit_open(lv_event_t *e)  /* edit mode: prefill from store */
+static void on_edit_open(lv_event_t *e)  /* edit mode: skip the picker, prefill from store */
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     pp_printer_t p;
     if (!printer_store_get(idx, &p)) return;
     s_edit_idx = idx;
+    bool bambu = (strncmp(p.host, "bambu:", 6) == 0);
+    configure_add_form(bambu ? 2 : 0);   /* Klipper vs PrusaLink is cosmetic (auto-detected) */
     lv_textarea_set_text(s_ta_name, p.name);
-    lv_textarea_set_text(s_ta_host, p.host);
+    lv_textarea_set_text(s_ta_host, bambu ? p.host + 6 : p.host);
     lv_textarea_set_text(s_ta_key, p.api_key);
+    lv_textarea_set_text(s_ta_serial, bambu ? p.uuid : "");
     lv_obj_remove_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
     lv_screen_load(s_scr_addform);
@@ -675,33 +705,36 @@ static void on_edit_open(lv_event_t *e)  /* edit mode: prefill from store */
 
 static void on_add_save(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     pp_printer_t p = {0};
     strlcpy(p.name, lv_textarea_get_text(s_ta_name), sizeof(p.name));
-    strlcpy(p.host, lv_textarea_get_text(s_ta_host), sizeof(p.host));
     strlcpy(p.api_key, lv_textarea_get_text(s_ta_key), sizeof(p.api_key));
-    p.port = 80;
-    if (p.name[0] == '\0') strlcpy(p.name, p.host, sizeof(p.name));
-    if (p.host[0]) {
-        if (s_edit_idx < 0) {
-            int idx = printer_store_add(&p);
-            app_state_printers_changed();
-            if (idx >= 0) { app_state_select_printer(idx); lv_screen_load(s_scr_status); return; }
-        } else {
-            printer_store_update(s_edit_idx, &p);
-            app_state_printers_changed();
-        }
+    const char *ip = lv_textarea_get_text(s_ta_host);
+    if (s_add_type == 2) {                 /* Bambu LAN: host="bambu:<ip>", serial -> uuid */
+        snprintf(p.host, sizeof(p.host), "bambu:%s", ip);
+        strlcpy(p.uuid, lv_textarea_get_text(s_ta_serial), sizeof(p.uuid));
+    } else {
+        strlcpy(p.host, ip, sizeof(p.host));
     }
-    refresh_printers_list();
+    p.port = 80;
+    if (p.name[0] == '\0') strlcpy(p.name, ip, sizeof(p.name));
+    /* Route the store write (NVS) through the net task — it can't run on this PSRAM-stacked
+     * LVGL task. The net task re-publishes + refreshes the list when it lands. */
+    if (ip[0]) {
+        if (s_edit_idx < 0) {
+            app_state_store_add(&p);          /* net task adds, selects, and publishes */
+            lv_screen_load(s_scr_status);     /* optimistic; data fills on the next poll */
+            return;
+        }
+        app_state_store_update(s_edit_idx, &p);
+    }
     lv_screen_load(s_scr_printers);
 }
 
 static void on_remove(lv_event_t *e)
 {
-    if (s_edit_idx >= 0) {
-        printer_store_remove(s_edit_idx);
-        app_state_printers_changed();
-    }
-    refresh_printers_list();
+    if (ui_locked_block()) return;
+    if (s_edit_idx >= 0) app_state_store_remove(s_edit_idx);   /* net task removes + refreshes */
     lv_screen_load(s_scr_printers);
 }
 
@@ -709,6 +742,13 @@ static void on_setactive(lv_event_t *e)
 {
     if (s_edit_idx >= 0) app_state_select_printer(s_edit_idx);
     lv_screen_load(s_scr_status);
+}
+
+/* Scheduled by the net task after a printer-store write so the Settings list reflects it. */
+void ui_apply_printers(void *unused)
+{
+    (void)unused;
+    if (s_pr_list) refresh_printers_list();
 }
 
 static void on_add_cancel(lv_event_t *e)
@@ -841,19 +881,38 @@ static void build_printers_screen(void)
 }
 
 static lv_obj_t *make_field(lv_obj_t *parent, const char *label, lv_coord_t y,
-                            bool password)
+                            bool password, lv_obj_t **out_label)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, label);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, 16, y);
+    if (out_label) *out_label = l;
     lv_obj_t *ta = lv_textarea_create(parent);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, password);
-    lv_obj_set_width(ta, 520);
+    lv_obj_set_width(ta, scr_w() - 146);   /* responsive: fits portrait (480) and landscape (800) */
     lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 130, y - 8);
     lv_obj_add_event_cb(ta, ta_focus_event, LV_EVENT_ALL, NULL);
     return ta;
+}
+
+/* Relabel the shared add form for the chosen type and show/hide the Bambu Serial field,
+ * repositioning the action buttons so there's no gap when Serial is hidden. */
+static void configure_add_form(int type)
+{
+    s_add_type = type;
+    bool bambu = (type == 2);
+    lv_label_set_text(s_lbl_host, bambu ? "Printer IP" : (type == 1 ? "Host:7125" : "IP / host"));
+    lv_label_set_text(s_lbl_key,  bambu ? "Access Code" : "API key");
+    if (bambu) { lv_obj_remove_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
+    else       { lv_obj_add_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN);    lv_obj_add_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
+    int sy = bambu ? 248 : 204;   /* Save/Cancel sit below the last visible field */
+    lv_obj_align(s_btn_save,   LV_ALIGN_TOP_LEFT, 130, sy);
+    lv_obj_align(s_btn_cancel, LV_ALIGN_TOP_LEFT, 280, sy);
+    int ey = bambu ? 306 : 262;   /* edit-mode actions below Save/Cancel */
+    lv_obj_align(s_btn_setactive, LV_ALIGN_TOP_LEFT, 130, ey);
+    lv_obj_align(s_btn_remove,    LV_ALIGN_TOP_LEFT, 280, ey);
 }
 
 static void build_addform_screen(void)
@@ -862,26 +921,25 @@ static void build_addform_screen(void)
     lv_obj_set_style_bg_color(s_scr_addform, PP_BG, 0);
     make_header(s_scr_addform, "Add printer");
 
-    s_ta_name = make_field(s_scr_addform, "Name", 72, false);
-    s_ta_host = make_field(s_scr_addform, "IP / host", 116, false);
-    s_ta_key  = make_field(s_scr_addform, "API key", 160, true);
+    s_ta_name   = make_field(s_scr_addform, "Name", 72, false, NULL);
+    s_ta_host   = make_field(s_scr_addform, "IP / host", 116, false, &s_lbl_host);
+    s_ta_key    = make_field(s_scr_addform, "API key", 160, true, &s_lbl_key);
+    s_ta_serial = make_field(s_scr_addform, "Serial", 204, false, &s_lbl_serial);
 
-    lv_obj_t *save = lv_button_create(s_scr_addform);
-    lv_obj_set_size(save, 140, 50);
-    lv_obj_align(save, LV_ALIGN_TOP_LEFT, 130, 204);
-    lv_obj_set_style_bg_color(save, PP_ORANGE, 0);
-    lv_obj_add_event_cb(save, on_add_save, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *sl = lv_label_create(save);
+    s_btn_save = lv_button_create(s_scr_addform);
+    lv_obj_set_size(s_btn_save, 140, 50);
+    lv_obj_set_style_bg_color(s_btn_save, PP_ORANGE, 0);
+    lv_obj_add_event_cb(s_btn_save, on_add_save, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *sl = lv_label_create(s_btn_save);
     lv_label_set_text(sl, "Save");
     lv_obj_set_style_text_color(sl, PP_WHITE, 0);
     lv_obj_center(sl);
 
-    lv_obj_t *cancel = lv_button_create(s_scr_addform);
-    lv_obj_set_size(cancel, 140, 50);
-    lv_obj_align(cancel, LV_ALIGN_TOP_LEFT, 280, 204);
-    lv_obj_set_style_bg_color(cancel, PP_SURFACE_HI, 0);
-    lv_obj_add_event_cb(cancel, on_add_cancel, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cl = lv_label_create(cancel);
+    s_btn_cancel = lv_button_create(s_scr_addform);
+    lv_obj_set_size(s_btn_cancel, 140, 50);
+    lv_obj_set_style_bg_color(s_btn_cancel, PP_SURFACE_HI, 0);
+    lv_obj_add_event_cb(s_btn_cancel, on_add_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cl = lv_label_create(s_btn_cancel);
     lv_label_set_text(cl, "Cancel");
     lv_obj_set_style_text_color(cl, PP_TEXT, 0);
     lv_obj_center(cl);
@@ -889,7 +947,6 @@ static void build_addform_screen(void)
     /* Edit-mode actions (hidden in add mode) */
     s_btn_setactive = lv_button_create(s_scr_addform);
     lv_obj_set_size(s_btn_setactive, 140, 50);
-    lv_obj_align(s_btn_setactive, LV_ALIGN_TOP_LEFT, 130, 262);
     lv_obj_set_style_bg_color(s_btn_setactive, PP_SURFACE_HI, 0);
     lv_obj_set_style_border_color(s_btn_setactive, PP_ORANGE, 0);
     lv_obj_set_style_border_width(s_btn_setactive, 2, 0);
@@ -901,7 +958,6 @@ static void build_addform_screen(void)
 
     s_btn_remove = lv_button_create(s_scr_addform);
     lv_obj_set_size(s_btn_remove, 140, 50);
-    lv_obj_align(s_btn_remove, LV_ALIGN_TOP_LEFT, 280, 262);
     lv_obj_set_style_bg_color(s_btn_remove, PP_ERROR, 0);
     lv_obj_add_event_cb(s_btn_remove, on_remove, LV_EVENT_CLICKED, NULL);
     lv_obj_t *rl = lv_label_create(s_btn_remove);
@@ -912,6 +968,49 @@ static void build_addform_screen(void)
     /* On-screen keyboard, hidden until a field is focused. */
     s_kb = lv_keyboard_create(s_scr_addform);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+
+    configure_add_form(0);   /* default: PrusaLink layout (serial hidden, buttons placed) */
+}
+
+/* "Add a printer" type picker — mirrors the web two-tier flow. Cloud accounts need a keyboard
+ * so they're added from the web page; the device handles Local printers directly. */
+static void build_addpick_screen(void)
+{
+    s_scr_addpick = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_addpick, PP_BG, 0);
+    make_header(s_scr_addpick, "Add a printer");
+
+    lv_obj_t *col = lv_obj_create(s_scr_addpick);
+    lv_obj_set_size(col, scr_w(), scr_h() - 52);
+    lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 52);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(col, 0, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(col, 16, 0);
+    lv_obj_set_style_pad_row(col, 9, 0);
+
+    lv_obj_t *ch = lv_label_create(col);
+    lv_label_set_text(ch, "CLOUD ACCOUNTS");
+    lv_obj_set_style_text_color(ch, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(ch, &lv_font_montserrat_12, 0);
+    lv_obj_t *cn = lv_label_create(col);
+    lv_label_set_text(cn, "Prusa Connect & Bambu: sign in from the web page\n(its address is on the Wi-Fi screen).");
+    lv_obj_set_style_text_color(cn, PP_TEXT_MUTED, 0);
+    lv_label_set_long_mode(cn, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(cn, scr_w() - 32);
+
+    lv_obj_t *lh = lv_label_create(col);
+    lv_label_set_text(lh, "LOCAL PRINTER");
+    lv_obj_set_style_text_color(lh, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(lh, &lv_font_montserrat_12, 0);
+
+    static const char *names[] = { "Prusa  (PrusaLink)", "Klipper  (Moonraker)", "Bambu Lab  (LAN)" };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *b = make_button(col, names[i], on_pick_local, (void *)(intptr_t)i, NULL);
+        lv_obj_set_width(b, scr_w() - 32);
+    }
+    lv_obj_t *cancel = make_button(col, "Cancel", on_pick_cancel, NULL, NULL);
+    lv_obj_set_width(cancel, scr_w() - 32);
 }
 
 /* ---------- WiFi setup ---------- */
@@ -1163,7 +1262,7 @@ static const lv_image_dsc_t *model_image(const char *model)
 }
 
 /* One Connect-style telemetry cell: muted uppercase label over a bold white value. */
-static void card_cell(lv_obj_t *parent, int x, int y, const char *label, const char *value)
+static lv_obj_t *card_cell(lv_obj_t *parent, int x, int y, const char *label, const char *value)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, label);
@@ -1176,12 +1275,82 @@ static void card_cell(lv_obj_t *parent, int x, int y, const char *label, const c
     lv_obj_set_style_text_color(v, PP_TEXT, 0);
     lv_obj_set_style_text_font(v, &lv_font_montserrat_16, 0);
     lv_obj_align(v, LV_ALIGN_TOP_LEFT, x, y + 17);
+    return v;   /* the value label, for in-place dashboard updates */
+}
+
+/* Format the 4 telemetry values exactly as the card shows them (shared by build + in-place update). */
+static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, char *zx)
+{
+    if (s->online) {
+        if ((int)s->target_nozzle >= 1) sprintf(nz, "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle);
+        else sprintf(nz, "%d\xC2\xB0""C", (int)s->temp_nozzle);
+        if ((int)s->target_bed >= 1) sprintf(hb, "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed);
+        else sprintf(hb, "%d\xC2\xB0""C", (int)s->temp_bed);
+        sprintf(sp, "%d%%", s->speed);
+        sprintf(zx, "%.2fmm", s->axis_z);
+    } else { strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--"); }
+}
+
+/* Per-card widget handles captured at build time so a poll that changes only values can update
+ * them in place (gist #11) instead of destroying + rebuilding every card (flicker + CPU). */
+typedef struct {
+    lv_obj_t *strip, *badge, *badge_lbl, *name_lbl, *model_lbl;
+    lv_obj_t *v_noz, *v_speed, *v_bed, *v_z, *prog_bar, *prog_lbl;
+} dash_refs_t;
+static dash_refs_t s_dref[PP_MAX_PRINTERS];
+static int      s_dref_n;        /* number of cards currently laid out */
+static uint32_t s_dash_sig;      /* structural signature of the current layout */
+static bool     s_dash_have;     /* a valid prior layout exists */
+
+static void update_dash_card(const dash_refs_t *r, const pp_status_t *s)
+{
+    bool online = s->online;
+    const char *st = online ? (s->state[0] ? s->state : "READY") : "OFFLINE";
+    if (r->strip)     lv_obj_set_style_bg_color(r->strip, online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
+    if (r->badge)     lv_obj_set_style_bg_color(r->badge, online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
+    if (r->badge_lbl) lv_label_set_text(r->badge_lbl, st);
+    if (r->name_lbl)  lv_label_set_text(r->name_lbl, s->printer_name[0] ? s->printer_name : "Printer");
+    if (r->model_lbl) lv_label_set_text(r->model_lbl, s->model[0] ? s->model : (online ? "Prusa printer" : ""));
+    char nz[24], hb[24], sp[16], zx[16];
+    fmt_telemetry(s, nz, hb, sp, zx);
+    if (r->v_noz)   lv_label_set_text(r->v_noz, nz);
+    if (r->v_speed) lv_label_set_text(r->v_speed, sp);
+    if (r->v_bed)   lv_label_set_text(r->v_bed, hb);
+    if (r->v_z)     lv_label_set_text(r->v_z, zx);
+    if (s->has_job && r->prog_bar) {
+        int pct = (int)(s->progress + 0.5f);
+        lv_bar_set_value(r->prog_bar, pct, LV_ANIM_OFF);
+        if (r->prog_lbl) lv_label_set_text_fmt(r->prog_lbl, "%d%%", pct);
+    }
+}
+
+/* Structural fingerprint: which printers, in what order, online/job/firmware/thumbnail state.
+ * Excludes the churning values (temps/progress/...) so those go through the in-place path. */
+static uint32_t dash_sig(const pp_dash_t *d, const int *order, int n, bool hide_off)
+{
+    uint32_t h = 2166136261u;
+#define MIX(x) do { h ^= (uint32_t)(x); h *= 16777619u; } while (0)
+    MIX(d->conn_expired ? 1 : 0); MIX(hide_off ? 1 : 0);
+    int shown = 0;
+    for (int k = 0; k < n; k++) {
+        int idx = order[k];
+        if (hide_off && !d->items[idx].online) continue;
+        const pp_status_t *s = &d->items[idx];
+        MIX(idx); MIX(s->online ? 1 : 0); MIX(s->has_job ? 1 : 0); MIX(s->firmware[0] ? 1 : 0);
+        MIX(s_card_thumbs[idx].buf ? 1 : 0);          /* thumb arrival forces a rebuild to show it */
+        for (const char *p = s->job_thumb; *p; p++) MIX(*p);
+        shown++;
+    }
+    MIX(shown);
+    return h;
+#undef MIX
 }
 
 /* Prusa Connect dark-card anatomy: state-tinted header strip (name + badge),
  * then a 3-column labeled telemetry grid; progress bar slot when printing. */
-static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
+static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, dash_refs_t *r)
 {
+    if (r) memset(r, 0, sizeof(*r));
     const bool online = s->online;
     const char *st = online ? (s->state[0] ? s->state : "READY") : "OFFLINE";
 
@@ -1206,6 +1375,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
     lv_obj_set_style_pad_all(head, 0, 0);
     lv_obj_set_style_bg_color(head, online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
     lv_obj_clear_flag(head, LV_OBJ_FLAG_SCROLLABLE);
+    if (r) r->strip = head;
 
     lv_obj_t *badge = lv_obj_create(head);
     lv_obj_set_size(badge, LV_SIZE_CONTENT, 34);
@@ -1216,11 +1386,13 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
     lv_obj_set_style_bg_color(badge, online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
     lv_obj_align(badge, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+    if (r) r->badge = badge;
     lv_obj_t *bl = lv_label_create(badge);
     lv_label_set_text(bl, st);
     lv_obj_set_style_text_color(bl, PP_TEXT, 0);
     lv_obj_set_style_text_font(bl, &lv_font_montserrat_16, 0);
     lv_obj_center(bl);
+    if (r) r->badge_lbl = bl;
 
     lv_obj_t *nm = lv_label_create(head);
     lv_label_set_text(nm, s->printer_name[0] ? s->printer_name : "Printer");
@@ -1229,6 +1401,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
     lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
     lv_obj_set_width(nm, 226);
     lv_obj_align(nm, LV_ALIGN_LEFT_MID, 12, 0);
+    if (r) r->name_lbl = nm;
 
     /* ---- identity row: thumbnail slot + model + firmware ---- */
     lv_obj_t *thumb = lv_obj_create(c);
@@ -1302,6 +1475,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
     lv_label_set_long_mode(md, LV_LABEL_LONG_DOT);
     lv_obj_set_width(md, 300);
     lv_obj_align(md, LV_ALIGN_TOP_LEFT, 66, 40);
+    if (r) r->model_lbl = md;
 
     if (s->firmware[0]) {
         lv_obj_t *fwl = lv_label_create(c);
@@ -1315,21 +1489,13 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
 
     /* ---- 3-column labeled telemetry grid ---- */
     char nz[24], hb[24], sp[16], zx[16];
-    if (online) {
-        if ((int)s->target_nozzle >= 1) snprintf(nz, sizeof(nz), "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle);
-        else snprintf(nz, sizeof(nz), "%d\xC2\xB0""C", (int)s->temp_nozzle);
-        if ((int)s->target_bed >= 1) snprintf(hb, sizeof(hb), "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed);
-        else snprintf(hb, sizeof(hb), "%d\xC2\xB0""C", (int)s->temp_bed);
-        snprintf(sp, sizeof(sp), "%d%%", s->speed);
-        snprintf(zx, sizeof(zx), "%.2fmm", s->axis_z);
-    } else {
-        strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--");
-    }
+    fmt_telemetry(s, nz, hb, sp, zx);
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
-    card_cell(c, X1, R1, "NOZZLE", nz);
-    card_cell(c, X2, R1, "SPEED",  sp);   /* Connect column order: NOZZLE / SPEED / BED */
-    card_cell(c, X3, R1, "BED",    hb);
-    card_cell(c, X1, R2, "Z AXIS", zx);
+    lv_obj_t *vn = card_cell(c, X1, R1, "NOZZLE", nz);
+    lv_obj_t *vs = card_cell(c, X2, R1, "SPEED",  sp);   /* Connect column order: NOZZLE / SPEED / BED */
+    lv_obj_t *vb = card_cell(c, X3, R1, "BED",    hb);
+    lv_obj_t *vz = card_cell(c, X1, R2, "Z AXIS", zx);
+    if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = vz; }
 
     /* progress (when printing) fills the 2nd/3rd column of row 2 */
     if (s->has_job) {
@@ -1353,6 +1519,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
         lv_obj_set_style_text_color(pv, PP_TEXT, 0);
         lv_obj_set_style_text_font(pv, &lv_font_montserrat_16, 0);
         lv_obj_align(pv, LV_ALIGN_TOP_LEFT, X3, R2 + 14);
+        if (r) { r->prog_bar = bar; r->prog_lbl = pv; }
     }
 }
 
@@ -1445,6 +1612,136 @@ void ui_apply_orient(void *unused)
     lv_display_set_rotation(lv_display_get_default(), r);
 }
 
+/* ---------- screen lock (opt-in) ----------
+ * After N idle minutes the screen "locks": browsing stays open, but action callbacks call
+ * ui_locked_block() which pops a PIN prompt and bails. The overlay lives on the top layer so
+ * it floats over whichever screen is active, in either orientation. */
+static bool        s_locked;
+static lv_obj_t   *s_lock_modal;
+static lv_obj_t   *s_lock_ta;
+static lv_obj_t   *s_lock_msg;
+static lv_obj_t   *s_lock_ind;
+static lv_timer_t *s_lock_timer;
+
+static void lock_release(void)
+{
+    s_locked = false;
+    if (s_lock_ind)   lv_obj_add_flag(s_lock_ind, LV_OBJ_FLAG_HIDDEN);
+    if (s_lock_modal) lv_obj_add_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void lock_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_locked) return;
+    uint8_t m = prefs_lock_min();
+    if (m == 0 || !prefs_scrpin()[0]) return;
+    if (lv_display_get_inactive_time(NULL) > (uint32_t)m * 60000) {
+        s_locked = true;
+        if (s_lock_ind) lv_obj_remove_flag(s_lock_ind, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_apply_lock_cfg(void *unused)
+{
+    (void)unused;
+    bool want = (prefs_lock_min() > 0 && prefs_scrpin()[0]);
+    if (want && !s_lock_timer)        s_lock_timer = lv_timer_create(lock_timer_cb, 5000, NULL);
+    else if (!want && s_lock_timer) { lv_timer_delete(s_lock_timer); s_lock_timer = NULL; lock_release(); }
+}
+
+static void on_pin_ok(lv_event_t *e)
+{
+    (void)e;
+    if (strcmp(lv_textarea_get_text(s_lock_ta), prefs_scrpin()) == 0) lock_release();
+    else { lv_label_set_text(s_lock_msg, "Wrong PIN, try again"); lv_textarea_set_text(s_lock_ta, ""); }
+}
+static void on_pin_cancel(lv_event_t *e)
+{
+    (void)e;
+    if (s_lock_modal) lv_obj_add_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);   /* stays locked; just dismiss */
+}
+
+static void lock_show_prompt(void)
+{
+    if (!s_lock_modal) return;
+    lv_textarea_set_text(s_lock_ta, "");
+    lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
+    lv_obj_remove_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_lock_modal);
+}
+
+static bool ui_locked_block(void)
+{
+    if (!s_locked) return false;
+    lock_show_prompt();
+    return true;
+}
+
+/* Tapping the LOCKED badge brings up the PIN prompt without having to poke an action first. */
+static void on_lock_badge(lv_event_t *e) { (void)e; lock_show_prompt(); }
+
+/* Public: lock the screen immediately (e.g. a future "Lock now" affordance / sim preview).
+ * Browsing stays available; the prompt appears on an action or a badge tap. */
+void ui_lock_now(void)
+{
+    if (prefs_scrpin()[0]) {
+        s_locked = true;
+        if (s_lock_ind) lv_obj_remove_flag(s_lock_ind, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+void ui_show_lock_prompt(void) { lock_show_prompt(); }
+
+static void build_lock_overlay(void)
+{
+    lv_obj_t *top = lv_layer_top();
+
+    /* small "LOCKED" badge, top-right; hidden until the screen locks */
+    s_lock_ind = lv_label_create(top);
+    lv_label_set_text(s_lock_ind, LV_SYMBOL_BELL " LOCKED");
+    lv_obj_set_style_text_color(s_lock_ind, PP_ORANGE, 0);
+    lv_obj_set_style_text_font(s_lock_ind, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_bg_color(s_lock_ind, PP_HEADER, 0);
+    lv_obj_set_style_bg_opa(s_lock_ind, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(s_lock_ind, 6, 0);
+    lv_obj_set_style_radius(s_lock_ind, 4, 0);
+    lv_obj_align(s_lock_ind, LV_ALIGN_TOP_RIGHT, -4, 4);
+    lv_obj_add_flag(s_lock_ind, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_lock_ind, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_lock_ind, on_lock_badge, LV_EVENT_CLICKED, NULL);
+
+    /* PIN-entry modal: full-screen backdrop + message + password field + number keypad */
+    s_lock_modal = lv_obj_create(top);
+    lv_obj_set_size(s_lock_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(s_lock_modal, PP_BG, 0);
+    lv_obj_set_style_bg_opa(s_lock_modal, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_lock_modal, 0, 0);
+    lv_obj_set_style_radius(s_lock_modal, 0, 0);
+    lv_obj_clear_flag(s_lock_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);
+
+    s_lock_msg = lv_label_create(s_lock_modal);
+    lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
+    lv_obj_set_style_text_color(s_lock_msg, PP_TEXT, 0);
+    lv_obj_set_style_text_font(s_lock_msg, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lock_msg, LV_ALIGN_TOP_MID, 0, 40);
+
+    s_lock_ta = lv_textarea_create(s_lock_modal);
+    lv_textarea_set_one_line(s_lock_ta, true);
+    lv_textarea_set_password_mode(s_lock_ta, true);
+    lv_textarea_set_placeholder_text(s_lock_ta, "PIN");
+    lv_obj_set_width(s_lock_ta, 240);
+    lv_obj_align(s_lock_ta, LV_ALIGN_TOP_MID, 0, 84);
+
+    lv_obj_t *cancel = make_barbtn(s_lock_modal, LV_SYMBOL_CLOSE " Cancel", on_pin_cancel, NULL, 120);
+    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -8, 8);
+
+    lv_obj_t *kb = lv_keyboard_create(s_lock_modal);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(kb, s_lock_ta);
+    lv_obj_add_event_cb(kb, on_pin_ok, LV_EVENT_READY, NULL);   /* the keypad's check key = unlock */
+}
+
 static void build_dashboard_screen(void)
 {
     s_scr_dash = lv_obj_create(NULL);
@@ -1506,11 +1803,6 @@ static int dash_order_cmp(const void *pa, const void *pb)
 void ui_apply_dashboard(void *arg)
 {
     pp_dash_t *d = (pp_dash_t *)arg;
-    
-    /* Save current scroll position to prevent jumping to top on every refresh. */
-    int32_t scroll_y = lv_obj_get_scroll_y(s_dash_grid);
-
-    lv_obj_clean(s_dash_grid);
     s_dash_count = d->count;
 
     int n = d->count; if (n > PP_MAX_PRINTERS) n = PP_MAX_PRINTERS;
@@ -1521,6 +1813,28 @@ void ui_apply_dashboard(void *arg)
     for (int i = 0; i < n; i++) order[i] = i;
     s_dash_sort_items = d->items;
     if (n > 1) qsort(order, n, sizeof(int), dash_order_cmp);
+
+    bool hide_off = prefs_hide_offline();
+    uint32_t sig = dash_sig(d, order, n, hide_off);
+
+    /* Fast path (gist #11): structure unchanged -> update the existing cards' values in place.
+     * No lv_obj_clean / rebuild means no flicker, preserved scroll, and far less CPU. */
+    if (s_dash_have && sig == s_dash_sig) {
+        int slot = 0;
+        for (int k = 0; k < n && slot < s_dref_n; k++) {
+            int idx = order[k];
+            if (hide_off && !d->items[idx].online) continue;
+            update_dash_card(&s_dref[slot], &d->items[idx]);
+            slot++;
+        }
+        free(d);
+        return;
+    }
+
+    /* Slow path: the structure changed (count/order/online/job/firmware/thumbnail) -> rebuild. */
+    int32_t scroll_y = lv_obj_get_scroll_y(s_dash_grid);   /* keep scroll position across rebuild */
+    lv_obj_clean(s_dash_grid);
+    s_dref_n = 0;
 
     /* Connect sign-in lapsed: prepend a full-width re-connect banner (flex ROW_WRAP gives it
      * its own row above the cards). No credential entry on-device — the user re-authenticates
@@ -1549,12 +1863,11 @@ void ui_apply_dashboard(void *arg)
                 "Reconnect from the web Account tab. Local printers stay reachable.");
     }
 
-    bool hide_off = prefs_hide_offline();
     int shown = 0;
     for (int k = 0; k < n; k++) {
         int idx = order[k];                              /* original store index */
         if (hide_off && !d->items[idx].online) continue;
-        make_printer_card(s_dash_grid, &d->items[idx], idx);
+        make_printer_card(s_dash_grid, &d->items[idx], idx, shown < PP_MAX_PRINTERS ? &s_dref[shown] : NULL);
         shown++;
     }
     if (shown == 0) {
@@ -1563,6 +1876,9 @@ void ui_apply_dashboard(void *arg)
                                            : "No printers match the current filter.");
         lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     }
+    s_dref_n = shown;
+    s_dash_sig = sig;
+    s_dash_have = true;
 
     /* Restore scroll position. */
     lv_obj_update_layout(s_dash_grid);   /* ensure children positions are calculated */
@@ -1578,6 +1894,7 @@ static void on_about_open(lv_event_t *e) { lv_screen_load(s_scr_about); }
 
 static void on_preheat_clicked(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     app_state_post_cmd_n(PP_CMD_PREHEAT, idx, 0, 0);
 }
@@ -1587,6 +1904,7 @@ static void on_preheat_clicked(lv_event_t *e)
  * dedicated Connect commands vs gcode per the active printer's backend. */
 static void on_jog_clicked(lv_event_t *e)
 {
+    if (ui_locked_block()) return;
     const char *tok = (const char *)lv_event_get_user_data(e);
     if (tok[0] == 'H') { app_state_post_cmd_n(PP_CMD_HOME, 0, 0, 0); return; }
     int axis = (tok[0] == 'X') ? 0 : (tok[0] == 'Y') ? 1 : 2;
@@ -2052,6 +2370,7 @@ void ui_init(void)
     build_filedetail_screen();
     build_printers_screen();
     build_addform_screen();
+    build_addpick_screen();
     build_control_screen();
     build_wifi_screen();
     build_about_screen();
@@ -2063,6 +2382,9 @@ void ui_init(void)
     make_nav(s_scr_status, 1);
     make_nav(s_scr_files, 2);
     make_nav(s_scr_printers, 3);
+
+    build_lock_overlay();    /* PIN-entry overlay on the top layer (hidden until locked) */
+    ui_apply_lock_cfg(NULL); /* arm the idle-lock timer if the opt-in is configured */
 
     lv_timer_create(webcam_refresh_timer_cb, 7000, NULL);   /* live webcam on Control screen */
 }
@@ -2079,6 +2401,8 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "control"))                            lv_screen_load(s_scr_control);
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
+        else if (!strcmp(name, "addpick"))                            lv_screen_load(s_scr_addpick);
+        else if (!strcmp(name, "addform")) { configure_add_form(2); lv_screen_load(s_scr_addform); }  /* bambu = shows serial */
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
         else if (!strcmp(name, "farm"))                               on_farm_open(NULL);

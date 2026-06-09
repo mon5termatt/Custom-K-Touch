@@ -25,6 +25,9 @@
 #include "ui.h"
 #include "wc_test_jpg.h"   /* embedded camera frame for the /api/test/webcam decode self-test */
 #include "prusa_connect.h"
+#include "bambu_cloud.h"
+#include "prefs.h"
+#include "mbedtls/base64.h"
 
 static const char *TAG = "web";
 
@@ -61,15 +64,45 @@ static const char INDEX_HTML[] =
 "button.p{background:var(--o);color:#fff;border-color:var(--o)}button.p:hover{background:#e84a00}"
 ".ctlp{border-top:1px solid #3a3a3a;margin-top:12px;padding-top:10px}.ctlp .lbl{font-size:11px;color:#a7a7a7;letter-spacing:.05em;margin:2px 0 4px}"
 ".bar{height:10px;background:#4e4e4e;border-radius:5px;overflow:hidden;margin-top:8px}.bar>i{display:block;height:100%;background:var(--o)}"
-".muted{color:#a7a7a7}</style></head><body>"
+".muted{color:#a7a7a7}"
+/* Add-a-printer type picker: Connect-style tiles. */
+".ptgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}"
+".ptile{background:#222;border:1px solid #4e4e4e;border-radius:8px;padding:13px 14px;cursor:pointer;transition:border-color .12s,background .12s}"
+".ptile:hover{border-color:var(--o);background:#262626}"
+".ptile b{display:block;font-size:15px;color:#fff;margin-bottom:3px}"
+".ptile small{font-size:12px;color:#a7a7a7;line-height:1.35}"
+".ptile.soon{opacity:.45;cursor:default}.ptile.soon:hover{border-color:#4e4e4e;background:#222}"
+".ptag{float:right;font-size:10px;font-weight:700;color:var(--o);border:1px solid var(--o);border-radius:4px;padding:1px 5px}"
+".ptag.s{color:#a7a7a7;border-color:#4e4e4e}"
+".ptback{float:right;color:var(--o);cursor:pointer;font-size:13px;font-weight:600}"
+".pthead{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#a7a7a7;margin:16px 0 2px}"
+".pthead small{font-weight:400;text-transform:none;letter-spacing:0}"
+"@media(max-width:560px){.ptgrid{grid-template-columns:1fr}}</style></head><body>"
 "<header>PRUSA CONNECT TOUCH</header>"
 "<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
 "<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a></nav>"
 "<div class=\"tab on\" id=t0><div id=stlist></div><div class=card id=dev></div></div>"
-"<div class=tab id=t1><div class=card><b id=pftitle>Add printer</b>"
+"<div class=tab id=t1>"
+/* Type-first picker: choose how to add, then only the relevant fields appear. */
+"<div class=card id=ppick><b>Add a printer</b>"
+"<div class=pthead>Cloud accounts <small>&mdash; sign in once, your whole fleet appears</small></div>"
+"<div class=ptgrid>"
+"<div class=ptile onclick=pick('connect')><span class=ptag>Easiest</span><b>&#9729; Prusa</b><small>Sign in to Prusa Connect and pull in every printer on your account.</small></div>"
+"<div class=ptile onclick=pick('bcloud')><span class=ptag>Alpha</span><b>&#9729; Bambu</b><small>Sign in to your Bambu Lab account (or paste an access token).</small></div>"
+"</div>"
+"<div class=pthead>Local printer <small>&mdash; connect directly over your LAN</small></div>"
+"<div class=ptgrid>"
+"<div class=ptile onclick=pick('link')><b>&#9635; Prusa (PrusaLink)</b><small>MK4 &middot; MK3.5/3.9 &middot; MINI &middot; CORE One &middot; XL, by IP + API key.</small></div>"
+"<div class=ptile onclick=pick('klipper')><b>&#9881; Klipper (Moonraker)</b><small>Fluidd / Mainsail printers, at host:7125.</small></div>"
+"<div class=ptile onclick=pick('bambu')><b>&#9635; Bambu (LAN)</b><small>X1 &middot; P1 &middot; A1 in LAN + Developer Mode, by IP + Access Code.</small></div>"
+"</div></div>"
+/* The reveal-on-select form (one set of fields, relabeled per type). */
+"<div class=card id=pform style=display:none><b id=pftitle>Add printer</b><span class=ptback onclick=pcancel()>&#8592; Back</span>"
+"<div id=bbhint class=muted style='display:none;margin:8px 0'>The printer must be in <b>LAN Mode</b> with <b>Developer Mode</b> on (printer Settings &rarr; Network). Find the Access Code and Serial there.</div>"
 "<input id=pn placeholder=Name><input id=ph placeholder='IP / host'>"
 "<input id=pk placeholder='API key (blank = keep when editing)'>"
-"<button class=p onclick=savp()>Save</button> <button onclick=newp()>New</button></div>"
+"<input id=ps placeholder='Device serial' style=display:none>"
+"<button class=p onclick=savp()>Save</button></div>"
 "<div id=plist></div>"
 "<div class=card><b>Backup & Restore</b>"
 "<p class=muted>Export your fleet config to a file, or import a saved config (replaces current fleet).</p>"
@@ -86,7 +119,23 @@ static const char INDEX_HTML[] =
 "<button class=p onclick=connl()>Link Account</button></div>"
 "<div id=totpform style=display:none><p class=muted>2FA required. Enter your TOTP code:</p>"
 "<input id=tc placeholder=123456><button class=p onclick=connt()>Verify</button></div>"
-"<div id=acclist style=margin-top:16px></div></div></div>"
+"<div id=acclist style=margin-top:16px></div></div>"
+"<div class=card><b>Bambu Lab Cloud</b> <span class=ptag>Alpha</span> <span id=bcstat class=muted></span>"
+"<div class=muted style=margin:6px 0>Sign in to your Bambu account, or paste an access token (more reliable &mdash; Bambu's login sits behind Cloudflare, which the device may not pass). Then pull in your printers.</div>"
+"<div id=bcform><input id=bce placeholder=Email><input id=bcp type=password placeholder=Password>"
+"<button class=p onclick=bclogin()>Sign in</button>"
+"<div id=bccodef style='display:none;margin-top:8px'><input id=bccode placeholder='6-digit email code'><button class=p onclick=bcsubmitcode()>Verify code</button></div>"
+"<div style=margin-top:10px><input id=bctok placeholder='or paste access token'><button onclick=bctoken()>Use token</button></div></div>"
+"<div id=bcauthed style=display:none><button class=p onclick=bcpull()>Add my printers</button> <button onclick=bclogout()>Sign out</button></div></div>"
+"<div class=card><b>Security</b> <span id=secstat class=muted></span>"
+"<div class=muted style=margin:6px 0>Both optional, off by default.</div>"
+"<label style='display:block;margin:8px 0 2px'>Web password (gates this page; blank = open)</label>"
+"<input id=swp type=password placeholder='blank = no password'>"
+"<label style='display:block;margin:8px 0 2px'>Screen unlock PIN (blank = no lock)</label>"
+"<input id=spin placeholder='e.g. 1234'>"
+"<label style='display:block;margin:8px 0 2px'>Auto-lock the touchscreen after</label>"
+"<select id=slm><option value=0>Off</option><option value=1>1 min</option><option value=2>2 min</option><option value=5>5 min</option><option value=10>10 min</option><option value=30>30 min</option></select>"
+"<button class=p onclick=secsave() style=margin-top:10px>Save security settings</button></div></div>"
 "<div class=tab id=t6><div class=card><b>Prusa Farm</b>"
 "<div class=muted>Org-wide printer + order status. Find your Organization ID at connect-farm.prusa3d.com.</div>"
 "<input id=forg placeholder='Organization ID'><button class=p onclick=lf()>Load Farm</button></div>"
@@ -97,7 +146,7 @@ static const char INDEX_HTML[] =
 "<button onclick=chk()>Check for updates</button>"
 "<button class=p id=ub style=display:none onclick=applyu()>Update now</button></div>"
 "<div class=card><b>Manual firmware upload</b>"
-"<p class=muted>Upload a Prusa-Touch .bin. The device reboots into it.</p>"
+"<p class=muted>Upload the <b>prusa-touch-app.bin</b> (the OTA image, ~2 MB). The device reboots into it. Don't upload the full 16 MB image here &mdash; that's for a USB flash.</p>"
 "<input type=file id=fw accept=.bin><button class=p onclick=ota()>Flash</button>"
 "<div id=otalog class=muted></div></div></div>"
 "<div class=tab id=t4><div class=card><b>Live screen</b> "
@@ -158,7 +207,22 @@ static const char INDEX_HTML[] =
 "(t.id==def?' <span style=\"background:var(--o);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:8px\">DEFAULT</span>':'')+"
 "'<div id=tlist_'+t.id+' style=margin-top:8px><button onclick=\"lt(\\''+t.id+'\\')\">Load Printers</button> '+"
 "'<button class=p onclick=\"sd(\\''+t.id+'\\')\">Set Default</button></div></div>').join('')||'<div class=card style=padding:12px>No teams found.</div>'}"
-"}"
+"loadsec();bcla()}"
+"async function bcla(){let r=await fetch('/api/bambu/info').then(x=>x.json());"
+"bcstat.textContent=r.auth?'Signed in.':'Not signed in.';bcform.style.display=r.auth?'none':'block';bcauthed.style.display=r.auth?'block':'none'}"
+"async function bclogin(){let r=await fetch('/api/bambu/login',{method:'POST',body:JSON.stringify({email:bce.value,password:bcp.value})}).then(x=>x.json());"
+"if(r.res=='ok'){bce.value=bcp.value='';bcla()}else if(r.res=='code'){bccodef.style.display='block';alert('Check your email for a 6-digit code, enter it below.')}else alert('Sign-in failed \\u2014 Bambu may be blocking the device. Try the access-token option.')}"
+"async function bcsubmitcode(){let r=await fetch('/api/bambu/code',{method:'POST',body:JSON.stringify({email:bce.value,code:bccode.value})}).then(x=>x.json());"
+"if(r.res=='ok'){bccodef.style.display='none';bccode.value='';bcla()}else alert('Code rejected.')}"
+"async function bctoken(){let r=await fetch('/api/bambu/token',{method:'POST',body:JSON.stringify({token:bctok.value})}).then(x=>x.json());"
+"if(r.res=='ok'){bctok.value='';bcla()}else alert('Token rejected (could not read your account).')}"
+"async function bcpull(){let r=await fetch('/api/bambu/pull',{method:'POST'}).then(x=>x.json());alert('Found '+r.found+', added '+r.added+' printer(s).')}"
+"async function bclogout(){if(!confirm('Sign out of Bambu cloud?'))return;await fetch('/api/bambu/logout',{method:'POST'});bcla()}"
+"async function loadsec(){let r=await fetch('/api/info').then(x=>x.json());"
+"secstat.textContent=(r.webauth?'web password ON':'web password off')+' \\u00b7 '+(r.scrlock?('screen lock '+r.lockmin+'m'):'screen lock off');"
+"slm.value=r.lockmin||0}"
+"async function secsave(){await fetch('/api/security',{method:'POST',body:JSON.stringify({webpw:swp.value,pin:spin.value,lockmin:parseInt(slm.value)||0})});"
+"swp.value='';spin.value='';alert('Saved. If you set a web password you may be prompted to sign in.');loadsec()}"
 "async function sd(id){await fetch('/api/connect/default_team',{method:'POST',body:id});la()}"
 "async function lt(tid){let L=await fetch('/api/connect/team_printers?id='+tid).then(x=>x.json());"
 "document.getElementById('tlist_'+tid).innerHTML='<button class=p style=margin-bottom:8px onclick=\"addAll(\\''+tid+'\\')\">Add All from Team</button>'+"
@@ -174,15 +238,25 @@ static const char INDEX_HTML[] =
 "if((await r.json()).res=='ok')la();else alert('Verification failed')}"
 "async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert('Added!')}"
 "let PL=[],EI=-1;"
-"function newp(){EI=-1;pn.value=ph.value=pk.value='';pftitle.textContent='Add printer'}"
+"var CT='link';"  /* current add type */
+"function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
+"let b=ty=='bambu';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
+"ph.placeholder=b?'Printer IP':(ty=='klipper'?'host:7125 (e.g. 192.168.1.50:7125)':'IP / host');"
+"pk.placeholder=b?'LAN Access Code':(ty=='klipper'?'API key (usually blank)':'API key');"
+"pftitle.textContent=({link:'Add a Prusa printer',klipper:'Add a Klipper printer',bambu:'Add a Bambu Lab printer'}[ty]||'Add printer');"
+"ppick.style.display='none';pform.style.display='block'}"
+"function pcancel(){pform.style.display='none';ppick.style.display='block';EI=-1}"
 "async function lp(){PL=await fetch('/api/printers').then(x=>x.json());"
-"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host+(p.haskey?'':' (no key)'))+'</span> '"
+"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):p.host+(p.haskey?'':' (no key)'))+'</span> '"
 "+'<button class=p onclick=usep('+p.i+')>Use</button> <button onclick=editp('+p.i+')>Edit</button> <button onclick=delp('+p.i+')>Remove</button></div>').join('')}"
-"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;pn.value=p.name;ph.value=p.host;pk.value='';pftitle.textContent='Edit '+p.name+' (key blank = keep)'}"
-"async function savp(){let m=EI<0?{name:pn.value,host:ph.value,key:pk.value}:{i:EI,name:pn.value,host:ph.value,key:pk.value};"
+"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;let b=p.host.indexOf('bambu:')==0;CT=b?'bambu':'link';"
+"pn.value=p.name;pk.value='';ph.value=b?p.host.slice(6):p.host;ps.value=p.serial||'';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
+"ph.placeholder=b?'Printer IP':'IP / host';pk.placeholder=b?'LAN Access Code (blank = keep)':'API key (blank = keep)';"
+"pftitle.textContent='Edit '+p.name;ppick.style.display='none';pform.style.display='block'}"
+"async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value};if(EI>=0)m.i=EI;"
 "let r=await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});"
-"if(r.status>=400)alert(await r.text());else{newp();lp()}}"
-"async function delp(i){await fetch('/api/printers/remove',{method:'POST',body:JSON.stringify({i:i})});if(EI==i)newp();lp()}"
+"if(r.status>=400)alert(await r.text());else{pcancel();lp()}}"
+"async function delp(i){if(!confirm('Remove this printer?'))return;await fetch('/api/printers/remove',{method:'POST',body:JSON.stringify({i:i})});if(EI==i)pcancel();lp()}"
 "async function usep(i){await fetch('/api/printers/active',{method:'POST',body:JSON.stringify({i:i})});lp()}"
 "async function expc(){let r=await fetch('/api/config/export').then(x=>x.json());"
 "let b=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});"
@@ -192,9 +266,10 @@ static const char INDEX_HTML[] =
 "if(r.status>=400)alert(await r.text());else{lp();alert('Import success!')}}"
 "async function savew(){await fetch('/api/wifi',{method:'POST',body:JSON.stringify({ssid:ws.value,pass:wp.value})});alert('Saved; connecting...')}"
 "async function ota(){let f=document.getElementById('fw').files[0];if(!f)return;"
+"if(f.size>5242880&&!confirm('That file is over 5 MB \\u2014 it looks like the full image, not the OTA app.bin. Upload anyway?'))return;"
 "document.getElementById('otalog').textContent='Uploading '+f.name+'...';"
-"let r=await fetch('/update',{method:'POST',body:f});"
-"document.getElementById('otalog').textContent=await r.text()}"
+"try{let r=await fetch('/update',{method:'POST',body:f});document.getElementById('otalog').textContent=await r.text()}"
+"catch(e){document.getElementById('otalog').textContent='Upload failed (the device may have rejected an oversized file).'}}"
 "let GU='';"
 "async function chk(){document.getElementById('gh').textContent='Checking...';let n=0;"
 "const poll=async()=>{let r=await fetch('/api/update/check').then(x=>x.json());"
@@ -203,8 +278,10 @@ static const char INDEX_HTML[] =
 "GU=r.url;document.getElementById('ub').style.display=r.available?'inline-block':'none'};poll()}"
 "async function applyu(){if(!GU)return;document.getElementById('gh').innerHTML='Updating... <div class=bar id=upb><i style=width:0%></i></div>';"
 "await fetch('/api/update/apply',{method:'POST',body:JSON.stringify({url:GU})});"
-"const p=async()=>{let r=await fetch('/api/update/progress').then(x=>x.json());"
-"if(r.progress>=0){document.getElementById('upb').firstChild.style.width=r.progress+'%';setTimeout(p,1000)}};p()}"
+"const p=async()=>{try{let r=await fetch('/api/update/progress').then(x=>x.json());"
+"if(r.progress==-2){document.getElementById('gh').innerHTML='<b style=color:#F8795F>Update failed.</b> '+(r.msg||'')+' &mdash; check the file / URL and try again.';return}"
+"if(r.progress>=0)document.getElementById('upb').firstChild.style.width=r.progress+'%';"
+"setTimeout(p,1000)}catch(e){}};p()}"
 "function lf_init(){let o=localStorage.getItem('farmorg');if(o){forg.value=o;lf()}}"
 "async function lf(){let o=forg.value.trim();if(!o){alert('Enter your Organization ID');return}localStorage.setItem('farmorg',o);fetch('/api/connect/setorg',{method:'POST',body:o});"
 "fstat.innerHTML='<div class=card style=padding:12px>Loading...</div>';forders.innerHTML='';"
@@ -227,6 +304,8 @@ static const char INDEX_HTML[] =
 static esp_err_t root_get(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
+    /* The UI is baked into the firmware, so a cached copy goes stale on every update. */
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -266,6 +345,7 @@ static esp_err_t printers_get(httpd_req_t *req)
         cJSON_AddStringToObject(e, "host", p.host);   /* key intentionally omitted */
         cJSON_AddBoolToObject(e, "active", i == active);
         cJSON_AddBoolToObject(e, "haskey", p.api_key[0] != '\0');
+        if (strncmp(p.host, "bambu:", 6) == 0) cJSON_AddStringToObject(e, "serial", p.uuid);  /* Bambu serial for edit prefill */
         if (p.local_host[0]) cJSON_AddStringToObject(e, "local", p.local_host);  /* LAN fallback learned from Connect */
         cJSON_AddItemToArray(arr, e);
     }
@@ -305,9 +385,11 @@ static esp_err_t printers_post(httpd_req_t *req)
             const cJSON *n = cJSON_GetObjectItem(j, "name");
             const cJSON *h = cJSON_GetObjectItem(j, "host");
             const cJSON *k = cJSON_GetObjectItem(j, "key");
+            const cJSON *s = cJSON_GetObjectItem(j, "serial");   /* Bambu device serial -> uuid */
             if (cJSON_IsString(h)) strlcpy(p.host, h->valuestring, sizeof(p.host));
             strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
             if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
+            if (cJSON_IsString(s)) strlcpy(p.uuid, s->valuestring, sizeof(p.uuid));
             p.port = 80;
             if (p.host[0]) {
                 if (printer_store_add(&p) < 0) {
@@ -340,9 +422,11 @@ static esp_err_t printers_update_post(httpd_req_t *req)
             const cJSON *n = cJSON_GetObjectItem(j, "name");
             const cJSON *h = cJSON_GetObjectItem(j, "host");
             const cJSON *k = cJSON_GetObjectItem(j, "key");
+            const cJSON *s = cJSON_GetObjectItem(j, "serial");
             if (cJSON_IsString(n) && n->valuestring[0]) strlcpy(p.name, n->valuestring, sizeof(p.name));
             if (cJSON_IsString(h) && h->valuestring[0]) strlcpy(p.host, h->valuestring, sizeof(p.host));
             if (cJSON_IsString(k) && k->valuestring[0]) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
+            if (cJSON_IsString(s)) strlcpy(p.uuid, s->valuestring, sizeof(p.uuid));   /* Bambu serial */
             printer_store_update(idx, &p);
             app_state_printers_changed();
         }
@@ -405,19 +489,35 @@ static esp_err_t ota_post(httpd_req_t *req)
 {
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no partition"); return ESP_FAIL; }
-    if (req->content_len <= 0 || (size_t)req->content_len > part->size) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "oversized"); return ESP_FAIL; }
+    if (req->content_len <= 0 || (size_t)req->content_len > part->size) {
+        httpd_resp_set_hdr(req, "Connection", "close");   /* stop the browser streaming the rest */
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "oversized");
+        return ESP_FAIL;
+    }
     esp_ota_handle_t ota = 0;
     if (esp_ota_begin(part, req->content_len, &ota) != ESP_OK) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "begin fail"); return ESP_FAIL; }
     char buf[1024];
     size_t remaining = (size_t)req->content_len;
     while (remaining > 0) {
         int r = httpd_req_recv(req, buf, remaining < sizeof(buf) ? remaining : sizeof(buf));
-        if (r <= 0) { esp_ota_abort(ota); return ESP_FAIL; }
-        esp_ota_write(ota, buf, r);
+        if (r <= 0) { esp_ota_abort(ota); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv fail"); return ESP_FAIL; }
+        /* A write failure (bad flash / out of space) must abort — never boot a partial image. */
+        if (esp_ota_write(ota, buf, r) != ESP_OK) {
+            esp_ota_abort(ota);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write fail");
+            return ESP_FAIL;
+        }
         remaining -= r;
     }
-    esp_ota_end(ota);
-    esp_ota_set_boot_partition(part);
+    /* esp_ota_end validates the image (hash/magic) — if it fails, do NOT set it bootable. */
+    if (esp_ota_end(ota) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "image invalid");
+        return ESP_FAIL;
+    }
+    if (esp_ota_set_boot_partition(part) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set-boot fail");
+        return ESP_FAIL;
+    }
     httpd_resp_sendstr(req, "OK - rebooting");
     vTaskDelay(pdMS_TO_TICKS(500));
     esp_restart();
@@ -466,6 +566,8 @@ static esp_err_t update_progress_get(httpd_req_t *req)
     int p = ota_update_get_progress();
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "progress", p);
+    cJSON_AddStringToObject(o, "state", p == -2 ? "error" : p >= 100 ? "done" : p >= 0 ? "running" : "idle");
+    cJSON_AddStringToObject(o, "msg", ota_update_get_msg());
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
@@ -502,6 +604,10 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "heap_internal", (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(o, "heap_internal_min", (double)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(o, "uptime_s", (double)(esp_timer_get_time() / 1000000));
+    /* Security opt-in state (booleans only — never the actual PIN/password). */
+    cJSON_AddBoolToObject(o, "webauth", prefs_web_pass()[0] != '\0');
+    cJSON_AddBoolToObject(o, "scrlock", prefs_scrpin()[0] != '\0');
+    cJSON_AddNumberToObject(o, "lockmin", prefs_lock_min());
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
@@ -512,6 +618,7 @@ static esp_err_t info_get(httpd_req_t *req)
 static esp_err_t fleet_get(httpd_req_t *req)
 {
     pp_status_t *arr = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
+    if (!arr) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
     int n = 0; app_state_get_fleet(arr, PP_MAX_PRINTERS, &n);
     cJSON *a = cJSON_CreateArray();
     for (int i = 0; i < n; i++) {
@@ -636,7 +743,7 @@ static esp_err_t connect_fleet_get(httpd_req_t *req)
 {
     pp_status_t *arr = heap_caps_malloc(64 * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
     int n = 0;
-    if (prusa_connect_get_fleet(arr, 64, &n) != ESP_OK) { if (arr) heap_caps_free(arr); return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fail"); }
+    if (!arr || prusa_connect_get_fleet(arr, 64, &n) != ESP_OK) { if (arr) heap_caps_free(arr); return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "fail"); }
     cJSON *a = cJSON_CreateArray();
     for (int i = 0; i < n; i++) {
         cJSON *e = cJSON_CreateObject();
@@ -948,6 +1055,7 @@ static esp_err_t screen_get(httpd_req_t *req)
     httpd_resp_set_type(req, "image/bmp");
     if (httpd_resp_send_chunk(req, (const char*)hdr, 54) != ESP_OK) return ESP_FAIL;
     uint8_t *row = malloc(W*3); const uint16_t *src = (const uint16_t*)fb;
+    if (!row) { httpd_resp_send_chunk(req, NULL, 0); return ESP_FAIL; }
     esp_err_t e = ESP_OK;
     for (int y=H-1; y>=0 && e==ESP_OK; y--) {
         for (int x=0; x<W; x++) {
@@ -975,11 +1083,150 @@ static esp_err_t ui_nav_get(httpd_req_t *req)
     httpd_resp_sendstr(req, "ok"); return ESP_OK;
 }
 
+/* ---- Bambu Lab cloud (ALPHA) ---- */
+static esp_err_t bambu_info_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "auth", bambu_cloud_is_authed());
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(o); return ESP_OK;
+}
+static void send_res(httpd_req_t *req, const char *res)
+{
+    cJSON *r = cJSON_CreateObject(); cJSON_AddStringToObject(r, "res", res);
+    char *js = cJSON_PrintUnformatted(r);
+    httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(r);
+}
+static esp_err_t bambu_login_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body); free(body);
+    const char *res = "err";
+    if (j) {
+        cJSON *e = cJSON_GetObjectItem(j, "email"), *p = cJSON_GetObjectItem(j, "password");
+        if (cJSON_IsString(e) && cJSON_IsString(p)) {
+            bc_status_t st = bambu_cloud_login(e->valuestring, p->valuestring);
+            res = st == BC_OK ? "ok" : st == BC_NEED_CODE ? "code" : "err";
+        }
+        cJSON_Delete(j);
+    }
+    send_res(req, res); return ESP_OK;
+}
+static esp_err_t bambu_code_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body); free(body);
+    const char *res = "err";
+    if (j) {
+        cJSON *e = cJSON_GetObjectItem(j, "email"), *c = cJSON_GetObjectItem(j, "code");
+        if (cJSON_IsString(e) && cJSON_IsString(c))
+            res = (bambu_cloud_submit_code(e->valuestring, c->valuestring) == BC_OK) ? "ok" : "err";
+        cJSON_Delete(j);
+    }
+    send_res(req, res); return ESP_OK;
+}
+static esp_err_t bambu_token_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body); free(body);
+    const char *res = "err";
+    if (j) {
+        cJSON *t = cJSON_GetObjectItem(j, "token");
+        if (cJSON_IsString(t)) res = (bambu_cloud_set_token(t->valuestring) == ESP_OK) ? "ok" : "err";
+        cJSON_Delete(j);
+    }
+    send_res(req, res); return ESP_OK;
+}
+static esp_err_t bambu_pull_post(httpd_req_t *req)
+{
+    pp_printer_t *devs = heap_caps_malloc(16 * sizeof(pp_printer_t), MALLOC_CAP_SPIRAM);
+    if (!devs) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    int n = bambu_cloud_list_devices(devs, 16), added = 0;
+    for (int i = 0; i < n; i++) {
+        bool exists = false;
+        for (int k = 0; k < printer_store_count(); k++) {
+            pp_printer_t e;
+            if (printer_store_get(k, &e) && strcmp(e.host, devs[i].host) == 0) { exists = true; break; }
+        }
+        if (!exists && printer_store_add(&devs[i]) >= 0) added++;   /* httpd task: NVS write is safe */
+    }
+    heap_caps_free(devs);
+    app_state_printers_changed();
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddNumberToObject(r, "found", n); cJSON_AddNumberToObject(r, "added", added);
+    char *js = cJSON_PrintUnformatted(r);
+    httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, js);
+    free(js); cJSON_Delete(r); return ESP_OK;
+}
+static esp_err_t bambu_logout_post(httpd_req_t *req)
+{
+    bambu_cloud_logout(); httpd_resp_sendstr(req, "ok"); return ESP_OK;
+}
+
+/* ---- opt-in web-interface auth (HTTP Basic) ----
+ * When a web password is set, every route is gated. Empty password => open (the default).
+ * Each route is registered through auth_wrap, which checks Basic auth then calls the real
+ * handler stashed in user_ctx. */
+static bool web_authed(httpd_req_t *req)
+{
+    const char *pw = prefs_web_pass();
+    if (!pw[0]) return true;                       /* auth disabled */
+    size_t hl = httpd_req_get_hdr_value_len(req, "Authorization");
+    if (hl == 0 || hl > 200) return false;
+    char hdr[208];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) return false;
+    if (strncmp(hdr, "Basic ", 6) != 0) return false;
+    unsigned char dec[160]; size_t dl = 0;
+    if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &dl, (const unsigned char *)hdr + 6, strlen(hdr + 6)) != 0) return false;
+    dec[dl] = '\0';
+    const char *colon = strchr((char *)dec, ':');   /* "user:pass" — username ignored */
+    const char *given = colon ? colon + 1 : (char *)dec;
+    return strcmp(given, pw) == 0;
+}
+
+static esp_err_t web_unauth(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Prusa Touch\"");
+    httpd_resp_sendstr(req, "Authentication required");
+    return ESP_OK;
+}
+
+static esp_err_t auth_wrap(httpd_req_t *req)
+{
+    esp_err_t (*real)(httpd_req_t *) = req->user_ctx;
+    if (!web_authed(req)) return web_unauth(req);
+    return real(req);
+}
+
+/* Set the security opt-ins: {webpw, pin, lockmin}. Each field optional; "" clears.
+ * Runs on the httpd task (internal stack), so the NVS writes are safe here. */
+static esp_err_t security_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    if (j) {
+        cJSON *wp = cJSON_GetObjectItem(j, "webpw");
+        cJSON *pin = cJSON_GetObjectItem(j, "pin");
+        cJSON *lm = cJSON_GetObjectItem(j, "lockmin");
+        if (cJSON_IsString(wp)) prefs_set_web_pass(wp->valuestring);
+        if (cJSON_IsString(pin)) prefs_set_scrpin(pin->valuestring);
+        if (cJSON_IsNumber(lm)) { int m = lm->valueint; prefs_set_lock_min(m < 0 ? 0 : m > 240 ? 240 : (uint8_t)m); }
+        cJSON_Delete(j);
+        pt_display_schedule_ui(ui_apply_lock_cfg, NULL);   /* re-arm the idle-lock timer */
+    }
+    free(body);
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
 void web_start(void)
 {
     s_upd_mtx = xSemaphoreCreateMutex();
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 48; cfg.stack_size = 20480;
+    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 56; cfg.stack_size = 20480;
     httpd_handle_t srv = NULL;
     if (httpd_start(&srv, &cfg) != ESP_OK) return;
     httpd_uri_t rs[] = {
@@ -1009,7 +1256,21 @@ void web_start(void)
         { "/api/update/check", HTTP_GET, update_check_get }, { "/api/update/apply", HTTP_POST, update_apply_post },
         { "/api/update/progress", HTTP_GET, update_progress_get }, { "/api/info", HTTP_GET, info_get },
         { "/api/fleet", HTTP_GET, fleet_get }, { "/api/screen.bmp", HTTP_GET, screen_get },
-        { "/api/ui", HTTP_GET, ui_get }, { "/api/ui/nav", HTTP_GET, ui_nav_get }
+        { "/api/ui", HTTP_GET, ui_get }, { "/api/ui/nav", HTTP_GET, ui_nav_get },
+        { "/api/security", HTTP_POST, security_post },
+        { "/api/bambu/info", HTTP_GET, bambu_info_get },
+        { "/api/bambu/login", HTTP_POST, bambu_login_post },
+        { "/api/bambu/code", HTTP_POST, bambu_code_post },
+        { "/api/bambu/token", HTTP_POST, bambu_token_post },
+        { "/api/bambu/pull", HTTP_POST, bambu_pull_post },
+        { "/api/bambu/logout", HTTP_POST, bambu_logout_post },
     };
-    for (size_t i=0; i<sizeof(rs)/sizeof(rs[0]); i++) httpd_register_uri_handler(srv, &rs[i]);
+    /* Register each route through auth_wrap, stashing the real handler in user_ctx. When a web
+     * password is set, auth_wrap gates every route; otherwise it's a transparent pass-through. */
+    for (size_t i=0; i<sizeof(rs)/sizeof(rs[0]); i++) {
+        httpd_uri_t u = rs[i];
+        u.user_ctx = (void *)u.handler;
+        u.handler  = auth_wrap;
+        httpd_register_uri_handler(srv, &u);
+    }
 }

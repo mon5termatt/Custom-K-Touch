@@ -31,6 +31,10 @@ void ui_apply_status(void *status_copy);     /* arg: pp_status_t*     */
 void ui_apply_files(void *file_list_copy);    /* arg: pp_file_list_t*  */
 void ui_apply_wifi_list(void *wifi_list_copy);  /* arg: pp_wifi_list_t* */
 void ui_apply_dashboard(void *dash_copy);     /* arg: pp_dash_t*       */
+void ui_apply_printers(void *unused);          /* rebuild the Settings printer list (after a store write) */
+void ui_apply_lock_cfg(void *unused);          /* (re)arm the idle screen-lock timer after a config change */
+void ui_lock_now(void);                        /* engage the screen lock immediately (manual lock) */
+void ui_show_lock_prompt(void);                /* pop the PIN-unlock prompt (badge tap / preview)  */
 void ui_apply_farm(void *farm_copy);          /* arg: pp_farm_t* (Prusa Farm view) */
 void ui_apply_thumb(void *image_copy);        /* arg: pp_image_t* (takes ownership) */
 

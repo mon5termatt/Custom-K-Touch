@@ -1,6 +1,7 @@
 /* Prusa-Touch — user preferences, persisted in NVS. See prefs.h. */
 #include "prefs.h"
 #include "nvs.h"
+#include <string.h>
 
 #define NS "ppprefs"
 
@@ -9,12 +10,27 @@ static bool      s_hide_offline = false;
 static pp_logo_t s_logo = PP_LOGO_STACKED;
 static bool      s_auto_update = false;   /* opt-in: off by default */
 static pp_orient_t s_orient = PP_ORIENT_LANDSCAPE;
+/* Security opt-ins (all off/empty by default). */
+static uint8_t   s_lock_min = 0;          /* auto-lock the screen after N idle minutes (0 = off) */
+static char      s_scrpin[12] = "";       /* PIN to unlock on-device actions while locked        */
+static char      s_webpw[40]  = "";       /* password gating the web interface (Basic auth)      */
 
 static void save_u8(const char *key, uint8_t v)
 {
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u8(h, key, v);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void save_str(const char *key, const char *v)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
+        if (v && v[0]) nvs_set_str(h, key, v);
+        else           nvs_erase_key(h, key);
         nvs_commit(h);
         nvs_close(h);
     }
@@ -30,6 +46,9 @@ void prefs_load(void)
     if (nvs_get_u8(h, "logo", &v) == ESP_OK && v <= PP_LOGO_SINGLE) s_logo = (pp_logo_t)v;
     if (nvs_get_u8(h, "autoupd", &v) == ESP_OK) s_auto_update = (v != 0);
     if (nvs_get_u8(h, "orient", &v) == ESP_OK && v <= PP_ORIENT_PORTRAIT_FLIPPED) s_orient = (pp_orient_t)v;
+    if (nvs_get_u8(h, "lockmin", &v) == ESP_OK) s_lock_min = v;
+    size_t sz = sizeof(s_scrpin); nvs_get_str(h, "scrpin", s_scrpin, &sz);
+    sz = sizeof(s_webpw); nvs_get_str(h, "webpw", s_webpw, &sz);
     nvs_close(h);
 }
 
@@ -47,3 +66,13 @@ void prefs_set_auto_update(bool v) { s_auto_update = v; save_u8("autoupd", v ? 1
 
 pp_orient_t prefs_orient(void) { return s_orient; }
 void prefs_set_orient(pp_orient_t o) { if (o <= PP_ORIENT_PORTRAIT_FLIPPED) { s_orient = o; save_u8("orient", (uint8_t)o); } }
+
+/* --- security opt-ins --- */
+uint8_t prefs_lock_min(void) { return s_lock_min; }
+void prefs_set_lock_min(uint8_t m) { s_lock_min = m; save_u8("lockmin", m); }
+
+const char *prefs_scrpin(void) { return s_scrpin; }
+void prefs_set_scrpin(const char *p) { strlcpy(s_scrpin, p ? p : "", sizeof(s_scrpin)); save_str("scrpin", s_scrpin); }
+
+const char *prefs_web_pass(void) { return s_webpw; }
+void prefs_set_web_pass(const char *p) { strlcpy(s_webpw, p ? p : "", sizeof(s_webpw)); save_str("webpw", s_webpw); }

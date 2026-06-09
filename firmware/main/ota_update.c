@@ -124,29 +124,43 @@ bool ota_update_check(ota_check_t *out)
     return ok;
 }
 
-static int s_progress = -1;
+#define OTA_IDLE (-1)   /* not running */
+#define OTA_ERR  (-2)   /* last attempt failed (distinct from idle so the UI can say so) */
+static int  s_progress = OTA_IDLE;
+static char s_msg[80] = "";   /* last failure reason, surfaced on the web UI */
 
 int ota_update_get_progress(void) { return s_progress; }
+const char *ota_update_get_msg(void) { return s_msg; }
+
+static void ota_fail(esp_err_t e)
+{
+    s_progress = OTA_ERR;
+    strlcpy(s_msg, esp_err_to_name(e), sizeof(s_msg));
+}
 
 void ota_update_apply(const char *bin_url)
 {
     if (!bin_url || !bin_url[0]) return;
     ESP_LOGI(TAG, "OTA from %s", bin_url);
-    s_progress = 0;
+    s_progress = 0; s_msg[0] = '\0';
 
     esp_http_client_config_t http = {
         .url = bin_url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 30000,
         .keep_alive_enable = true,
+        /* GitHub redirects release assets to a signed CDN URL ~900 chars long, which overflows
+         * the 512-byte default rx buffer and fails the OTA. Give it real headroom. */
+        .buffer_size = 4096,
+        .buffer_size_tx = 2048,
     };
     esp_https_ota_config_t cfg = { .http_config = &http };
-    
+
     esp_https_ota_handle_t ota = NULL;
     esp_err_t e = esp_https_ota_begin(&cfg, &ota);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "OTA begin failed: %s", esp_err_to_name(e));
-        s_progress = -1;
+        ota_fail(e);
         return;
     }
 
@@ -154,7 +168,7 @@ void ota_update_apply(const char *bin_url)
     while (1) {
         e = esp_https_ota_perform(ota);
         if (e != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
-        
+
         int read = esp_https_ota_get_image_len_read(ota);
         if (total > 0) {
             s_progress = (read * 100) / total;
@@ -162,6 +176,8 @@ void ota_update_apply(const char *bin_url)
     }
 
     if (e == ESP_OK) {
+        /* finish() validates + releases the handle on BOTH success and validate-failure — so we
+         * must NOT abort() afterwards (that would touch a freed handle). */
         e = esp_https_ota_finish(ota);
         if (e == ESP_OK) {
             s_progress = 100;
@@ -169,10 +185,14 @@ void ota_update_apply(const char *bin_url)
             vTaskDelay(pdMS_TO_TICKS(500));
             esp_restart();
         }
+        ESP_LOGE(TAG, "OTA finish/validate failed: %s", esp_err_to_name(e));
+        ota_fail(e);
+        return;
     }
 
+    /* perform() failed mid-stream: the handle is still live, so abort() to release it. */
     ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(e));
-    s_progress = -1;
+    ota_fail(e);
     esp_https_ota_abort(ota);
 }
 

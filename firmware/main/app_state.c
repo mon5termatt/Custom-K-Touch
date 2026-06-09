@@ -2,6 +2,8 @@
 #include "app_state.h"
 #include "prusalink.h"
 #include "moonraker.h"
+#include "bambu.h"
+#include "bambu_cloud.h"
 #include "printer_store.h"
 #include "prefs.h"
 #include "wifi.h"
@@ -45,6 +47,8 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
 {
     if (i < 0 || i >= PP_MAX_PRINTERS) return PP_BK_PRUSALINK;
     if (strncmp(pr->host, "cloud:", 6) == 0) return PP_BK_PRUSA_CONNECT;
+    if (strncmp(pr->host, "bambu:", 6) == 0 ||
+        strncmp(pr->host, "bambucloud:", 11) == 0) return PP_BK_BAMBU;   /* LAN or cloud; bambu.c routes */
     if (s_backend[i] == PP_BK_UNKNOWN) {
         s_backend[i] = moonraker_probe(pr) ? PP_BK_MOONRAKER : PP_BK_PRUSALINK;
     }
@@ -58,6 +62,7 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
 static esp_err_t be_gcode(pp_backend_t bk, const pp_printer_t *pr, const char *g)
 {
     if (bk == PP_BK_PRUSA_CONNECT) return prusa_connect_gcode(pr->host + 6, g);
+    if (bk == PP_BK_BAMBU)         return bambu_gcode(pr, g);
     return (bk == PP_BK_MOONRAKER) ? moonraker_gcode(pr, g) : prusalink_gcode(g);
 }
 static int              s_poll_idx;                 /* round-robin cursor             */
@@ -141,6 +146,24 @@ void app_state_dialog_action(int dialog_id, const char *button)
 {
     pp_cmd_t cmd = { .kind = PP_CMD_DIALOG_ACTION, .index = dialog_id };
     strlcpy(cmd.path, button ? button : "", sizeof(cmd.path));
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_store_add(const pp_printer_t *p)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_STORE_ADD };
+    if (p) cmd.printer = *p;
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+void app_state_store_update(int idx, const pp_printer_t *p)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_STORE_UPDATE, .index = idx };
+    if (p) cmd.printer = *p;
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+void app_state_store_remove(int idx)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_STORE_REMOVE, .index = idx };
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -305,15 +328,36 @@ static bool poll_printer(int i)
         return false;
     }
 
-    if (bk == PP_BK_MOONRAKER) {
+    if (bk == PP_BK_BAMBU) {
+        if (bambu_get_status_of(&pr, &fresh) != ESP_OK) {
+            /* Unreachable (off, wrong access code, or Developer Mode disabled): show offline. */
+            bool was_online = false;
+            if (i >= 0 && i < PP_MAX_PRINTERS) {
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                was_online = s_cache[i].online;
+                memset(&s_cache[i], 0, sizeof(s_cache[i]));
+                strlcpy(s_cache[i].printer_name, pr.name, sizeof(s_cache[i].printer_name));
+                if (i == active) s_status.online = false;
+                xSemaphoreGive(s_lock);
+            }
+            return was_online;
+        }
+        /* The report carries identity inline; cache the model once for the detail screen. */
+        if (i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            strlcpy(s_info_model[i], fresh.model, sizeof(s_info_model[i]));
+            s_info_control[i] = true;
+            xSemaphoreGive(s_lock);
+        }
+    } else if (bk == PP_BK_MOONRAKER) {
         if (moonraker_get_status_of(&pr, &fresh) != ESP_OK) return false;
     } else {
         if (prusalink_get_status_of(&pr, &fresh) != ESP_OK) return false;
     }
     strlcpy(fresh.printer_name, pr.name, sizeof(fresh.printer_name));
 
-    /* Identity (model/firmware/control): one blocking fetch per printer, then reuse cache. */
-    if (fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
+    /* Identity (model/firmware/control): one blocking fetch per HTTP printer, then reuse cache. */
+    if (bk != PP_BK_BAMBU && fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
         char m[28] = {0}, fw[24] = {0}, u[40] = {0};
         bool ctl = false;
         bool got;
@@ -432,23 +476,27 @@ static void run_command(const pp_cmd_t *cmd)
     pp_backend_t abk = (have_apr && aidx >= 0) ? detect_backend(aidx, &apr) : PP_BK_PRUSALINK;
     bool moon = (abk == PP_BK_MOONRAKER);
     bool cloud = (abk == PP_BK_PRUSA_CONNECT);
+    bool bambu = (abk == PP_BK_BAMBU);
     const char *uuid = cloud ? apr.host + 6 : NULL;
 
     switch (cmd->kind) {
     case PP_CMD_PAUSE:
         if (cloud) prusa_connect_pause(uuid);
+        else if (bambu) bambu_pause(&apr);
         else moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
         break;
     case PP_CMD_RESUME:
         if (cloud) prusa_connect_resume(uuid);
+        else if (bambu) bambu_resume(&apr);
         else moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
         break;
     case PP_CMD_STOP:
         if (cloud) prusa_connect_stop(uuid);
+        else if (bambu) bambu_stop(&apr);
         else moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
         break;
     case PP_CMD_PRINT:
-        if (cloud) ESP_LOGW(TAG, "Cloud print not implemented");
+        if (cloud || bambu) ESP_LOGW(TAG, "print-from-file not implemented for this backend");
         else moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path);
         break;
     case PP_CMD_SET_PRINTER:
@@ -585,6 +633,30 @@ static void run_command(const pp_cmd_t *cmd)
         /* Answer the active printer's attention dialog (cloud only). index=dialog_id, path=button. */
         if (cloud && cmd->index) prusa_connect_dialog_action(uuid, cmd->index, cmd->path);
         break;
+    case PP_CMD_STORE_ADD: {
+        /* Printer-store NVS writes run here (net task), never on the LVGL/PSRAM-stack task. */
+        int idx = printer_store_add(&cmd->printer);
+        app_state_printers_changed();
+        if (idx >= 0) printer_store_set_active(idx);
+        pt_display_schedule_ui(ui_apply_printers, NULL);
+        publish_dashboard();
+        publish_status();
+        return;
+    }
+    case PP_CMD_STORE_UPDATE:
+        printer_store_update(cmd->index, &cmd->printer);
+        app_state_printers_changed();
+        pt_display_schedule_ui(ui_apply_printers, NULL);
+        publish_dashboard();
+        publish_status();
+        return;
+    case PP_CMD_STORE_REMOVE:
+        printer_store_remove(cmd->index);
+        app_state_printers_changed();
+        pt_display_schedule_ui(ui_apply_printers, NULL);
+        publish_dashboard();
+        publish_status();
+        return;
     case PP_CMD_DASH_REFRESH:
         publish_dashboard();
         return;
@@ -679,7 +751,7 @@ static void net_task(void *arg)
                 did_cloud = true;
                 pp_status_t *fleet = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
                 int count = 0;
-                if (prusa_connect_get_fleet(fleet, PP_MAX_PRINTERS, &count) == ESP_OK) {
+                if (fleet && prusa_connect_get_fleet(fleet, PP_MAX_PRINTERS, &count) == ESP_OK) {
                     xSemaphoreTake(s_lock, portMAX_DELAY);
                     int act = printer_store_active();
                     for (int i = 0; i < n; i++) {
@@ -792,6 +864,7 @@ static void net_task(void *arg)
 void app_state_start(void)
 {
     prusa_connect_init();
+    bambu_cloud_init();
     s_lock = xSemaphoreCreateMutex();
     s_cmds = xQueueCreate(8, sizeof(pp_cmd_t));
     memset(&s_status, 0, sizeof(s_status));
