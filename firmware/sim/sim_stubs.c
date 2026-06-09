@@ -68,7 +68,7 @@ void app_state_set_pref(pp_pref_kind_t pref, int value) { (void)pref; (void)valu
 bool wifi_is_connected(void) { return true; }
 bool wifi_is_ap_active(void) { return false; }
 const char *wifi_ap_ssid(void) { return "PrusaTouch-SIM"; }
-const char *wifi_ip_str(void)  { return "192.168.0.203"; }
+const char *wifi_ip_str(void)  { return "192.168.1.123"; }   /* mock display value */
 
 /* ---------- prefs ---------- */
 /* Orientation is driven by the display dimensions the sim creates (see sim_main), so the UI's
