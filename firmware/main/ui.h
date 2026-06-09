@@ -16,6 +16,7 @@ typedef struct {
 /* Snapshot of every configured printer's status, for the fleet dashboard. */
 typedef struct {
     int         count;
+    bool        conn_expired;   /* cloud printers configured but Connect sign-in lapsed */
     pp_status_t items[PP_MAX_PRINTERS];
 } pp_dash_t;
 
@@ -30,6 +31,7 @@ void ui_apply_status(void *status_copy);     /* arg: pp_status_t*     */
 void ui_apply_files(void *file_list_copy);    /* arg: pp_file_list_t*  */
 void ui_apply_wifi_list(void *wifi_list_copy);  /* arg: pp_wifi_list_t* */
 void ui_apply_dashboard(void *dash_copy);     /* arg: pp_dash_t*       */
+void ui_apply_farm(void *farm_copy);          /* arg: pp_farm_t* (Prusa Farm view) */
 void ui_apply_thumb(void *image_copy);        /* arg: pp_image_t* (takes ownership) */
 
 typedef struct {
@@ -46,4 +48,11 @@ const char *ui_current_screen(void);          /* active screen name (test verify
 /* Apply the logo preference (show/hide wordmark bylines). Scheduled on the LVGL
  * thread by app_state after the NVS write. arg unused. */
 void ui_apply_logo(void *unused);
+
+/* Apply the screen-orientation preference (landscape / 180°). Scheduled on the LVGL
+ * thread by app_state after the NVS write, and once at boot. arg unused. */
+void ui_apply_orient(void *unused);
+
+/* Apply a fetched webcam snapshot (JPEG) to the Control screen. arg: pp_image_t* (owned). */
+void ui_apply_snapshot(void *arg);
 

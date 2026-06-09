@@ -19,11 +19,15 @@ typedef enum {
     PP_CMD_PREHEAT,       /* uses index=material_idx     */
     PP_CMD_DASH_REFRESH,
     PP_CMD_SET_PREF,      /* uses index = packed pref (NVS write off the LVGL task) */
+    PP_CMD_FARM_REFRESH,  /* fetch Prusa Farm stats+orders -> ui_apply_farm */
+    PP_CMD_SNAPSHOT,      /* fetch active cloud printer's webcam JPEG -> ui_apply_snapshot */
+    PP_CMD_HOME,          /* home axes (Connect HOME / gcode G28), no args */
+    PP_CMD_MOVE,          /* relative jog: index=axis(0=X,1=Y,2=Z), i32a=dist*100 mm, i32b=feedrate */
 } pp_cmd_kind_t;
 
 /* Preference writes are routed through the net task because the LVGL task's stack
  * lives in PSRAM and cannot perform flash/NVS writes. */
-typedef enum { PP_PREF_SORT, PP_PREF_HIDE_OFFLINE, PP_PREF_LOGO, PP_PREF_AUTOUPDATE } pp_pref_kind_t;
+typedef enum { PP_PREF_SORT, PP_PREF_HIDE_OFFLINE, PP_PREF_LOGO, PP_PREF_AUTOUPDATE, PP_PREF_ORIENT } pp_pref_kind_t;
 void app_state_set_pref(pp_pref_kind_t pref, int value);
 
 typedef struct {
@@ -31,6 +35,8 @@ typedef struct {
     char path[160];
     char arg2[80];
     int  index;
+    int  i32a;   /* generic numeric arg (e.g. jog distance in mm*100) */
+    int  i32b;   /* generic numeric arg (e.g. jog feedrate)           */
 } pp_cmd_t;
 
 /* Start WiFi-independent state machinery: creates the network task that polls
@@ -46,10 +52,14 @@ void app_state_get_fleet(pp_status_t *arr, int max, int *count);
 
 /* Enqueue a control/file command (non-blocking; safe from the LVGL thread). */
 void app_state_post_cmd(pp_cmd_kind_t kind, const char *path);
+/* Post a command carrying numeric args (preheat index, jog axis/distance/feedrate). */
+void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b);
 
 /* Switch the active printer (by store index) and refresh. */
 void app_state_select_printer(int index);
 void app_state_refresh_dashboard(void);
+void app_state_farm_refresh(void);   /* -> ui_apply_farm */
+void app_state_fetch_snapshot(void); /* active cloud printer webcam -> ui_apply_snapshot */
 
 /* Call after the printer store changes (add/edit/remove) so the fleet cache is
  * reset and re-polled (avoids stale/misindexed dashboard cards). */

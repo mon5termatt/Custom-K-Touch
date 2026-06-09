@@ -246,39 +246,48 @@ static void model_from_hostname(const char *host, char *out, size_t n)
 }
 
 esp_err_t prusalink_get_info(const pp_printer_t *pr, char *model, size_t ml,
-                             char *fw, size_t fl, bool *has_control)
+                             char *fw, size_t fl, char *uuid, size_t ul, bool *has_control)
 {
     if (model && ml) model[0] = '\0';
     if (fw && fl) fw[0] = '\0';
+    if (uuid && ul) uuid[0] = '\0';
     if (has_control) *has_control = false;
 
     /* 1. Get model/firmware via /api/version */
     resp_t r = {0};
     int sc = 0;
-    if (do_request(pr, HTTP_METHOD_GET, "/api/version", NULL, &r, &sc) != ESP_OK ||
-        sc != 200 || !r.buf) {
-        free(r.buf);
-        return ESP_FAIL;
+    if (do_request(pr, HTTP_METHOD_GET, "/api/version", NULL, &r, &sc) == ESP_OK &&
+        sc == 200 && r.buf) {
+        cJSON *root = cJSON_Parse(r.buf);
+        if (root) {
+            cJSON *hn = cJSON_GetObjectItemCaseSensitive(root, "hostname");
+            if (model && ml) {
+                model_from_hostname(cJSON_IsString(hn) ? hn->valuestring : "", model, ml);
+            }
+            cJSON *f = cJSON_GetObjectItemCaseSensitive(root, "firmware");
+            if (fw && fl && cJSON_IsString(f) && f->valuestring) {
+                strlcpy(fw, f->valuestring, fl);
+            }
+            cJSON_Delete(root);
+        }
     }
-    cJSON *root = cJSON_Parse(r.buf);
     free(r.buf);
-    if (!root) return ESP_FAIL;
 
-    cJSON *hn = cJSON_GetObjectItemCaseSensitive(root, "hostname");
-    if (model && ml) {
-        model_from_hostname(cJSON_IsString(hn) ? hn->valuestring : "", model, ml);
+    /* 2. Get UUID/fingerprint via /api/v1/info */
+    r.buf = NULL; r.len = r.cap = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/api/v1/info", NULL, &r, &sc) == ESP_OK &&
+        sc == 200 && r.buf) {
+        cJSON *root = cJSON_Parse(r.buf);
+        if (root) {
+            cJSON *fp = cJSON_GetObjectItemCaseSensitive(root, "fingerprint");
+            if (!cJSON_IsString(fp)) fp = cJSON_GetObjectItemCaseSensitive(root, "uuid");
+            if (uuid && ul && cJSON_IsString(fp) && fp->valuestring) {
+                strlcpy(uuid, fp->valuestring, ul);
+            }
+            cJSON_Delete(root);
+        }
     }
-    cJSON *f = cJSON_GetObjectItemCaseSensitive(root, "firmware");
-    if (fw && fl && cJSON_IsString(f) && f->valuestring) {
-        strlcpy(fw, f->valuestring, fl);
-    }
-    cJSON_Delete(root);
-
-    /* 2. Probe for OctoPrint-compat control endpoints (Buddy returns 404) */
-    /* Control stays disabled for PrusaLink. Buddy firmware answers GET /api/printer
-     * but does NOT execute POST /api/printer/command gcode, so the control screen
-     * would be inert. (Klipper/Moonraker control works and is enabled in app_state.)
-     * has_control was initialized to false above. */
+    free(r.buf);
 
     return ESP_OK;
 }
@@ -489,6 +498,10 @@ esp_err_t prusalink_list(const char *path, pp_file_t *arr, int max, int *count)
     *count = 0;
     pp_printer_t pr;
     if (!printer_store_active_get(&pr)) return ESP_FAIL;
+    /* Cloud printer: list files from its local PrusaLink (IP + key learned from Connect),
+     * so the file browser works for Connect-managed printers too. */
+    if (strncmp(pr.host, "cloud:", 6) == 0 && pr.local_host[0])
+        strlcpy(pr.host, pr.local_host, sizeof(pr.host));
     char url[256];
     const char *p = (path && path[0]) ? path : "/";
     /* Always include the path; just guarantee a single leading slash. */

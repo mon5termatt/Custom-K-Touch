@@ -8,6 +8,7 @@ static pp_sort_t s_sort = PP_SORT_STATUS;
 static bool      s_hide_offline = false;
 static pp_logo_t s_logo = PP_LOGO_STACKED;
 static bool      s_auto_update = false;   /* opt-in: off by default */
+static pp_orient_t s_orient = PP_ORIENT_LANDSCAPE;
 
 static void save_u8(const char *key, uint8_t v)
 {
@@ -28,6 +29,7 @@ void prefs_load(void)
     if (nvs_get_u8(h, "hideoff", &v) == ESP_OK) s_hide_offline = (v != 0);
     if (nvs_get_u8(h, "logo", &v) == ESP_OK && v <= PP_LOGO_SINGLE) s_logo = (pp_logo_t)v;
     if (nvs_get_u8(h, "autoupd", &v) == ESP_OK) s_auto_update = (v != 0);
+    if (nvs_get_u8(h, "orient", &v) == ESP_OK && v <= PP_ORIENT_LANDSCAPE_FLIPPED) s_orient = (pp_orient_t)v;
     nvs_close(h);
 }
 
@@ -42,3 +44,6 @@ void prefs_set_logo(pp_logo_t l) { s_logo = l; save_u8("logo", (uint8_t)l); }
 
 bool prefs_auto_update(void) { return s_auto_update; }
 void prefs_set_auto_update(bool v) { s_auto_update = v; save_u8("autoupd", v ? 1 : 0); }
+
+pp_orient_t prefs_orient(void) { return s_orient; }
+void prefs_set_orient(pp_orient_t o) { if (o <= PP_ORIENT_LANDSCAPE_FLIPPED) { s_orient = o; save_u8("orient", (uint8_t)o); } }

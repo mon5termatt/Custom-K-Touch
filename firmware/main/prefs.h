@@ -15,6 +15,11 @@ typedef enum {
     PP_LOGO_SINGLE,       /* single-line [PRUSA|TOUCH], no byline        */
 } pp_logo_t;
 
+typedef enum {
+    PP_ORIENT_LANDSCAPE = 0,     /* 800x480 normal (default)      */
+    PP_ORIENT_LANDSCAPE_FLIPPED, /* 180° (upside-down mounting)   */
+} pp_orient_t;
+
 /* Load cached prefs from NVS (call once at boot, before the UI is built). */
 void prefs_load(void);
 
@@ -30,3 +35,7 @@ void      prefs_set_logo(pp_logo_t l);   /* persists */
 /* Opt-in automatic firmware updates from GitHub Releases (default off). */
 bool prefs_auto_update(void);
 void prefs_set_auto_update(bool v);      /* persists */
+
+/* Screen orientation (default landscape). */
+pp_orient_t prefs_orient(void);
+void        prefs_set_orient(pp_orient_t o);   /* persists */

@@ -22,7 +22,7 @@ esp_err_t prusalink_get_status_of(const pp_printer_t *pr, pp_status_t *out);
 /* One-shot printer identity from GET /api/version: friendly model (derived from
  * the hostname) + firmware version (may be empty on older MINI PrusaLink). */
 esp_err_t prusalink_get_info(const pp_printer_t *pr, char *model, size_t ml,
-                             char *fw, size_t fl, bool *has_control);
+                             char *fw, size_t fl, char *uuid, size_t ul, bool *has_control);
 
 /* Job control. job_id comes from the latest status. */
 esp_err_t prusalink_pause(int job_id);   /* PUT  /api/v1/job/{id}/pause   */

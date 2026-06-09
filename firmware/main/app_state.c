@@ -30,11 +30,11 @@ static const char *TAG = "app_state";
 _Static_assert(WIFI_MAX_SCAN <= PP_WIFI_MAX_SCAN, "wifi scan cap exceeds ssids[] size");
 
 static pp_status_t      s_status;                  /* active printer (detail screen) */
-static EXT_RAM_ATTR pp_status_t      s_cache[PP_MAX_PRINTERS];   /* fleet cache (dashboard)        */
-static EXT_RAM_ATTR char             s_info_model[PP_MAX_PRINTERS][28];  /* lazy /api/version cache */
-static EXT_RAM_ATTR char             s_info_fw[PP_MAX_PRINTERS][24];
-static EXT_RAM_ATTR bool             s_info_control[PP_MAX_PRINTERS];
-static EXT_RAM_ATTR uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
+static EXT_RAM_BSS_ATTR pp_status_t      s_cache[PP_MAX_PRINTERS];   /* fleet cache (dashboard)        */
+static EXT_RAM_BSS_ATTR char             s_info_model[PP_MAX_PRINTERS][28];  /* lazy /api/version cache */
+static EXT_RAM_BSS_ATTR char             s_info_fw[PP_MAX_PRINTERS][24];
+static EXT_RAM_BSS_ATTR bool             s_info_control[PP_MAX_PRINTERS];
+static EXT_RAM_BSS_ATTR uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
 static int              s_cache_count;
 
 /* Detect (and cache) whether a printer speaks PrusaLink or Moonraker. Probe runs
@@ -50,9 +50,13 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
     return (pp_backend_t)s_backend[i];
 }
 
-/* Send a gcode line to whichever backend the active printer speaks. */
+/* Send a gcode line to whichever backend the active printer speaks. Cloud printers
+ * go through Connect's GCODE command (uuid is stored as "cloud:<uuid>" in host); this
+ * is the only control path that works for Buddy-embedded printers, whose local
+ * PrusaLink 404s on gcode endpoints. */
 static esp_err_t be_gcode(pp_backend_t bk, const pp_printer_t *pr, const char *g)
 {
+    if (bk == PP_BK_PRUSA_CONNECT) return prusa_connect_gcode(pr->host + 6, g);
     return (bk == PP_BK_MOONRAKER) ? moonraker_gcode(pr, g) : prusalink_gcode(g);
 }
 static int              s_poll_idx;                 /* round-robin cursor             */
@@ -114,6 +118,24 @@ void app_state_refresh_dashboard(void)
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
+void app_state_farm_refresh(void)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_FARM_REFRESH };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_fetch_snapshot(void)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_SNAPSHOT };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b)
+{
+    pp_cmd_t cmd = { .kind = kind, .index = index, .i32a = i32a, .i32b = i32b };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
 void app_state_set_pref(pp_pref_kind_t pref, int value)
 {
     /* Packed so the NVS write happens on this task, not the PSRAM-stack LVGL task. */
@@ -171,9 +193,74 @@ static void publish_dashboard(void)
     d->count = s_cache_count;
     for (int i = 0; i < s_cache_count && i < PP_MAX_PRINTERS; i++) d->items[i] = s_cache[i];
     xSemaphoreGive(s_lock);
+    /* Auth-expiry signal: at least one cloud printer is configured but the Connect session
+     * has lapsed (refresh token expired → tokens wiped). Drives the dashboard re-connect
+     * banner. Local PrusaLink fallback keeps such printers reachable meanwhile. */
+    d->conn_expired = false;
+    for (int i = 0; i < printer_store_count(); i++) {
+        pp_printer_t pr;
+        if (printer_store_get(i, &pr) && strncmp(pr.host, "cloud:", 6) == 0) {
+            if (!prusa_connect_is_authenticated()) d->conn_expired = true;
+            break;
+        }
+    }
     if (pt_display_schedule_ui(ui_apply_dashboard, d) != LV_RESULT_OK) {
         free(d);
     }
+}
+
+/* Fetch Prusa Farm stats + orders (org from NVS), parse, and push to the LVGL thread.
+ * Runs on the net task (blocking cloud HTTP + cJSON). */
+static int jget(const cJSON *o, const char *k) { return (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(o, k)); }
+
+static void do_farm_refresh(void)
+{
+    pp_farm_t *f = malloc(sizeof(*f));
+    if (!f) return;
+    memset(f, 0, sizeof(*f));
+
+    char *stats = prusa_connect_get_farm_stats(NULL);
+    if (stats) {
+        cJSON *root = cJSON_Parse(stats);
+        cJSON *st = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "data"), "stats");
+        cJSON *pr = cJSON_GetObjectItemCaseSensitive(st, "printers");
+        if (pr) {
+            f->p_active = jget(pr, "active"); f->p_online = jget(pr, "online");
+            f->p_error  = jget(pr, "error");  f->p_total  = jget(pr, "total");
+            f->valid = true;
+        }
+        cJSON_Delete(root);
+        free(stats);
+    }
+
+    char *orders = prusa_connect_get_orders(NULL);
+    if (orders) {
+        cJSON *root = cJSON_Parse(orders);
+        cJSON *oo = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "data"), "order"), "orders");
+        cJSON *edges = cJSON_GetObjectItemCaseSensitive(oo, "edges");
+        cJSON *e = NULL;
+        cJSON_ArrayForEach(e, edges) {
+            if (f->order_count >= 8) break;
+            cJSON *n = cJSON_GetObjectItemCaseSensitive(e, "node");
+            if (!n) continue;
+            cJSON *jc = cJSON_GetObjectItemCaseSensitive(n, "jobCounts");
+            /* Only PROCESSING orders — the Connect Farm UI's order status (Draft/Processing/
+             * Finished/Cancelled). User wants only what's actively being processed; finished
+             * and cancelled aren't shown. */
+            cJSON *stt = cJSON_GetObjectItemCaseSensitive(n, "state");
+            if (!cJSON_IsString(stt) || strcmp(stt->valuestring, "PROCESSING") != 0) continue;
+            cJSON *nm = cJSON_GetObjectItemCaseSensitive(n, "name");
+            int idx = f->order_count++;
+            if (cJSON_IsString(nm)) strlcpy(f->orders[idx].name, nm->valuestring, sizeof(f->orders[idx].name));
+            f->orders[idx].done  = jget(n, "jobsCountCompleted");   /* real completed count (not jobCounts.done=0) */
+            f->orders[idx].attn  = jget(jc, "needAttention");
+            f->orders[idx].total = jget(jc, "created") + jget(jc, "printing") + jget(jc, "done") + jget(jc, "cancelled") + jget(jc, "needAttention");
+        }
+        cJSON_Delete(root);
+        free(orders);
+    }
+
+    if (pt_display_schedule_ui(ui_apply_farm, f) != LV_RESULT_OK) free(f);
 }
 
 /* Poll one printer (by store index) into the cache; also update s_status if it is
@@ -189,31 +276,55 @@ static bool poll_printer(int i)
     pp_status_t fresh;
 
     if (bk == PP_BK_PRUSA_CONNECT) {
-        /* Cloud printers are updated via fleet poll in net_task. */
+        /* If we have a local fallback, try it first. */
+        if (pr.local_host[0]) {
+            pp_printer_t lpr = pr;
+            strlcpy(lpr.host, pr.local_host, sizeof(lpr.host));
+            if (prusalink_get_status_of(&lpr, &fresh) == ESP_OK) {
+                strlcpy(fresh.printer_name, pr.name, sizeof(fresh.printer_name));
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                s_cache[i] = fresh;
+                s_cache[i].is_cloud = false;
+                xSemaphoreGive(s_lock);
+                if (i == active) { xSemaphoreTake(s_lock, portMAX_DELAY); s_status = fresh; xSemaphoreGive(s_lock); }
+                return true;
+            }
+        }
+        /* Cloud printers are otherwise updated via fleet poll in net_task. */
         return false;
     }
 
     if (bk == PP_BK_MOONRAKER) {
-
-        moonraker_get_status_of(&pr, &fresh);
-    } else if (i == active) {
-        prusalink_get_status(&fresh);          /* active: refreshes s_storage */
+        if (moonraker_get_status_of(&pr, &fresh) != ESP_OK) return false;
     } else {
-        prusalink_get_status_of(&pr, &fresh);  /* fleet poll: leaves s_storage */
+        if (prusalink_get_status_of(&pr, &fresh) != ESP_OK) return false;
     }
     strlcpy(fresh.printer_name, pr.name, sizeof(fresh.printer_name));
 
-    /* Identity (model/firmware/control): one blocking fetch per printer, then reuse cache.
-     * The unlocked emptiness check is a benign race (at worst one extra fetch). */
+    /* Identity (model/firmware/control): one blocking fetch per printer, then reuse cache. */
     if (fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
-        char m[28] = {0}, fw[24] = {0};
+        char m[28] = {0}, fw[24] = {0}, u[40] = {0};
         bool ctl = false;
         bool got;
         if (bk == PP_BK_MOONRAKER) {
             got = (moonraker_get_info(&pr, m, sizeof(m), fw, sizeof(fw)) == ESP_OK);
-            ctl = true;   /* Klipper always accepts gcode/print control */
+            ctl = true;
         } else {
-            got = (prusalink_get_info(&pr, m, sizeof(m), fw, sizeof(fw), &ctl) == ESP_OK);
+            got = (prusalink_get_info(&pr, m, sizeof(m), fw, sizeof(fw), u, sizeof(u), &ctl) == ESP_OK);
+            if (got && u[0] && strcmp(pr.uuid, u) != 0) {
+                strlcpy(pr.uuid, u, sizeof(pr.uuid));
+                printer_store_update(i, &pr);
+                /* If we just learned a UUID for a local printer, check if any Cloud printer matches it. */
+                int n = printer_store_count();
+                for (int j = 0; j < n; j++) {
+                    pp_printer_t cp;
+                    if (j != i && printer_store_get(j, &cp) && 
+                        strncmp(cp.host, "cloud:", 6) == 0 && strcmp(cp.host + 6, u) == 0) {
+                        strlcpy(cp.local_host, pr.host, sizeof(cp.local_host));
+                        printer_store_update(j, &cp);
+                    }
+                }
+            }
         }
         if (got && m[0]) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -236,6 +347,7 @@ static bool poll_printer(int i)
     if (i >= 0 && i < PP_MAX_PRINTERS) {
         changed = (memcmp(&s_cache[i], &fresh, sizeof(fresh)) != 0);
         s_cache[i] = fresh;
+        s_cache[i].is_cloud = false;
     }
     s_cache_count = printer_store_count();
     if (i == active) s_status = fresh;
@@ -385,7 +497,7 @@ static void run_command(const pp_cmd_t *cmd)
         return;
     }
     case PP_CMD_LIST: {
-        if (cloud) break;
+        if (cloud && !apr.local_host[0]) break;   /* cloud: list via local PrusaLink once its IP/key are known */
         pp_file_list_t *list = malloc(sizeof(*list));
         if (list) {
             list->count = 0;
@@ -424,16 +536,58 @@ static void run_command(const pp_cmd_t *cmd)
         else be_gcode(abk, &apr, cmd->path);
         break;
     case PP_CMD_PREHEAT: {
-        int m = cmd->index;
-        if (m == 0) { be_gcode(abk, &apr, "M104 S215"); be_gcode(abk, &apr, "M140 S60"); }
-        else if (m == 1) { be_gcode(abk, &apr, "M104 S230"); be_gcode(abk, &apr, "M140 S85"); }
-        else if (m == 2) { be_gcode(abk, &apr, "M104 S260"); be_gcode(abk, &apr, "M140 S100"); }
-        else if (m == 3) { be_gcode(abk, &apr, "M104 S0"); be_gcode(abk, &apr, "M140 S0"); }
+        /* Material presets: PLA / PETG / ASA / Cooldown. Backend-aware: modern Connect
+         * printers take dedicated SET_NOZZLE/HEATBED_TEMPERATURE; Klipper/PrusaLink use gcode. */
+        static const struct { int noz, bed; } P[] = { {215,60}, {230,85}, {260,100}, {0,0} };
+        int m = cmd->index; if (m < 0 || m > 3) m = 0;
+        if (cloud) {
+            prusa_connect_set_nozzle_temp(uuid, P[m].noz);
+            prusa_connect_set_bed_temp(uuid, P[m].bed);
+        } else {
+            char g[16];
+            snprintf(g, sizeof(g), "M104 S%d", P[m].noz); be_gcode(abk, &apr, g);
+            snprintf(g, sizeof(g), "M140 S%d", P[m].bed); be_gcode(abk, &apr, g);
+        }
+        break;
+    }
+    case PP_CMD_HOME:
+        if (cloud) prusa_connect_home(uuid, "XYZ");
+        else       be_gcode(abk, &apr, "G28");
+        break;
+    case PP_CMD_MOVE: {
+        /* Relative jog. index=axis(0=X,1=Y,2=Z), i32a=distance*100 mm (signed), i32b=feedrate. */
+        float dist = cmd->i32a / 100.0f;
+        int   feed = cmd->i32b;
+        if (cloud) {
+            if (cmd->index == 0)      prusa_connect_move(uuid, feed, dist, 0);
+            else if (cmd->index == 1) prusa_connect_move(uuid, feed, 0, dist);
+            else                      prusa_connect_move_z(uuid, feed, dist);
+        } else {
+            char g[40]; const char ax = "XYZ"[cmd->index < 0 || cmd->index > 2 ? 0 : cmd->index];
+            be_gcode(abk, &apr, "G91");                                  /* relative */
+            snprintf(g, sizeof(g), "G1 %c%.2f F%d", ax, dist, feed); be_gcode(abk, &apr, g);
+            be_gcode(abk, &apr, "G90");                                  /* back to absolute */
+        }
         break;
     }
     case PP_CMD_DASH_REFRESH:
         publish_dashboard();
         return;
+    case PP_CMD_FARM_REFRESH:
+        do_farm_refresh();
+        return;
+    case PP_CMD_SNAPSHOT: {
+        /* Active printer's webcam snapshot — cloud only (Connect relays the camera). */
+        pp_image_t *im = malloc(sizeof(*im));
+        if (im) {
+            im->data = NULL; im->len = 0;
+            if (cloud) prusa_connect_fetch_snapshot(uuid, &im->data, &im->len);
+            if (pt_display_schedule_ui(ui_apply_snapshot, im) != LV_RESULT_OK) {
+                free(im->data); free(im);
+            }
+        }
+        return;
+    }
     case PP_CMD_SET_PREF: {
         int pref = cmd->index >> 8, val = cmd->index & 0xFF;   /* NVS write on net task */
         if (pref == PP_PREF_SORT) { prefs_set_sort((pp_sort_t)val); publish_dashboard(); }
@@ -443,6 +597,10 @@ static void run_command(const pp_cmd_t *cmd)
             pt_display_schedule_ui(ui_apply_logo, NULL);   /* relayout on the LVGL task */
         }
         else if (pref == PP_PREF_AUTOUPDATE) { prefs_set_auto_update(val != 0); }
+        else if (pref == PP_PREF_ORIENT) {
+            prefs_set_orient((pp_orient_t)val);
+            pt_display_schedule_ui(ui_apply_orient, NULL);   /* rotate on the LVGL task */
+        }
         return;
     }
     }
@@ -454,6 +612,11 @@ static void net_task(void *arg)
 {
     (void)arg;
     const TickType_t period = pdMS_TO_TICKS(CONFIG_PP_POLL_INTERVAL_MS);
+    /* Render the configured fleet (seeded as offline) immediately, before any cloud poll —
+     * otherwise a logged-out / token-expired boot leaves the dashboard blank until the first
+     * successful poll (which never comes while logged out). */
+    publish_dashboard();
+    publish_status();
     for (;;) {
         int n = printer_store_count();
         if (n > 0) {
@@ -465,11 +628,18 @@ static void net_task(void *arg)
                     has_cloud = true; break;
                 }
             }
-            if (has_cloud && prusa_connect_is_authenticated()) {
+            /* Throttle cloud polling: hitting /app/printers (Cloudflare-fronted) every
+             * ~2 s cycle gets the device rate-limited/blocked. Poll Connect ~every 12 s
+             * instead (the one call returns the whole fleet). */
+            static int s_cloud_tick = 0;
+            bool did_cloud = false;
+            if (has_cloud && prusa_connect_is_authenticated() && (s_cloud_tick++ % 6) == 0) {
+                did_cloud = true;
                 pp_status_t *fleet = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
                 int count = 0;
                 if (prusa_connect_get_fleet(fleet, PP_MAX_PRINTERS, &count) == ESP_OK) {
                     xSemaphoreTake(s_lock, portMAX_DELAY);
+                    int act = printer_store_active();
                     for (int i = 0; i < n; i++) {
                         pp_printer_t pr;
                         if (printer_store_get(i, &pr) && strncmp(pr.host, "cloud:", 6) == 0) {
@@ -477,8 +647,27 @@ static void net_task(void *arg)
                             for (int j = 0; j < count; j++) {
                                 if (strcmp(fleet[j].uuid, uuid) == 0) {
                                     s_cache[i] = fleet[j];
+                                    s_cache[i].is_cloud = true;
+                                    /* poll_printer() skips cloud printers (no local
+                                     * fallback), so the active printer's detail/control
+                                     * status would otherwise go stale — and the CONTROL
+                                     * button (gated on has_control) would never appear.
+                                     * Keep s_status in sync from the fleet snapshot. */
+                                    if (i == act) s_status = s_cache[i];
+                                    /* Learn the printer's LAN IP + PrusaLink key from Connect
+                                     * and persist them as the local fallback, so status/control
+                                     * keep working if Connect auth expires. Only write when they
+                                     * changed (avoids needless NVS wear every poll). */
+                                    if (fleet[j].local_ip[0] &&
+                                        (strcmp(pr.local_host, fleet[j].local_ip) != 0 ||
+                                         strcmp(pr.api_key, fleet[j].link_key) != 0)) {
+                                        strlcpy(pr.local_host, fleet[j].local_ip, sizeof(pr.local_host));
+                                        if (fleet[j].link_key[0]) strlcpy(pr.api_key, fleet[j].link_key, sizeof(pr.api_key));
+                                        printer_store_update(i, &pr);
+                                    }
                                     break;
                                 }
+
                             }
                         }
                     }
@@ -487,11 +676,31 @@ static void net_task(void *arg)
                 if (fleet) heap_caps_free(fleet);
             }
 
+            /* The bulk fleet list omits network_info/prusalink_api_key, so learn each cloud
+             * printer's LAN IP + PrusaLink key from the per-printer endpoint (one printer per
+             * cloud cycle to stay under Connect's rate limits). This seeds the local PrusaLink
+             * fallback so status/files/control keep working when Connect auth expires. */
+            if (did_cloud && prusa_connect_is_authenticated()) {
+                for (int i = 0; i < n; i++) {
+                    pp_printer_t pr;
+                    if (printer_store_get(i, &pr) && strncmp(pr.host, "cloud:", 6) == 0 && !pr.local_host[0]) {
+                        char ip[20] = {0}, key[40] = {0};
+                        if (prusa_connect_get_printer_net(pr.host + 6, ip, sizeof(ip), key, sizeof(key)) == ESP_OK) {
+                            strlcpy(pr.local_host, ip, sizeof(pr.local_host));
+                            if (key[0]) strlcpy(pr.api_key, key, sizeof(pr.api_key));
+                            printer_store_update(i, &pr);
+                            ESP_LOGI(TAG, "learned %s local fallback -> %s", pr.name, ip);
+                        }
+                        break;  /* one per cycle */
+                    }
+                }
+            }
+
             int i = s_poll_idx % n;
             s_poll_idx++;
             bool changed = poll_printer(i);
-            if (i == printer_store_active()) publish_status();
-            if (changed || has_cloud) publish_dashboard();   /* rebuild cards if cloud updated */
+            if (i == printer_store_active() || did_cloud) publish_status();   /* did_cloud refreshes the active cloud printer's detail/control view */
+            if (changed || did_cloud) publish_dashboard();   /* rebuild cards if cloud updated */
         } else {
             /* No printers configured yet. */
             xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -519,7 +728,19 @@ void app_state_start(void)
     memset(&s_status, 0, sizeof(s_status));
     memset(s_cache, 0, sizeof(s_cache));
     s_status.time_remaining = -1;
-    s_cache_count = 0;
+    /* Seed the dashboard cache from the persisted store at boot so printers show
+     * immediately (named, offline) instead of "No printers yet" until the first
+     * poll/edit. Without this, s_cache_count stayed 0 after every reboot. */
+    s_cache_count = printer_store_count();
+    for (int i = 0; i < s_cache_count && i < PP_MAX_PRINTERS; i++) {
+        pp_printer_t pr;
+        if (printer_store_get(i, &pr)) {
+            strlcpy(s_cache[i].printer_name, pr.name, sizeof(s_cache[i].printer_name));
+            s_cache[i].is_cloud = (strncmp(pr.host, "cloud:", 6) == 0);
+        }
+    }
     s_poll_idx = 0;
-    xTaskCreate(net_task, "pp_net", 8192, NULL, 5, NULL);
+    /* 16 KB: cloud TLS (do_http frame ~3.3 KB) + token-refresh + cJSON parsing of
+     * the fleet/stats/orders responses overflowed the old 8 KB stack (crash loop). */
+    xTaskCreate(net_task, "pp_net", 16384, NULL, 5, NULL);
 }

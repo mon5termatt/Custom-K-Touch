@@ -15,6 +15,7 @@
 #include "draw/lv_image_decoder.h"       /* lv_image_decoder_get_info           */
 
 #include "esp_attr.h"
+#include "esp_heap_caps.h"   /* PSRAM allocation for the fleet snapshot */
 
 static const char *TAG = "ui";
 
@@ -26,12 +27,13 @@ static lv_obj_t *s_boot_status;
 static lv_obj_t *s_scr_dash;       /* fleet dashboard (home)  */
 static lv_obj_t *s_dash_grid;      /* scrollable card grid    */
 static int       s_dash_count;
+static pp_status_t *s_dash_items;  /* persistent fleet snapshot (PSRAM) for instant card-open */
 typedef struct {
     uint8_t       *buf;
     lv_image_dsc_t dsc;
     char           url[160];
 } pp_card_thumb_t;
-static EXT_RAM_ATTR pp_card_thumb_t s_card_thumbs[PP_MAX_PRINTERS];
+static EXT_RAM_BSS_ATTR pp_card_thumb_t s_card_thumbs[PP_MAX_PRINTERS];
 static lv_obj_t      *s_scr_status;     /* per-printer detail      */
 static lv_obj_t *s_scr_control;    /* preheat/jog/home        */
 static lv_obj_t *s_scr_files;
@@ -39,6 +41,9 @@ static lv_obj_t *s_scr_printers;
 static lv_obj_t *s_scr_addform;
 static lv_obj_t *s_scr_about;
 static lv_obj_t *s_scr_prefs;      /* Preferences (sort/filter/logo) */
+static lv_obj_t *s_scr_farm;       /* Prusa Farm (org stats + orders) */
+static lv_obj_t *s_farm_stat;      /* farm printer-summary label */
+static lv_obj_t *s_farm_list;      /* farm orders container */
 
 /* header title (shows active printer name) */
 static lv_obj_t *s_title_lbl;
@@ -52,6 +57,7 @@ static lv_obj_t *s_pref_sort_dd;
 static lv_obj_t *s_pref_logo_dd;
 static lv_obj_t *s_pref_hideoff_sw;
 static lv_obj_t *s_pref_autoupd_sw;
+static lv_obj_t *s_pref_orient_dd;
 
 /* printer picker + add form */
 static lv_obj_t *s_pr_list;
@@ -78,6 +84,7 @@ static char      s_wifi_selected[33];
 static lv_obj_t *s_conn_dot;
 static lv_obj_t *s_detail_img;     /* hero: model render on orange tile     */
 static lv_obj_t *s_badge;          /* hero: state badge chip                */
+static lv_obj_t *s_herotop;        /* hero: name+badge strip (state-tinted) */
 static lv_obj_t *s_state_lbl;      /* hero: state text (badge label)        */
 static lv_obj_t *s_model_lbl;      /* hero: model sub-line                  */
 static lv_obj_t *s_nozzle_lbl;
@@ -109,6 +116,11 @@ static lv_image_dsc_t s_thumb_dsc;      /* descriptor over s_thumb_buf */
 static uint8_t       *s_thumb_buf;      /* owned PNG bytes on display  */
 static char           s_sel_path[160];  /* file selected for printing  */
 
+static lv_obj_t      *s_snap_img;       /* lv_image (webcam JPEG, Control screen) */
+static lv_obj_t      *s_snap_ph;        /* placeholder label                      */
+static lv_image_dsc_t s_snap_dsc;       /* descriptor over s_snap_buf             */
+static uint8_t       *s_snap_buf;       /* owned JPEG bytes on display            */
+
 static void fmt_eta(int secs, char *out, size_t n)
 {
     if (secs < 0) { snprintf(out, n, "--"); return; }
@@ -122,8 +134,10 @@ static void on_printers_clicked(lv_event_t *e);
 static void refresh_printers_list(void);
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
+static void on_farm_open(lv_event_t *e);
 static void on_prefs_open(lv_event_t *e);
 static void thumb_clear(void);
+static void snap_clear(void);
 static lv_obj_t *make_header(lv_obj_t *parent, const char *text);
 static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_coord_t w);
@@ -192,6 +206,9 @@ static void on_control_back(lv_event_t *e)
 static void on_control_clicked(lv_event_t *e)
 {
     (void)e;
+    snap_clear();                  /* drop any prior printer's frame */
+    if (s_snap_ph) lv_label_set_text(s_snap_ph, "Loading webcam\xE2\x80\xA6");
+    app_state_fetch_snapshot();    /* load immediately; the 7s timer keeps it live */
     lv_screen_load(s_scr_control);
 }
 
@@ -222,7 +239,7 @@ static lv_obj_t *make_card(lv_obj_t *parent, lv_coord_t w, lv_coord_t h)
     lv_obj_set_style_bg_color(c, PP_SURFACE, 0);
     lv_obj_set_style_border_color(c, PP_BORDER, 0);
     lv_obj_set_style_border_width(c, 1, 0);
-    lv_obj_set_style_radius(c, 10, 0);
+    lv_obj_set_style_radius(c, 6, 0);   /* match Connect's 6px card radius */
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
     return c;
 }
@@ -326,10 +343,16 @@ static void build_status_screen(void)
     lv_obj_t *herotop = lv_obj_create(s_scr_status);
     lv_obj_set_size(herotop, 660, 38);
     lv_obj_align(herotop, LV_ALIGN_TOP_LEFT, 112, 66);
-    lv_obj_set_style_bg_opa(herotop, LV_OPA_TRANSP, 0);
+    /* State-tinted strip behind name+badge — mirrors the dashboard card header (recolored
+     * per-state in ui_apply_status). */
+    lv_obj_set_style_bg_opa(herotop, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(herotop, PP_STRIP_GRAY, 0);
+    lv_obj_set_style_radius(herotop, 6, 0);
     lv_obj_set_style_border_width(herotop, 0, 0);
     lv_obj_set_style_pad_all(herotop, 0, 0);
+    lv_obj_set_style_pad_hor(herotop, 10, 0);
     lv_obj_set_style_pad_column(herotop, 12, 0);
+    s_herotop = herotop;
     lv_obj_clear_flag(herotop, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(herotop, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(herotop, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -363,7 +386,7 @@ static void build_status_screen(void)
 
     /* ---- telemetry cells (Connect hero row) ---- */
     s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, "NOZZLE",  &pt_ic_nozzle);
-    s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, "HEATBED", &pt_ic_bed);
+    s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, "BED", &pt_ic_bed);
     s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, "SPEED",   &pt_ic_speed);
     s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, "Z AXIS",  NULL);
 
@@ -445,8 +468,6 @@ static void build_files_screen(void)
     lv_obj_align(toggle, LV_ALIGN_RIGHT_MID, -116, 0);
 
     /* Printer-context banner — makes it explicit that files live on the active printer. */
-...
-
     lv_obj_t *banner = lv_obj_create(s_scr_files);
     lv_obj_set_size(banner, LV_PCT(100), 34);
     lv_obj_align(banner, LV_ALIGN_TOP_MID, 0, 56);
@@ -656,6 +677,11 @@ static void refresh_printers_list(void)
     lv_obj_set_style_bg_color(pf, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(pf, PP_TEXT, 0);
     lv_obj_add_event_cb(pf, on_prefs_open, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *fm = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "Prusa Farm");
+    lv_obj_set_style_bg_color(fm, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(fm, PP_TEXT, 0);
+    lv_obj_add_event_cb(fm, on_farm_open, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *ab = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "About / License");
     lv_obj_set_style_bg_color(ab, PP_SURFACE_HI, 0);
@@ -967,13 +993,23 @@ static void make_nav(lv_obj_t *scr, int active)
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     for (int i = 0; i < 4; i++) {
         lv_obj_t *b = lv_button_create(bar);
-        lv_obj_set_size(b, 188, 50);
-        lv_obj_set_style_bg_color(b, i == active ? PP_ORANGE : PP_SURFACE_HI, 0);
-        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_size(b, 188, 52);
+        /* Connect-style minimalist nav: transparent items, the active one marked by an
+         * orange underline (not a filled pill), inactive labels muted. */
+        lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_radius(b, 0, 0);
+        lv_obj_set_style_shadow_width(b, 0, 0);
+        if (i == active) {
+            lv_obj_set_style_border_side(b, LV_BORDER_SIDE_BOTTOM, 0);
+            lv_obj_set_style_border_color(b, PP_ORANGE, 0);
+            lv_obj_set_style_border_width(b, 3, 0);
+        } else {
+            lv_obj_set_style_border_width(b, 0, 0);
+        }
         lv_obj_add_event_cb(b, cbs[i], LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, labels[i]);
-        lv_obj_set_style_text_color(l, PP_TEXT, 0);
+        lv_obj_set_style_text_color(l, i == active ? PP_TEXT : PP_TEXT_MUTED, 0);
         lv_obj_center(l);
     }
 }
@@ -984,6 +1020,13 @@ static void on_card_clicked(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx >= 0 && idx < s_dash_count) {   /* index may be stale after a remove */
         app_state_select_printer(idx);
+        /* Render the clicked printer's cached status immediately so the detail screen
+         * doesn't show the previously-selected printer for the seconds it takes the next
+         * cloud poll to land. ui_apply_status runs on this (LVGL) thread and frees copy. */
+        if (s_dash_items) {
+            pp_status_t *copy = malloc(sizeof(*copy));
+            if (copy) { *copy = s_dash_items[idx]; ui_apply_status(copy); }
+        }
     }
     lv_screen_load(s_scr_status);   /* open this printer's detail */
 }
@@ -1173,10 +1216,10 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx)
         strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--");
     }
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
-    card_cell(c, X1, R1, "NOZZLE",  nz);
-    card_cell(c, X2, R1, "HEATBED", hb);
-    card_cell(c, X3, R1, "SPEED",   sp);
-    card_cell(c, X1, R2, "Z AXIS",  zx);
+    card_cell(c, X1, R1, "NOZZLE", nz);
+    card_cell(c, X2, R1, "SPEED",  sp);   /* Connect column order: NOZZLE / SPEED / BED */
+    card_cell(c, X3, R1, "BED",    hb);
+    card_cell(c, X1, R2, "Z AXIS", zx);
 
     /* progress (when printing) fills the 2nd/3rd column of row 2 */
     if (s->has_job) {
@@ -1279,6 +1322,14 @@ void ui_apply_logo(void *unused)
     }
 }
 
+void ui_apply_orient(void *unused)
+{
+    (void)unused;
+    lv_display_set_rotation(lv_display_get_default(),
+        prefs_orient() == PP_ORIENT_LANDSCAPE_FLIPPED ? LV_DISPLAY_ROTATION_180
+                                                      : LV_DISPLAY_ROTATION_0);
+}
+
 static void build_dashboard_screen(void)
 {
     s_scr_dash = lv_obj_create(NULL);
@@ -1343,15 +1394,45 @@ void ui_apply_dashboard(void *arg)
     
     /* Save current scroll position to prevent jumping to top on every refresh. */
     int32_t scroll_y = lv_obj_get_scroll_y(s_dash_grid);
-    
+
     lv_obj_clean(s_dash_grid);
     s_dash_count = d->count;
 
     int n = d->count; if (n > PP_MAX_PRINTERS) n = PP_MAX_PRINTERS;
+    if (!s_dash_items)   /* one-time PSRAM alloc — keeps ~30KB off the scarce internal heap (mbedTLS needs it) */
+        s_dash_items = heap_caps_malloc(PP_MAX_PRINTERS * sizeof(pp_status_t), MALLOC_CAP_SPIRAM);
+    if (s_dash_items) for (int i = 0; i < n; i++) s_dash_items[i] = d->items[i];   /* snapshot for instant card-open */
     int order[PP_MAX_PRINTERS];
     for (int i = 0; i < n; i++) order[i] = i;
     s_dash_sort_items = d->items;
     if (n > 1) qsort(order, n, sizeof(int), dash_order_cmp);
+
+    /* Connect sign-in lapsed: prepend a full-width re-connect banner (flex ROW_WRAP gives it
+     * its own row above the cards). No credential entry on-device — the user re-authenticates
+     * from the web Account tab; local PrusaLink fallback keeps configured printers reachable. */
+    if (d->conn_expired) {
+        lv_obj_t *bn = lv_obj_create(s_dash_grid);
+        lv_obj_set_width(bn, LV_PCT(100));
+        lv_obj_set_height(bn, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(bn, PP_ORANGE, 0);
+        lv_obj_set_style_bg_opa(bn, LV_OPA_20, 0);
+        lv_obj_set_style_border_color(bn, PP_ORANGE, 0);
+        lv_obj_set_style_border_width(bn, 1, 0);
+        lv_obj_set_style_radius(bn, 6, 0);
+        lv_obj_set_style_pad_all(bn, 10, 0);
+        lv_obj_clear_flag(bn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *bl = lv_label_create(bn);
+        lv_label_set_long_mode(bl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(bl, LV_PCT(100));
+        lv_obj_set_style_text_color(bl, PP_TEXT, 0);
+        if (wifi_is_connected() && wifi_ip_str()[0])
+            lv_label_set_text_fmt(bl, LV_SYMBOL_WARNING "  Prusa Connect sign-in expired. "
+                "Reconnect from http://%s/ \xE2\x86\x92 Account. Local printers stay reachable.",
+                wifi_ip_str());
+        else
+            lv_label_set_text(bl, LV_SYMBOL_WARNING "  Prusa Connect sign-in expired. "
+                "Reconnect from the web Account tab. Local printers stay reachable.");
+    }
 
     bool hide_off = prefs_hide_offline();
     int shown = 0;
@@ -1383,13 +1464,27 @@ static void on_about_open(lv_event_t *e) { lv_screen_load(s_scr_about); }
 static void on_preheat_clicked(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    app_state_post_cmd(PP_CMD_PREHEAT, (const char *)(intptr_t)idx);
+    app_state_post_cmd_n(PP_CMD_PREHEAT, idx, 0, 0);
 }
 
+/* Jog buttons carry a 2-char token in user_data: "X+","X-","Y+","Y-","Z+","Z-", or "HM"
+ * (home). We post backend-agnostic intent (PP_CMD_MOVE / PP_CMD_HOME); the net task picks
+ * dedicated Connect commands vs gcode per the active printer's backend. */
 static void on_jog_clicked(lv_event_t *e)
 {
-    const char *gcode = (const char *)lv_event_get_user_data(e);
-    app_state_post_cmd(PP_CMD_GCODE, gcode);
+    const char *tok = (const char *)lv_event_get_user_data(e);
+    if (tok[0] == 'H') { app_state_post_cmd_n(PP_CMD_HOME, 0, 0, 0); return; }
+    int axis = (tok[0] == 'X') ? 0 : (tok[0] == 'Y') ? 1 : 2;
+    int dist = (tok[1] == '-') ? -10 : 10;          /* mm */
+    int feed = (axis == 2) ? 600 : 3000;            /* Z slower */
+    app_state_post_cmd_n(PP_CMD_MOVE, axis, dist * 100, feed);   /* i32a = dist*100 */
+}
+
+static void on_snapshot_clicked(lv_event_t *e)
+{
+    (void)e;
+    if (s_snap_ph) lv_label_set_text(s_snap_ph, "Loading\xE2\x80\xA6");   /* "Loading…" */
+    app_state_fetch_snapshot();   /* -> prusa_connect_fetch_snapshot -> ui_apply_snapshot */
 }
 
 static void build_control_screen(void)
@@ -1427,11 +1522,11 @@ static void build_control_screen(void)
     lv_obj_align(jl, LV_ALIGN_TOP_LEFT, 12, 8);
 
     /* X / Y / home jog pad — clean 3x3 cross with gaps so outlines never touch */
-    lv_obj_t *byp  = make_button(jog_card, LV_SYMBOL_UP   " Y+", on_jog_clicked, "G1 Y10 F3000",  NULL);
-    lv_obj_t *bxm  = make_button(jog_card, LV_SYMBOL_LEFT " X-", on_jog_clicked, "G1 X-10 F3000", NULL);
-    lv_obj_t *home = make_button(jog_card, LV_SYMBOL_HOME,       on_jog_clicked, "G28",           NULL);
-    lv_obj_t *bxp  = make_button(jog_card, LV_SYMBOL_RIGHT " X+",on_jog_clicked, "G1 X10 F3000",  NULL);
-    lv_obj_t *bym  = make_button(jog_card, LV_SYMBOL_DOWN " Y-", on_jog_clicked, "G1 Y-10 F3000", NULL);
+    lv_obj_t *byp  = make_button(jog_card, LV_SYMBOL_UP   " Y+", on_jog_clicked, "Y+", NULL);
+    lv_obj_t *bxm  = make_button(jog_card, LV_SYMBOL_LEFT " X-", on_jog_clicked, "X-", NULL);
+    lv_obj_t *home = make_button(jog_card, LV_SYMBOL_HOME,       on_jog_clicked, "HM", NULL);
+    lv_obj_t *bxp  = make_button(jog_card, LV_SYMBOL_RIGHT " X+",on_jog_clicked, "X+", NULL);
+    lv_obj_t *bym  = make_button(jog_card, LV_SYMBOL_DOWN " Y-", on_jog_clicked, "Y-", NULL);
     lv_obj_set_size(byp, 76, 52); lv_obj_set_size(bxm, 76, 52); lv_obj_set_size(home, 76, 52);
     lv_obj_set_size(bxp, 76, 52); lv_obj_set_size(bym, 76, 52);
     lv_obj_align(byp,  LV_ALIGN_TOP_LEFT, 152, 40);
@@ -1441,11 +1536,36 @@ static void build_control_screen(void)
     lv_obj_align(bym,  LV_ALIGN_TOP_LEFT, 152, 152);
 
     /* Z controls */
-    lv_obj_t *bzp = make_button(s_scr_control, "Z+ 10", on_jog_clicked, "G1 Z10 F600", NULL);
-    lv_obj_t *bzm = make_button(s_scr_control, "Z- 10", on_jog_clicked, "G1 Z-10 F600", NULL);
+    lv_obj_t *bzp = make_button(s_scr_control, "Z+ 10", on_jog_clicked, "Z+", NULL);
+    lv_obj_t *bzm = make_button(s_scr_control, "Z- 10", on_jog_clicked, "Z-", NULL);
     lv_obj_set_size(bzp, 120, 50); lv_obj_set_size(bzm, 120, 50);
     lv_obj_align(bzp, LV_ALIGN_TOP_LEFT, 16, 260);
     lv_obj_align(bzm, LV_ALIGN_TOP_LEFT, 150, 260);
+
+    /* Webcam card (bottom-right free area) — live snapshot from Connect, JPEG-decoded
+     * on-device (CONFIG_LV_USE_TJPGD). Parity with the web UI's webcam modal. */
+    lv_obj_t *cam_card = make_card(s_scr_control, 372, 150);
+    lv_obj_align(cam_card, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_t *caml = lv_label_create(cam_card);
+    lv_label_set_text(caml, "WEBCAM");
+    lv_obj_set_style_text_color(caml, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(caml, &lv_font_montserrat_14, 0);
+    lv_obj_align(caml, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_t *cam_btn = make_button(cam_card, "Load", on_snapshot_clicked, NULL, NULL);
+    lv_obj_set_size(cam_btn, 84, 34);
+    lv_obj_align(cam_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
+
+    s_snap_ph = lv_label_create(cam_card);
+    lv_label_set_text(s_snap_ph, "Tap Load for the live camera");
+    lv_obj_set_style_text_color(s_snap_ph, PP_TEXT_MUTED, 0);
+    lv_obj_align(s_snap_ph, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+    s_snap_img = lv_image_create(cam_card);
+    /* Shown 1:1 — Connect's camera thumbnail is ~250x140, which fits this card. TJPGD is a
+     * partial/line decoder and does NOT support lv_image_set_scale (transform needs a full
+     * buffer), so we must not scale it. */
+    lv_obj_align(s_snap_img, LV_ALIGN_CENTER, 0, 8);
+    lv_obj_add_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_about_screen(void)
@@ -1510,6 +1630,80 @@ static void build_about_screen(void)
     lv_obj_align(url, LV_ALIGN_TOP_RIGHT, -55, 314);
 }
 
+/* ---------- Prusa Farm (org-wide printer + order status) ---------- */
+static void on_farm_back(lv_event_t *e) { (void)e; lv_screen_load(s_scr_printers); }
+
+static void build_farm_screen(void)
+{
+    s_scr_farm = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_farm, PP_BG, 0);
+    lv_obj_clear_flag(s_scr_farm, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *bar = make_header(s_scr_farm, "Prusa Farm");
+    lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_farm_back, NULL, 100);
+    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
+
+    s_farm_stat = lv_label_create(s_scr_farm);
+    lv_label_set_text(s_farm_stat, "Loading Prusa Farm...");
+    lv_obj_set_style_text_color(s_farm_stat, PP_TEXT, 0);
+    lv_obj_set_style_text_font(s_farm_stat, &lv_font_montserrat_16, 0);
+    lv_label_set_long_mode(s_farm_stat, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_farm_stat, 768);
+    lv_obj_align(s_farm_stat, LV_ALIGN_TOP_LEFT, 16, 70);
+
+    s_farm_list = lv_obj_create(s_scr_farm);
+    lv_obj_set_size(s_farm_list, 800, 480 - 132);
+    lv_obj_align(s_farm_list, LV_ALIGN_TOP_LEFT, 0, 124);
+    lv_obj_set_style_bg_color(s_farm_list, PP_BG, 0);
+    lv_obj_set_style_border_width(s_farm_list, 0, 0);
+    lv_obj_set_style_pad_all(s_farm_list, 16, 0);
+    lv_obj_set_flex_flow(s_farm_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_farm_list, 8, 0);
+}
+
+void ui_apply_farm(void *arg)
+{
+    pp_farm_t *f = (pp_farm_t *)arg;
+    if (!lv_obj_is_valid(s_farm_stat)) { free(f); return; }
+    if (!f->valid && f->order_count == 0) {
+        lv_label_set_text(s_farm_stat, "Prusa Farm unavailable. Set your Organization ID "
+                          "in the web UI (Farm tab), then reopen.");
+    } else {
+        lv_label_set_text_fmt(s_farm_stat,
+                              "Printers:  %d active   %d online   %d total%s   |   Orders: %d",
+                              f->p_active, f->p_online, f->p_total,
+                              f->p_error ? "   (errors!)" : "", f->order_count);
+    }
+    if (lv_obj_is_valid(s_farm_list)) {
+        lv_obj_clean(s_farm_list);
+        for (int i = 0; i < f->order_count; i++) {
+            lv_obj_t *card = lv_obj_create(s_farm_list);
+            lv_obj_set_width(card, LV_PCT(100));
+            lv_obj_set_height(card, LV_SIZE_CONTENT);
+            lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
+            lv_obj_set_style_border_width(card, 0, 0);
+            lv_obj_set_style_radius(card, 6, 0);
+            lv_obj_set_style_pad_all(card, 10, 0);
+            lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *l = lv_label_create(card);
+            lv_obj_set_style_text_color(l, PP_TEXT, 0);
+            lv_label_set_text_fmt(l, "%s   -   done %d/%d%s",
+                                  f->orders[i].name[0] ? f->orders[i].name : "(order)",
+                                  f->orders[i].done, f->orders[i].total,
+                                  f->orders[i].attn ? "   needs attention" : "");
+        }
+    }
+    free(f);
+}
+
+static void on_farm_open(lv_event_t *e)
+{
+    (void)e;
+    if (lv_obj_is_valid(s_farm_stat)) lv_label_set_text(s_farm_stat, "Loading Prusa Farm...");
+    if (lv_obj_is_valid(s_farm_list)) lv_obj_clean(s_farm_list);
+    app_state_farm_refresh();
+    lv_screen_load(s_scr_farm);
+}
+
 /* ---------- Preferences (sort / filter / logo) ---------- */
 static void on_prefs_back(lv_event_t *e) { (void)e; lv_screen_load(s_scr_printers); }
 
@@ -1531,6 +1725,10 @@ static void on_pref_autoupd_changed(lv_event_t *e)
 {
     app_state_set_pref(PP_PREF_AUTOUPDATE,
                        lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0);
+}
+static void on_pref_orient_changed(lv_event_t *e)
+{
+    app_state_set_pref(PP_PREF_ORIENT, (int)lv_dropdown_get_selected(lv_event_get_target(e)));
 }
 
 static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
@@ -1600,6 +1798,19 @@ static void build_prefs_screen(void)
     lv_obj_align(s_pref_autoupd_sw, LV_ALIGN_TOP_LEFT, 24, 418);
     lv_obj_set_style_bg_color(s_pref_autoupd_sw, PP_ORANGE, LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_pref_autoupd_sw, on_pref_autoupd_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Screen orientation (right column) */
+    lv_obj_t *ol = lv_label_create(s_scr_prefs);
+    lv_label_set_text(ol, "Screen orientation");
+    lv_obj_set_style_text_color(ol, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(ol, &lv_font_montserrat_14, 0);
+    lv_obj_align(ol, LV_ALIGN_TOP_LEFT, 420, 84);
+    s_pref_orient_dd = lv_dropdown_create(s_scr_prefs);
+    lv_dropdown_set_options(s_pref_orient_dd, "Landscape\nLandscape (flipped)");
+    lv_obj_set_width(s_pref_orient_dd, 320);
+    lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, 420, 112);
+    dropdown_dark(s_pref_orient_dd);
+    lv_obj_add_event_cb(s_pref_orient_dd, on_pref_orient_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void on_prefs_open(lv_event_t *e)
@@ -1611,6 +1822,7 @@ static void on_prefs_open(lv_event_t *e)
     else                      lv_obj_remove_state(s_pref_hideoff_sw, LV_STATE_CHECKED);
     if (prefs_auto_update()) lv_obj_add_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
     else                     lv_obj_remove_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
+    lv_dropdown_set_selected(s_pref_orient_dd, (uint16_t)prefs_orient());
     lv_screen_load(s_scr_prefs);
 }
 
@@ -1630,7 +1842,7 @@ static void build_boot_screen(void)
     /* By NomadsGalaxy */
     lv_obj_t *l2 = lv_label_create(s_scr_boot);
     lv_label_set_text(l2, "By NomadsGalaxy");
-    lv_obj_set_style_text_font(l2, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(l2, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(l2, PP_ORANGE, 0);
     lv_obj_align(l2, LV_ALIGN_CENTER, 0, 10);
 
@@ -1657,6 +1869,14 @@ void ui_boot_update(int progress, const char *status)
     }
 }
 
+/* Auto-refresh the Control screen's webcam preview while it's on screen. The snapshot
+ * decode (TJPGD) is cheap and the JPEG buffer lives in PSRAM, so this is light. */
+static void webcam_refresh_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (lv_screen_active() == s_scr_control) app_state_fetch_snapshot();
+}
+
 void ui_init(void)
 {
     card_thumbs_clear();
@@ -1673,11 +1893,15 @@ void ui_init(void)
     build_wifi_screen();
     build_about_screen();
     build_prefs_screen();
+    build_farm_screen();
+    ui_apply_orient(NULL);   /* apply the saved screen orientation */
     /* persistent bottom nav on the primary screens */
     make_nav(s_scr_dash, 0);
     make_nav(s_scr_status, 1);
     make_nav(s_scr_files, 2);
     make_nav(s_scr_printers, 3);
+
+    lv_timer_create(webcam_refresh_timer_cb, 7000, NULL);   /* live webcam on Control screen */
 }
 
 /* ---------- test/automation nav API ----------
@@ -1694,6 +1918,7 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
+        else if (!strcmp(name, "farm"))                               on_farm_open(NULL);
         else if (!strcmp(name, "wifi"))   { wifi_screen_prepare(); lv_screen_load(s_scr_wifi); }
     }
     free(name);
@@ -1720,6 +1945,7 @@ const char *ui_current_screen(void)
     if (s == s_scr_addform)    return "addform";
     if (s == s_scr_about)      return "about";
     if (s == s_scr_prefs)      return "prefs";
+    if (s == s_scr_farm)       return "farm";
     if (s == s_scr_wifi)       return "wifi";
     return "unknown";
 }
@@ -1748,7 +1974,8 @@ void ui_apply_status(void *arg)
         lv_obj_add_flag(s_detail_img, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* hero: state badge (muted tint + white text) + model sub-line */
+    /* hero: state-tinted strip + state badge (muted tint + white text) + model sub-line */
+    lv_obj_set_style_bg_color(s_herotop, s->online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
     lv_obj_set_style_bg_color(s_badge, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
     lv_label_set_text(s_state_lbl, s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE");
     lv_label_set_text(s_model_lbl, s->model[0] ? s->model : "");
@@ -1906,6 +2133,81 @@ void ui_apply_thumb(void *arg)
     lv_obj_add_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
     lv_image_set_src(s_thumb_img, &s_thumb_dsc);
     lv_image_set_scale(s_thumb_img, scale);
+}
+
+/* Webcam snapshot on the Control screen — same RAW-descriptor decode path as the gcode
+ * thumbnail, but the bytes are JPEG (LVGL's TJPGD decoder, enabled via CONFIG_LV_USE_TJPGD).
+ * Brings the touch to parity with the web's webcam modal. */
+static void snap_clear(void)
+{
+    if (!s_snap_img) return;
+    lv_image_set_src(s_snap_img, NULL);
+    lv_image_cache_drop(&s_snap_dsc);
+    if (s_snap_buf) { free(s_snap_buf); s_snap_buf = NULL; }
+    lv_memzero(&s_snap_dsc, sizeof(s_snap_dsc));
+    lv_obj_add_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
+    if (s_snap_ph) lv_obj_clear_flag(s_snap_ph, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Parse a JPEG's frame dimensions from its SOF marker. LVGL's TJPGD decoder reads w/h
+ * from the image descriptor header for a memory source (it does NOT parse them itself),
+ * so we must fill them in before handing the buffer over. Returns false if no SOF found. */
+static bool jpeg_dims(const uint8_t *d, int len, uint16_t *w, uint16_t *h)
+{
+    int i = 2;   /* skip SOI (FFD8) */
+    while (i + 9 < len) {
+        if (d[i] != 0xFF) { i++; continue; }
+        uint8_t m = d[i + 1];
+        if ((m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7) ||
+            (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF)) {   /* SOFn */
+            *h = (uint16_t)((d[i + 5] << 8) | d[i + 6]);
+            *w = (uint16_t)((d[i + 7] << 8) | d[i + 8]);
+            return (*w > 0 && *h > 0);
+        }
+        if (m == 0x01 || (m >= 0xD0 && m <= 0xD8)) { i += 2; continue; }   /* no length */
+        if (m == 0xD9) break;                                             /* EOI */
+        i += 2 + ((d[i + 2] << 8) | d[i + 3]);                            /* skip segment */
+    }
+    return false;
+}
+
+void ui_apply_snapshot(void *arg)
+{
+    pp_image_t *im = (pp_image_t *)arg;
+    if (!im) return;
+    if (!s_snap_img) { free(im->data); free(im); return; }   /* control screen not built */
+
+    snap_clear();
+
+    if (!im->data || im->len <= 0) {
+        free(im->data); free(im);
+        if (s_snap_ph) lv_label_set_text(s_snap_ph, "No camera / no recent frame");
+        return;
+    }
+
+    s_snap_buf = im->data;
+    int len = im->len;
+    free(im);
+
+    uint16_t jw = 0, jh = 0;
+    if (!jpeg_dims(s_snap_buf, len, &jw, &jh)) {
+        snap_clear();
+        if (s_snap_ph) lv_label_set_text(s_snap_ph, "Snapshot unreadable");
+        return;
+    }
+
+    s_snap_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    s_snap_dsc.header.cf     = LV_COLOR_FORMAT_RAW;   /* encoded (JPEG) source */
+    s_snap_dsc.header.w      = jw;                    /* TJPGD reads dims from here */
+    s_snap_dsc.header.h      = jh;
+    s_snap_dsc.header.stride = (uint32_t)jw * 3;
+    s_snap_dsc.data          = s_snap_buf;
+    s_snap_dsc.data_size     = (uint32_t)len;
+    (void)jw; (void)jh;   /* dims parsed for the header; displayed 1:1 (TJPGD can't be scaled) */
+
+    lv_obj_clear_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
+    if (s_snap_ph) lv_obj_add_flag(s_snap_ph, LV_OBJ_FLAG_HIDDEN);
+    lv_image_set_src(s_snap_img, &s_snap_dsc);
 }
 
 void ui_apply_thumb_dash(void *arg)

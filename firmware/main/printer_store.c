@@ -16,9 +16,9 @@ static const char *TAG = "printers";
 #define KEY_COUNT  "count"
 #define KEY_ACTIVE "active"
 #define KEY_VER    "store_ver"
-#define STORE_VER  1            /* bump if pp_printer_t layout changes */
+#define STORE_VER  2            /* bump if pp_printer_t layout changes */
 
-static EXT_RAM_ATTR pp_printer_t      s_list[PP_MAX_PRINTERS];
+static EXT_RAM_BSS_ATTR pp_printer_t      s_list[PP_MAX_PRINTERS];
 static int               s_count;
 static int               s_active = -1;
 static SemaphoreHandle_t s_mtx;
@@ -66,6 +66,7 @@ static void load_locked(void)
     }
     nvs_get_i32(h, KEY_COUNT, &cnt);
     nvs_get_i32(h, KEY_ACTIVE, &act);
+    bool need_save = false;
     if (cnt > 0 && cnt <= PP_MAX_PRINTERS) {
         s_count = 0;
         for (int i = 0; i < (PP_MAX_PRINTERS + 15) / 16; i++) {
@@ -84,8 +85,22 @@ static void load_locked(void)
             }
         }
         s_active = (act >= 0 && act < s_count) ? act : 0;
+
+        /* One-time cleanup of duplicate hosts left over from before add-time dedup
+         * existed (e.g. repeated "Add All from Team"). Keep the first of each host. */
+        int w = 0;
+        for (int r = 0; r < s_count; r++) {
+            bool dup = false;
+            for (int k = 0; k < w; k++)
+                if (s_list[r].host[0] && strcmp(s_list[k].host, s_list[r].host) == 0) { dup = true; break; }
+            if (!dup) { if (w != r) s_list[w] = s_list[r]; w++; }
+            else if (s_active == r) s_active = 0;
+        }
+        if (w != s_count) { s_count = w; need_save = true; }
+        if (s_active >= s_count) s_active = s_count ? 0 : -1;
     }
     nvs_close(h);
+    if (need_save) save_locked();
 }
 
 void printer_store_init(void)
@@ -149,12 +164,20 @@ int printer_store_add(const pp_printer_t *p)
 {
     int idx = -1;
     LOCK();
-    if (p && s_count < PP_MAX_PRINTERS) {
-        s_list[s_count] = *p;
-        if (s_list[s_count].port == 0) s_list[s_count].port = 80;
-        idx = s_count++;
-        if (s_active < 0) s_active = idx;
-        save_locked();
+    if (p) {
+        /* De-dup by host: re-adding the same printer (e.g. a cloud:<uuid> from
+         * "Add All from Team") returns the existing entry instead of stacking a
+         * duplicate. Callers treat the returned idx as success either way. */
+        for (int i = 0; i < s_count; i++) {
+            if (p->host[0] && strcmp(s_list[i].host, p->host) == 0) { idx = i; break; }
+        }
+        if (idx < 0 && s_count < PP_MAX_PRINTERS) {
+            s_list[s_count] = *p;
+            if (s_list[s_count].port == 0) s_list[s_count].port = 80;
+            idx = s_count++;
+            if (s_active < 0) s_active = idx;
+            save_locked();
+        }
     }
     UNLOCK();
     return idx;

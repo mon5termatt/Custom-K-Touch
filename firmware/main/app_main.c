@@ -35,7 +35,7 @@ static const char *TAG = "prusa-touch";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Prusa-Touch %s starting", PP_FW_VERSION);
+    ESP_LOGI(TAG, "Prusa-Touch %s starting - BOOT LOG TEST", PP_FW_VERSION);
 
     esp_err_t nvs = nvs_flash_init();
     if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -63,6 +63,10 @@ void app_main(void)
     /* Bring up state + polling; update the boot screen as we go. */
     ui_boot_update(10, "Initializing store...");
     printer_store_init();
+    /* USB host BEFORE WiFi: both want a level-1 CPU interrupt and only one slot is
+     * free — whichever installs first wins, and WiFi adapts if USB took it (not the
+     * other way round). Non-fatal inside pt_usb_start(), so a failure won't brick. */
+    pt_usb_start();            /* USB MSC host (Print-from-USB) */
     vTaskDelay(pdMS_TO_TICKS(100));
 
     ui_boot_update(30, "Connecting WiFi...");
@@ -76,7 +80,6 @@ void app_main(void)
 
     ui_boot_update(80, "Starting web UI...");
     web_start();   /* on-device web UI: settings + status + firmware OTA */
-    pt_usb_start();            /* start the USB host stack */
     ota_update_start_auto();   /* opt-in background auto-updater (off by default) */
     vTaskDelay(pdMS_TO_TICKS(100));
 

@@ -188,8 +188,21 @@ static void pt_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t 
     esp_lcd_panel_handle_t panel = (esp_lcd_panel_handle_t)lv_display_get_user_data(disp);
     if (panel)
     {
+        lv_area_t a = *area;
+        /* LVGL 9.2 does not rotate pixels for a 180° display rotation: the resolution is
+         * unchanged, so the scene is rendered identically and the driver must flip the output.
+         * A 180° turn of a row-major rectangle is just its reversed pixel array, drawn into the
+         * point-mirrored destination rectangle. (LVGL already flips touch input — see lv_indev.) */
+        if (lv_display_get_rotation(disp) == LV_DISPLAY_ROTATION_180)
+        {
+            uint16_t *p = (uint16_t *)px_map;
+            int32_t n = lv_area_get_size(area);
+            for (int32_t i = 0, j = n - 1; i < j; i++, j--) { uint16_t t = p[i]; p[i] = p[j]; p[j] = t; }
+            a.x1 = PT_LCD_H_RES - 1 - area->x2; a.x2 = PT_LCD_H_RES - 1 - area->x1;
+            a.y1 = PT_LCD_V_RES - 1 - area->y2; a.y2 = PT_LCD_V_RES - 1 - area->y1;
+        }
         /* esp_lcd x2/y2 are exclusive -> +1 */
-        esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
+        esp_lcd_panel_draw_bitmap(panel, a.x1, a.y1, a.x2 + 1, a.y2 + 1, px_map);
     }
     lv_display_flush_ready(disp);
 }

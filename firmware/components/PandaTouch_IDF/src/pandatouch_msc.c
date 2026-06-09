@@ -75,12 +75,19 @@ bool pt_usb_start(void)
         return true;
     }
 
-    // 1) Start USB Host library
+    // 1) Start USB Host library. NON-FATAL: if the interrupt can't be allocated
+    //    (e.g. WiFi already claimed the only free level-1 CPU interrupt), log and
+    //    bail instead of letting ESP_ERROR_CHECK abort — a USB host that can't come
+    //    up must never brick the whole device into a boot loop.
     const usb_host_config_t host_cfg = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
-    ESP_ERROR_CHECK(usb_host_install(&host_cfg));
+    esp_err_t uerr = usb_host_install(&host_cfg);
+    if (uerr != ESP_OK) {
+        ESP_LOGE(TAG, "usb_host_install failed: %s — USB MSC disabled", esp_err_to_name(uerr));
+        return false;
+    }
 
     // 2) Install MSC Host driver (we pump events in our own task)
     const msc_host_driver_config_t msc_cfg = {
@@ -90,7 +97,12 @@ bool pt_usb_start(void)
         .task_priority = 0,
         .stack_size = 0,
     };
-    ESP_ERROR_CHECK(msc_host_install(&msc_cfg));
+    esp_err_t merr = msc_host_install(&msc_cfg);
+    if (merr != ESP_OK) {
+        ESP_LOGE(TAG, "msc_host_install failed: %s — USB MSC disabled", esp_err_to_name(merr));
+        usb_host_uninstall();
+        return false;
+    }
 
     // 3) Event loops
     xTaskCreate(pt_usb_host_events_task, "usb_host_ev", PT_USB_HOST_TASK_STACK, NULL, 5, &s_usb_events_task);

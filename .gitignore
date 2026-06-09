@@ -43,6 +43,15 @@ FINDINGS.md
 UI_DESIGN.md
 PRUSALINK_PARITY.md
 
+# Local Claude Code config + agent memory (contains personal data — never commit)
+.claude/
+
+# Release artifacts (the merged image is published on GitHub Releases, not tracked here)
+*.bin
+
+# Local dev helpers / scratch
+read_logs.py
+
 # Build / flash / capture logs + screenshots (dev only).
 # Keep CMakeLists.txt — it's the top-level ESP-IDF project file, not a log.
 firmware/*.txt
