@@ -13,6 +13,7 @@ idf_component_register(
         "prusa_connect.c"
         "bambu.c"
         "bambu_cloud.c"
+        "netlog.c"
         "pt_core_one.c"
         "pt_core_one_l.c"
         "pt_mini.c"

@@ -26,6 +26,7 @@
 #include "wc_test_jpg.h"   /* embedded camera frame for the /api/test/webcam decode self-test */
 #include "prusa_connect.h"
 #include "bambu_cloud.h"
+#include "netlog.h"
 #include "prefs.h"
 #include "mbedtls/base64.h"
 
@@ -1083,6 +1084,28 @@ static esp_err_t ui_nav_get(httpd_req_t *req)
     httpd_resp_sendstr(req, "ok"); return ESP_OK;
 }
 
+/* ---- network log pipe: GET /api/log?since=<seq> -> recent console output ("serial over WiFi") ---- */
+static esp_err_t log_get(httpd_req_t *req)
+{
+    uint32_t since = 0;
+    char q[64] = {0}, sv[24] = {0};
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+        httpd_query_key_value(q, "since", sv, sizeof(sv)) == ESP_OK)
+        since = (uint32_t)strtoul(sv, NULL, 10);
+    char *buf = malloc(8192);
+    if (!buf) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM"); return ESP_FAIL; }
+    uint32_t head = 0, oldest = 0;
+    size_t n = netlog_read(since, buf, 8192, &head, &oldest);
+    char h[16]; snprintf(h, sizeof(h), "%u", (unsigned)head);
+    char o[16]; snprintf(o, sizeof(o), "%u", (unsigned)oldest);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "X-Log-Head", h);       /* client uses this as the next ?since= */
+    httpd_resp_set_hdr(req, "X-Log-Oldest", o);     /* if your since < this, you missed some  */
+    httpd_resp_send(req, buf, n);
+    free(buf);
+    return ESP_OK;
+}
+
 /* ---- Bambu Lab cloud (ALPHA) ---- */
 static esp_err_t bambu_info_get(httpd_req_t *req)
 {
@@ -1264,6 +1287,7 @@ void web_start(void)
         { "/api/bambu/token", HTTP_POST, bambu_token_post },
         { "/api/bambu/pull", HTTP_POST, bambu_pull_post },
         { "/api/bambu/logout", HTTP_POST, bambu_logout_post },
+        { "/api/log", HTTP_GET, log_get },
     };
     /* Register each route through auth_wrap, stashing the real handler in user_ctx. When a web
      * password is set, auth_wrap gates every route; otherwise it's a transparent pass-through. */

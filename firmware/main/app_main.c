@@ -30,11 +30,13 @@
 #include "ui.h"
 #include "pandatouch_msc.h"
 #include "pandatouch_lvgl_msc.h"
+#include "netlog.h"
 
 static const char *TAG = "prusa-touch";
 
 void app_main(void)
 {
+    netlog_init();   /* tee the console into a PSRAM ring for GET /api/log (network "serial") */
     ESP_LOGI(TAG, "Prusa-Touch %s starting - BOOT LOG TEST", PP_FW_VERSION);
 
     esp_err_t nvs = nvs_flash_init();

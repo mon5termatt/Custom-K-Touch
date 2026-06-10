@@ -85,6 +85,22 @@ GET /api/ui/nav?screen=files   ->  { "ok":true, "requested":"files", "current":"
 ```
 Pair these two endpoints to script UI walkthroughs: nav → wait → screen.bmp.
 
+### `GET /api/log?since=<seq>`  — console log over WiFi
+The device tees its entire ESP-IDF console into a fixed **64 KB rolling ring buffer** in PSRAM
+(bounded memory — it overwrites oldest, never grows) and serves it here, so you get "serial over
+the network" with no USB cable. Returns the console bytes from sequence `since` to newest as
+`text/plain`, plus headers:
+- `X-Log-Head` — the current write sequence; pass it as the next `?since=` for incremental polling.
+- `X-Log-Oldest` — the oldest sequence still buffered; if your `since` is below it you missed some
+  (there was a gap — poll more often or the ring wrapped).
+
+```
+GET /api/log?since=0     ->  (recent console text)   X-Log-Head: 4372  X-Log-Oldest: 0
+GET /api/log?since=4372  ->  (only what's new since)  X-Log-Head: 4510
+```
+Use [`scripts/netlog.py`](../firmware/scripts/netlog.py) to poll this and accumulate the full
+history to disk — handy for watching the Prusa Connect auth/token lifecycle over a long run.
+
 ## Firmware update (OTA)
 
 Updates pull the standalone **app** image (`prusa-touch-app.bin`) from the latest GitHub

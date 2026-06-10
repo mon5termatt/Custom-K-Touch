@@ -64,3 +64,10 @@ firmware/*.bmp
 firmware/*.png
 firmware/flash_log_*
 firmware/build_log_*
+
+# Captured console logs + monitor state (the loggers live in firmware/scripts/).
+*.log
+.serial_check_state
+.netlog_check_state
+/serial_logger.py
+/netlog_monitor.py
