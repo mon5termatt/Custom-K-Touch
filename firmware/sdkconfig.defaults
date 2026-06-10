@@ -46,8 +46,32 @@ CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_40=y
 
-# No on-screen FPS/perf overlay in the shipped UI
+# No on-screen FPS/perf overlay in the shipped UI (set =y to measure render performance)
 CONFIG_LV_USE_PERF_MONITOR=n
+
+# Tighter LVGL refresh + input sampling than the ~30 ms default, for better touch-follow while
+# scrolling. Safe: caps higher but render-bound screens simply stay CPU-limited.
+CONFIG_LV_DEF_REFR_PERIOD=16
+CONFIG_LV_INDEV_DEF_READ_PERIOD=16
+
+# Single LVGL draw buffer instead of ping-pong: this BSP's flush is SYNCHRONOUS (the flush_cb
+# memcpys into the framebuffer and calls lv_display_flush_ready immediately), so the second
+# 128 KB internal buffer never overlapped anything — dropping it frees 128 KB of internal SRAM
+# at zero rendering cost.
+CONFIG_PT_LVGL_RENDER_PARTIAL_1=y
+
+# DO NOT raise the CPU cache sizes (ESP32S3_INSTRUCTION_CACHE_32KB / DATA_CACHE_64KB).
+# Verified twice on hardware (v0.4.9.1 with two draw buffers, v0.4.9.4 with one): the 48 KB
+# they carve out of internal SRAM starves mbedTLS, which must allocate internal RAM, and
+# Prusa Connect dies — login returns "Login Failed" and cloud printers stop reporting, while
+# plain-HTTP PrusaLink keeps working. Freeing a draw buffer did NOT compensate (pt_malloc_caps
+# falls back to PSRAM silently, so the "second internal buffer" being freed likely already
+# lived in PSRAM). The ~2 FPS the caches buy is not worth a dead cloud. They are out for good.
+
+# Snapshot-cached dashboard cards: each card renders to a PSRAM bitmap once on data change and
+# the fleet grid scrolls those bitmaps (plain blits) instead of re-rendering every widget per
+# frame. lv_snapshot is off by default in LVGL.
+CONFIG_LV_USE_SNAPSHOT=y
 
 # QR code widget — About/License screen links to the GitHub repo
 CONFIG_LV_USE_QRCODE=y
