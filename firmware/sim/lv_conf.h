@@ -18,6 +18,9 @@
 /* ---- OS / tick: single-threaded host, tick supplied via lv_tick_set_cb ---- */
 #define LV_USE_OS LV_OS_NONE
 
+/* snapshot: render a widget tree to a buffer (used by the dashboard card cache) */
+#define LV_USE_SNAPSHOT 1
+
 /* ---- drawing ---- */
 #define LV_USE_DRAW_SW 1
 #define LV_DRAW_SW_SUPPORT_RGB565    1

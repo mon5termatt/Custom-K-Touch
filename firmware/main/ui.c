@@ -525,10 +525,12 @@ static void build_status_screen(void)
     lv_obj_t *files_btn = make_button(s_scr_status, "FILES", on_files_clicked, NULL, NULL);
     s_btn_control = make_button(s_scr_status, "CONTROL", on_control_clicked, NULL, NULL);
     if (P) {
-        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT,  16, -140);
-        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_RIGHT, -16, -140);
-        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT,  16, -72);
-        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_RIGHT, -16, -72);
+        /* Portrait: sit the 2x2 buttons directly under the job/attention card (which ends ~y430)
+         * instead of pinning them to the bottom — bottom-pinning left a ~160px dead band mid-screen. */
+        lv_obj_align(pause_btn,     LV_ALIGN_TOP_LEFT,  16, 452);
+        lv_obj_align(stop_btn,      LV_ALIGN_TOP_RIGHT, -16, 452);
+        lv_obj_align(files_btn,     LV_ALIGN_TOP_LEFT,  16, 524);
+        lv_obj_align(s_btn_control, LV_ALIGN_TOP_RIGHT, -16, 524);
     } else {
         lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, 16,  -72);
         lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, 180, -72);
@@ -842,7 +844,10 @@ static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
         lv_label_set_text(t, text);
         lv_obj_set_style_text_color(t, PP_TEXT, 0);
         lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
-        lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);        /* page title centered on screen */
+        /* A centered title collides with the left wordmark at 480px wide — in portrait, left-align
+         * it clear of the wordmark; in landscape there's room to center it. */
+        if (ui_portrait()) lv_obj_align(t, LV_ALIGN_LEFT_MID, 184, 0);
+        else               lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);
     }
     return bar;
 }
@@ -883,6 +888,7 @@ static void build_printers_screen(void)
 static lv_obj_t *make_field(lv_obj_t *parent, const char *label, lv_coord_t y,
                             bool password, lv_obj_t **out_label)
 {
+    const bool P = ui_portrait();
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, label);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
@@ -891,8 +897,10 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *label, lv_coord_t y,
     lv_obj_t *ta = lv_textarea_create(parent);
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_password_mode(ta, password);
-    lv_obj_set_width(ta, scr_w() - 146);   /* responsive: fits portrait (480) and landscape (800) */
-    lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 130, y - 8);
+    /* Portrait: label ABOVE a full-width field (natural narrow-screen form). Landscape: label to
+     * the left, field filling the rest of the row. */
+    if (P) { lv_obj_set_width(ta, scr_w() - 32);  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 16,  y + 24); }
+    else   { lv_obj_set_width(ta, scr_w() - 146); lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 130, y - 8); }
     lv_obj_add_event_cb(ta, ta_focus_event, LV_EVENT_ALL, NULL);
     return ta;
 }
@@ -907,12 +915,17 @@ static void configure_add_form(int type)
     lv_label_set_text(s_lbl_key,  bambu ? "Access Code" : "API key");
     if (bambu) { lv_obj_remove_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
     else       { lv_obj_add_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN);    lv_obj_add_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
-    int sy = bambu ? 248 : 204;   /* Save/Cancel sit below the last visible field */
-    lv_obj_align(s_btn_save,   LV_ALIGN_TOP_LEFT, 130, sy);
-    lv_obj_align(s_btn_cancel, LV_ALIGN_TOP_LEFT, 280, sy);
-    int ey = bambu ? 306 : 262;   /* edit-mode actions below Save/Cancel */
-    lv_obj_align(s_btn_setactive, LV_ALIGN_TOP_LEFT, 130, ey);
-    lv_obj_align(s_btn_remove,    LV_ALIGN_TOP_LEFT, 280, ey);
+    /* Save/Cancel sit below the last visible field; matches make_field's row pitch so the math
+     * holds in both orientations (portrait stacks label-over-field, so dy is larger). */
+    const bool P = ui_portrait();
+    const int  dy = P ? 76 : 44;
+    const int  bx0 = P ? 16 : 130, bx1 = P ? 174 : 280;
+    int sy = 72 + ((bambu ? 3 : 2) + 1) * dy;
+    lv_obj_align(s_btn_save,   LV_ALIGN_TOP_LEFT, bx0, sy);
+    lv_obj_align(s_btn_cancel, LV_ALIGN_TOP_LEFT, bx1, sy);
+    int ey = sy + 60;             /* edit-mode actions below Save/Cancel */
+    lv_obj_align(s_btn_setactive, LV_ALIGN_TOP_LEFT, bx0, ey);
+    lv_obj_align(s_btn_remove,    LV_ALIGN_TOP_LEFT, bx1, ey);
 }
 
 static void build_addform_screen(void)
@@ -921,10 +934,12 @@ static void build_addform_screen(void)
     lv_obj_set_style_bg_color(s_scr_addform, PP_BG, 0);
     make_header(s_scr_addform, "Add printer");
 
-    s_ta_name   = make_field(s_scr_addform, "Name", 72, false, NULL);
-    s_ta_host   = make_field(s_scr_addform, "IP / host", 116, false, &s_lbl_host);
-    s_ta_key    = make_field(s_scr_addform, "API key", 160, true, &s_lbl_key);
-    s_ta_serial = make_field(s_scr_addform, "Serial", 204, false, &s_lbl_serial);
+    /* Portrait stacks label-over-field, so rows need more pitch (76 vs 44px). */
+    const int dy = ui_portrait() ? 76 : 44;
+    s_ta_name   = make_field(s_scr_addform, "Name",      72 + 0 * dy, false, NULL);
+    s_ta_host   = make_field(s_scr_addform, "IP / host", 72 + 1 * dy, false, &s_lbl_host);
+    s_ta_key    = make_field(s_scr_addform, "API key",   72 + 2 * dy, true,  &s_lbl_key);
+    s_ta_serial = make_field(s_scr_addform, "Serial",    72 + 3 * dy, false, &s_lbl_serial);
 
     s_btn_save = lv_button_create(s_scr_addform);
     lv_obj_set_size(s_btn_save, 140, 50);
@@ -980,6 +995,7 @@ static void build_addpick_screen(void)
     lv_obj_set_style_bg_color(s_scr_addpick, PP_BG, 0);
     make_header(s_scr_addpick, "Add a printer");
 
+    const bool P = ui_portrait();
     lv_obj_t *col = lv_obj_create(s_scr_addpick);
     lv_obj_set_size(col, scr_w(), scr_h() - 52);
     lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 52);
@@ -987,7 +1003,10 @@ static void build_addpick_screen(void)
     lv_obj_set_style_border_width(col, 0, 0);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(col, 16, 0);
-    lv_obj_set_style_pad_row(col, 9, 0);
+    /* Portrait has lots of vertical room — center the group and use taller targets + bigger gaps
+     * so it fills the tall canvas instead of floating in the top half. */
+    lv_obj_set_style_pad_row(col, P ? 16 : 9, 0);
+    if (P) lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *ch = lv_label_create(col);
     lv_label_set_text(ch, "CLOUD ACCOUNTS");
@@ -1008,9 +1027,16 @@ static void build_addpick_screen(void)
     for (int i = 0; i < 3; i++) {
         lv_obj_t *b = make_button(col, names[i], on_pick_local, (void *)(intptr_t)i, NULL);
         lv_obj_set_width(b, scr_w() - 32);
+        if (P) lv_obj_set_height(b, 62);
     }
     lv_obj_t *cancel = make_button(col, "Cancel", on_pick_cancel, NULL, NULL);
     lv_obj_set_width(cancel, scr_w() - 32);
+    if (P) lv_obj_set_height(cancel, 56);
+    /* Cancel is a back-out, not a printer type — flatten it so it reads as secondary. */
+    lv_obj_set_style_bg_opa(cancel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(cancel, 1, 0);
+    lv_obj_set_style_border_color(cancel, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_margin_top(cancel, P ? 8 : 4, 0);
 }
 
 /* ---------- WiFi setup ---------- */
@@ -1168,8 +1194,12 @@ static void build_wifi_screen(void)
         lv_obj_set_size(s_wifi_list, 380, 480 - 56);
         lv_obj_align(s_wifi_list, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     }
-    lv_obj_set_style_bg_color(s_wifi_list, PP_BG, 0);
+    /* A dark surface (not the screen bg) so the list reads as a defined, framed region that fills
+     * the available space — otherwise the empty/"Scanning..." state looks like a dead black band. */
+    lv_obj_set_style_bg_color(s_wifi_list, PP_SURFACE, 0);
+    lv_obj_set_style_radius(s_wifi_list, 6, 0);
     lv_obj_set_style_border_width(s_wifi_list, 0, 0);
+    lv_obj_set_style_pad_all(s_wifi_list, 6, 0);
 
     s_wifi_kb = lv_keyboard_create(s_scr_wifi);
     lv_obj_add_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
@@ -1825,14 +1855,12 @@ static void build_lock_overlay(void)
     lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
     lv_obj_set_style_text_color(s_lock_msg, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_lock_msg, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_lock_msg, LV_ALIGN_TOP_MID, 0, 40);
 
     s_lock_ta = lv_textarea_create(s_lock_modal);
     lv_textarea_set_one_line(s_lock_ta, true);
     lv_textarea_set_password_mode(s_lock_ta, true);
     lv_textarea_set_placeholder_text(s_lock_ta, "PIN");
-    lv_obj_set_width(s_lock_ta, 240);
-    lv_obj_align(s_lock_ta, LV_ALIGN_TOP_MID, 0, 84);
+    lv_obj_set_width(s_lock_ta, ui_portrait() ? 320 : 280);
 
     lv_obj_t *cancel = make_barbtn(s_lock_modal, LV_SYMBOL_CLOSE " Cancel", on_pin_cancel, NULL, 120);
     lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -8, 8);
@@ -1841,6 +1869,16 @@ static void build_lock_overlay(void)
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
     lv_keyboard_set_textarea(kb, s_lock_ta);
     lv_obj_add_event_cb(kb, on_pin_ok, LV_EVENT_READY, NULL);   /* the keypad's check key = unlock */
+
+    /* Group the prompt + PIN field directly above the keypad (centred in the space above it)
+     * rather than pinning them to the very top — the default left a big dead band between them. */
+    int kbh = ui_portrait() ? 360 : 260;
+    lv_obj_set_height(kb, kbh);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    int gtop = (scr_h() - kbh - 90) / 2;
+    if (gtop < 56) gtop = 56;
+    lv_obj_align(s_lock_msg, LV_ALIGN_TOP_MID, 0, gtop);
+    lv_obj_align(s_lock_ta,  LV_ALIGN_TOP_MID, 0, gtop + 44);
 }
 
 static void build_dashboard_screen(void)
@@ -1855,6 +1893,7 @@ static void build_dashboard_screen(void)
     lv_obj_set_style_bg_color(s_dash_grid, PP_BG, 0);
     lv_obj_set_style_border_width(s_dash_grid, 0, 0);
     lv_obj_set_style_pad_all(s_dash_grid, 8, 0);
+    lv_obj_set_style_pad_bottom(s_dash_grid, 20, 0);   /* last card scrolls fully clear of the nav bar */
     lv_obj_set_flex_flow(s_dash_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(s_dash_grid, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -2100,10 +2139,17 @@ static void build_control_screen(void)
     lv_obj_align(bzp, LV_ALIGN_TOP_LEFT, 16, 260);
     lv_obj_align(bzm, LV_ALIGN_TOP_LEFT, 150, 260);
 
-    /* Webcam card (bottom-right free area) — live snapshot from Connect, JPEG-decoded
-     * on-device (CONFIG_LV_USE_TJPGD). Parity with the web UI's webcam modal. */
-    lv_obj_t *cam_card = make_card(s_scr_control, 372, 150);
-    lv_obj_align(cam_card, LV_ALIGN_BOTTOM_MID, 0, -10);
+    /* Webcam card — live snapshot from Connect, JPEG-decoded on-device (CONFIG_LV_USE_TJPGD).
+     * Landscape: bottom-centre free area. Portrait: directly under the MOVE card (which ends
+     * ~y566) and grown to fill the slack, so there's no dead band and the preview has presence. */
+    lv_obj_t *cam_card;
+    if (ui_portrait()) {
+        cam_card = make_card(s_scr_control, 380, 196);
+        lv_obj_align(cam_card, LV_ALIGN_TOP_LEFT, 16, 582);
+    } else {
+        cam_card = make_card(s_scr_control, 372, 150);
+        lv_obj_align(cam_card, LV_ALIGN_BOTTOM_MID, 0, -10);
+    }
     lv_obj_t *caml = lv_label_create(cam_card);
     lv_label_set_text(caml, "WEBCAM");
     lv_obj_set_style_text_color(caml, PP_TEXT_MUTED, 0);
@@ -2394,23 +2440,28 @@ static void build_prefs_screen(void)
     dropdown_dark(s_pref_logo_dd);
     lv_obj_add_event_cb(s_pref_logo_dd, on_pref_logo_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* Automatic updates (opt-in; off by default) */
-    pref_label(s_scr_prefs, "Automatic firmware updates", 392);
+    /* Automatic updates (opt-in; off by default). Landscape: top of the RIGHT column so the
+     * two columns balance 3-and-2 instead of stranding one lonely control on the right. */
+    lv_obj_t *aul = lv_label_create(s_scr_prefs);
+    lv_label_set_text(aul, "Automatic firmware updates");
+    lv_obj_set_style_text_color(aul, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(aul, &lv_font_montserrat_14, 0);
+    lv_obj_align(aul, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 392 : 84);
     s_pref_autoupd_sw = lv_switch_create(s_scr_prefs);
-    lv_obj_align(s_pref_autoupd_sw, LV_ALIGN_TOP_LEFT, 24, 418);
+    lv_obj_align(s_pref_autoupd_sw, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 418 : 110);
     lv_obj_set_style_bg_color(s_pref_autoupd_sw, PP_ORANGE, LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_pref_autoupd_sw, on_pref_autoupd_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* Screen orientation — landscape: right column; portrait: stacked under auto-updates */
+    /* Screen orientation — landscape: right column under auto-updates; portrait: stacked. */
     lv_obj_t *ol = lv_label_create(s_scr_prefs);
     lv_label_set_text(ol, "Screen orientation");
     lv_obj_set_style_text_color(ol, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(ol, &lv_font_montserrat_14, 0);
-    lv_obj_align(ol, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 484 : 84);
+    lv_obj_align(ol, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 484 : 196);
     s_pref_orient_dd = lv_dropdown_create(s_scr_prefs);
     lv_dropdown_set_options(s_pref_orient_dd, "Landscape\nLandscape (flipped)\nPortrait\nPortrait (flipped)");
     lv_obj_set_width(s_pref_orient_dd, 320);
-    lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 512 : 112);
+    lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 512 : 224);
     dropdown_dark(s_pref_orient_dd);
     lv_obj_add_event_cb(s_pref_orient_dd, on_pref_orient_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
