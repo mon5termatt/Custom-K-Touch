@@ -31,6 +31,9 @@ bool prusa_connect_remember(void);
 bool prusa_connect_have_saved_creds(void);
 void prusa_connect_save_creds(void);               /* persist current s_saved_* per the flag */
 pp_connect_status_t prusa_connect_try_saved_login(void);   /* replay login with saved creds */
+/* True once right after a token refresh was rejected (session fully expired) so the caller can
+ * re-auth immediately instead of waiting for the periodic retry tick. Reading clears it. */
+bool prusa_connect_take_reauth_due(void);
 
 /* Forget the account: wipe tokens + default team from RAM and NVS. */
 void prusa_connect_logout(void);

@@ -749,11 +749,14 @@ static void net_task(void *arg)
                 }
             }
             /* Auto re-authentication: if the Connect session has lapsed but the user opted to
-             * save credentials, replay the login flow to restore it with no manual step. Throttled
-             * (~every 60 s) to avoid hammering the auth server; 2FA accounts can't auto-complete. */
+             * save credentials, replay the login flow to restore it with no manual step. Fires
+             * IMMEDIATELY when a refresh was just rejected (reauth_due) so the fleet isn't dark for
+             * up to a minute; otherwise the ~60 s tick is the retry cadence (don't hammer the auth
+             * server). 2FA accounts can't auto-complete. */
             static int s_reauth_tick = 0;
-            if (has_cloud && !prusa_connect_is_authenticated() &&
-                prusa_connect_have_saved_creds() && (s_reauth_tick++ % 30) == 0) {
+            bool reauth_due = prusa_connect_take_reauth_due();   /* read-and-clear; true once post-expiry */
+            if (has_cloud && !prusa_connect_is_authenticated() && prusa_connect_have_saved_creds() &&
+                (reauth_due || (s_reauth_tick++ % 30) == 0)) {
                 pp_connect_status_t st = prusa_connect_try_saved_login();
                 if (st == PP_CONNECT_AUTH_OK) {
                     ESP_LOGI(TAG, "auto re-auth succeeded");

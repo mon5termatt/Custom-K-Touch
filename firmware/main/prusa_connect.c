@@ -63,6 +63,18 @@ static char s_totp_url[128];
 static char s_saved_email[128];
 static char s_saved_pass[128];
 static bool s_remember = true;   /* persist creds on successful login (device-owner opt-in) */
+static volatile bool s_reauth_due;   /* set on a genuine session expiry; app_state re-auths at once */
+
+bool prusa_connect_take_reauth_due(void) { bool d = s_reauth_due; s_reauth_due = false; return d; }
+
+/* Mask an email for logs: first char + "***@" + domain (e.g. a***@prusa3d.cz). */
+static const char *mask_email(const char *e, char *out, size_t n)
+{
+    const char *at = e ? strchr(e, '@') : NULL;
+    if (!e || !e[0] || !at) { strlcpy(out, "(saved account)", n); return out; }
+    snprintf(out, n, "%c***%s", e[0], at);
+    return out;
+}
 
 /* ---- response accumulator (heap) ---- */
 typedef struct {
@@ -410,7 +422,8 @@ pp_connect_status_t prusa_connect_try_saved_login(void)
     char em[128], pw[128];
     strlcpy(em, s_saved_email, sizeof(em));   /* login() overwrites the s_saved_* via its args */
     strlcpy(pw, s_saved_pass, sizeof(pw));
-    ESP_LOGI(TAG, "auto re-auth: replaying saved login for %.40s", em);
+    char masked[80];   /* don't print the full account email — it's visible over /api/log on the LAN */
+    ESP_LOGI(TAG, "auto re-auth: replaying saved login for %s", mask_email(em, masked, sizeof(masked)));
     return prusa_connect_login(em, pw);
 }
 
@@ -496,6 +509,7 @@ esp_err_t prusa_connect_refresh_token(void)
                 nvs_erase_key(h, KEY_AT); nvs_erase_key(h, KEY_RT);
                 nvs_commit(h); nvs_close(h);
             }
+            s_reauth_due = true;   /* signal app_state to re-auth NOW, not at the next ~30-cycle tick */
             ESP_LOGW(TAG, "refresh rejected (400) — session expired; cleared, re-login needed");
         } else {
             ESP_LOGI(TAG, "refresh 400 on stale token; concurrent refresh already renewed — keeping session");
