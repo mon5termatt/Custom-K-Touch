@@ -46,8 +46,7 @@ static lv_obj_t      *s_scr_status;     /* per-printer detail      */
 static lv_obj_t *s_scr_control;    /* preheat/jog/home        */
 static lv_obj_t *s_scr_files;
 static lv_obj_t *s_scr_printers;
-static lv_obj_t *s_scr_addpick;    /* "Add a printer" type picker (Cloud accounts / Local printer) */
-static lv_obj_t *s_scr_addform;
+static lv_obj_t *s_scr_addpick;    /* "Add a printer" -> QR/IP escort to the web UI (issue #5) */
 static lv_obj_t *s_scr_about;
 static lv_obj_t *s_scr_prefs;      /* Preferences (sort/filter/logo) */
 static lv_obj_t *s_scr_farm;       /* Prusa Farm (org stats + orders) */
@@ -68,22 +67,7 @@ static lv_obj_t *s_pref_hideoff_sw;
 static lv_obj_t *s_pref_autoupd_sw;
 static lv_obj_t *s_pref_orient_dd;
 
-/* printer picker + add form */
-static lv_obj_t *s_pr_list;
-static lv_obj_t *s_ta_name;
-static lv_obj_t *s_ta_host;
-static lv_obj_t *s_ta_key;
-static lv_obj_t *s_ta_serial;         /* Bambu device serial (hidden for other types) */
-static lv_obj_t *s_lbl_host;          /* relabeled per type (IP / Host:7125 / Printer IP) */
-static lv_obj_t *s_lbl_key;           /* relabeled per type (API key / Access Code)       */
-static lv_obj_t *s_lbl_serial;
-static lv_obj_t *s_btn_save;
-static lv_obj_t *s_btn_cancel;
-static int       s_add_type;          /* 0 = Prusa/PrusaLink, 1 = Klipper, 2 = Bambu LAN */
-static lv_obj_t *s_kb;
-static int       s_edit_idx = -1;     /* -1 = add new; >=0 = editing that printer */
-static lv_obj_t *s_btn_remove;
-static lv_obj_t *s_btn_setactive;
+static lv_obj_t *s_pr_list;           /* the "Settings" tab list (device settings + web escort) */
 
 /* wifi setup */
 static lv_obj_t *s_scr_wifi;
@@ -160,7 +144,6 @@ static void refresh_printers_list(void);
 /* Screen lock: returns true (and pops the PIN prompt) if the screen is locked, so an action
  * callback can bail. Browsing callbacks don't call it. */
 static bool ui_locked_block(void);
-static void configure_add_form(int type);   /* relabel fields + show/hide serial per add type */
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
 static void on_farm_open(lv_event_t *e);
@@ -666,85 +649,15 @@ static void on_printers_clicked(lv_event_t *e)
     lv_screen_load(s_scr_printers);
 }
 
-static void on_add_open(lv_event_t *e)   /* "+ Add printer" -> the type picker */
+static void addpick_refresh(void);       /* fwd: refresh the escort QR/URL from the current IP */
+static void on_add_open(lv_event_t *e)   /* "+ Add printer" -> the web-UI escort screen */
 {
     (void)e;
+    addpick_refresh();                   /* IP may have changed since boot — repoint the QR */
     lv_screen_load(s_scr_addpick);
 }
 
-/* Picker: a Local-printer type was chosen -> set up the field form for it. user_data = type. */
-static void on_pick_local(lv_event_t *e)
-{
-    int type = (int)(intptr_t)lv_event_get_user_data(e);
-    s_edit_idx = -1;
-    lv_textarea_set_text(s_ta_name, "");
-    lv_textarea_set_text(s_ta_host, "");
-    lv_textarea_set_text(s_ta_key, "");
-    lv_textarea_set_text(s_ta_serial, "");
-    lv_obj_add_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
-    configure_add_form(type);
-    lv_screen_load(s_scr_addform);
-}
 static void on_pick_cancel(lv_event_t *e) { (void)e; lv_screen_load(s_scr_printers); }
-
-static void on_edit_open(lv_event_t *e)  /* edit mode: skip the picker, prefill from store */
-{
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    pp_printer_t p;
-    if (!printer_store_get(idx, &p)) return;
-    s_edit_idx = idx;
-    bool bambu = (strncmp(p.host, "bambu:", 6) == 0);
-    configure_add_form(bambu ? 2 : 0);   /* Klipper vs PrusaLink is cosmetic (auto-detected) */
-    lv_textarea_set_text(s_ta_name, p.name);
-    lv_textarea_set_text(s_ta_host, bambu ? p.host + 6 : p.host);
-    lv_textarea_set_text(s_ta_key, p.api_key);
-    lv_textarea_set_text(s_ta_serial, bambu ? p.uuid : "");
-    lv_obj_remove_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
-    lv_screen_load(s_scr_addform);
-}
-
-static void on_add_save(lv_event_t *e)
-{
-    if (ui_locked_block()) return;
-    pp_printer_t p = {0};
-    strlcpy(p.name, lv_textarea_get_text(s_ta_name), sizeof(p.name));
-    strlcpy(p.api_key, lv_textarea_get_text(s_ta_key), sizeof(p.api_key));
-    const char *ip = lv_textarea_get_text(s_ta_host);
-    if (s_add_type == 2) {                 /* Bambu LAN: host="bambu:<ip>", serial -> uuid */
-        snprintf(p.host, sizeof(p.host), "bambu:%s", ip);
-        strlcpy(p.uuid, lv_textarea_get_text(s_ta_serial), sizeof(p.uuid));
-    } else {
-        strlcpy(p.host, ip, sizeof(p.host));
-    }
-    p.port = 80;
-    if (p.name[0] == '\0') strlcpy(p.name, ip, sizeof(p.name));
-    /* Route the store write (NVS) through the net task — it can't run on this PSRAM-stacked
-     * LVGL task. The net task re-publishes + refreshes the list when it lands. */
-    if (ip[0]) {
-        if (s_edit_idx < 0) {
-            app_state_store_add(&p);          /* net task adds, selects, and publishes */
-            lv_screen_load(s_scr_status);     /* optimistic; data fills on the next poll */
-            return;
-        }
-        app_state_store_update(s_edit_idx, &p);
-    }
-    lv_screen_load(s_scr_printers);
-}
-
-static void on_remove(lv_event_t *e)
-{
-    if (ui_locked_block()) return;
-    if (s_edit_idx >= 0) app_state_store_remove(s_edit_idx);   /* net task removes + refreshes */
-    lv_screen_load(s_scr_printers);
-}
-
-static void on_setactive(lv_event_t *e)
-{
-    if (s_edit_idx >= 0) app_state_select_printer(s_edit_idx);
-    lv_screen_load(s_scr_status);
-}
 
 /* Scheduled by the net task after a printer-store write so the Settings list reflects it. */
 void ui_apply_printers(void *unused)
@@ -753,29 +666,11 @@ void ui_apply_printers(void *unused)
     if (s_pr_list) refresh_printers_list();
 }
 
-static void on_add_cancel(lv_event_t *e)
-{
-    lv_screen_load(s_scr_printers);
-}
-
-static void ta_focus_event(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *ta = lv_event_get_target(e);
-    if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(s_kb, ta);
-        lv_obj_remove_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    } else if (code == LV_EVENT_DEFOCUSED) {
-        lv_keyboard_set_textarea(s_kb, NULL);
-        lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    }
-}
 
 static void refresh_printers_list(void)
 {
     lv_obj_clean(s_pr_list);
     int n = printer_store_count();
-    int active = printer_store_active();
     /* --- Device settings (top) --- */
     lv_obj_t *hd = lv_list_add_text(s_pr_list, "DEVICE");
     lv_obj_set_style_text_color(hd, PP_TEXT_MUTED, 0);
@@ -790,25 +685,23 @@ static void refresh_printers_list(void)
     lv_obj_set_style_text_color(wf, PP_TEXT, 0);
     lv_obj_add_event_cb(wf, on_wifi_open, LV_EVENT_CLICKED, NULL);
 
-    /* --- Printer management (beneath) --- */
+    /* --- Printers: add/manage from the web, not the touchscreen (issue #5). Entering API keys,
+     * the Klipper host:port, or the Prusa Connect sign-in is impractical on a touch keyboard, so we
+     * point users at the device's web page (QR + IP) which handles every printer type properly. --- */
     lv_obj_t *hp = lv_list_add_text(s_pr_list, "PRINTERS");
     lv_obj_set_style_text_color(hp, PP_TEXT_MUTED, 0);
-    for (int i = 0; i < n; i++) {
-        pp_printer_t p;
-        if (!printer_store_get(i, &p)) continue;
-        char buf[80];
-        snprintf(buf, sizeof(buf), "%s%s  (%s)", (i == active) ? "* " : "",
-                 p.name, p.host);
-        lv_obj_t *btn = lv_list_add_button(s_pr_list, LV_SYMBOL_EDIT, buf);
-        lv_obj_set_style_bg_color(btn, PP_SURFACE, 0);
-        lv_obj_set_style_text_color(btn, PP_TEXT, 0);
-        lv_obj_add_event_cb(btn, on_edit_open, LV_EVENT_CLICKED,
-                            (void *)(intptr_t)i);
-    }
-    lv_obj_t *add = lv_list_add_button(s_pr_list, LV_SYMBOL_PLUS, "Add printer");
-    lv_obj_set_style_bg_color(add, PP_SURFACE_HI, 0);
-    lv_obj_set_style_text_color(add, PP_ORANGE, 0);
-    lv_obj_add_event_cb(add, on_add_open, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *mg = lv_list_add_button(s_pr_list, LV_SYMBOL_PLUS, "Add or manage printers");
+    lv_obj_set_style_bg_color(mg, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(mg, PP_ORANGE, 0);
+    lv_obj_add_event_cb(mg, on_add_open, LV_EVENT_CLICKED, NULL);
+
+    const char *ip = wifi_ip_str();
+    char info[88];
+    snprintf(info, sizeof(info), "%d configured  -  in a browser: http://%s/",
+             n, (ip && ip[0]) ? ip : "192.168.4.1");
+    lv_obj_t *ipi = lv_list_add_text(s_pr_list, info);
+    lv_obj_set_style_text_color(ipi, PP_TEXT_MUTED, 0);
 
     /* --- More --- */
     lv_obj_t *hm = lv_list_add_text(s_pr_list, "MORE");
@@ -885,114 +778,28 @@ static void build_printers_screen(void)
     lv_obj_set_style_border_width(s_pr_list, 0, 0);
 }
 
-static lv_obj_t *make_field(lv_obj_t *parent, const char *label, lv_coord_t y,
-                            bool password, lv_obj_t **out_label)
+/* "Add a printer" — escort to the web UI (issue #5). Adding or configuring a printer needs a long
+ * PrusaLink API key, a Klipper host:port, or the Prusa Connect browser sign-in — none of which a
+ * touchscreen keyboard handles well, so a printer "added" on-device often landed in the fleet but
+ * never authenticated. The on-device add/edit form is gone; instead we hand the user a QR + URL to
+ * the device's own web page, which handles every printer type properly. */
+static lv_obj_t *s_addpick_qr;
+static lv_obj_t *s_addpick_url;
+
+static void addpick_refresh(void)   /* point the QR + URL at the device's current web address */
 {
-    const bool P = ui_portrait();
-    lv_obj_t *l = lv_label_create(parent);
-    lv_label_set_text(l, label);
-    lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 16, y);
-    if (out_label) *out_label = l;
-    lv_obj_t *ta = lv_textarea_create(parent);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_password_mode(ta, password);
-    /* Portrait: label ABOVE a full-width field (natural narrow-screen form). Landscape: label to
-     * the left, field filling the rest of the row. */
-    if (P) { lv_obj_set_width(ta, scr_w() - 32);  lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 16,  y + 24); }
-    else   { lv_obj_set_width(ta, scr_w() - 146); lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 130, y - 8); }
-    lv_obj_add_event_cb(ta, ta_focus_event, LV_EVENT_ALL, NULL);
-    return ta;
+    const char *ip = wifi_ip_str();
+    char url[40];
+    snprintf(url, sizeof(url), "http://%s/", (ip && ip[0]) ? ip : "192.168.4.1");
+    if (s_addpick_qr)  lv_qrcode_update(s_addpick_qr, url, strlen(url));
+    if (s_addpick_url) lv_label_set_text(s_addpick_url, url);
 }
 
-/* Relabel the shared add form for the chosen type and show/hide the Bambu Serial field,
- * repositioning the action buttons so there's no gap when Serial is hidden. */
-static void configure_add_form(int type)
-{
-    s_add_type = type;
-    bool bambu = (type == 2);
-    lv_label_set_text(s_lbl_host, bambu ? "Printer IP" : (type == 1 ? "Host:7125" : "IP / host"));
-    lv_label_set_text(s_lbl_key,  bambu ? "Access Code" : "API key");
-    if (bambu) { lv_obj_remove_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
-    else       { lv_obj_add_flag(s_ta_serial, LV_OBJ_FLAG_HIDDEN);    lv_obj_add_flag(s_lbl_serial, LV_OBJ_FLAG_HIDDEN); }
-    /* Save/Cancel sit below the last visible field; matches make_field's row pitch so the math
-     * holds in both orientations (portrait stacks label-over-field, so dy is larger). */
-    const bool P = ui_portrait();
-    const int  dy = P ? 76 : 44;
-    const int  bx0 = P ? 16 : 130, bx1 = P ? 174 : 280;
-    int sy = 72 + ((bambu ? 3 : 2) + 1) * dy;
-    lv_obj_align(s_btn_save,   LV_ALIGN_TOP_LEFT, bx0, sy);
-    lv_obj_align(s_btn_cancel, LV_ALIGN_TOP_LEFT, bx1, sy);
-    int ey = sy + 60;             /* edit-mode actions below Save/Cancel */
-    lv_obj_align(s_btn_setactive, LV_ALIGN_TOP_LEFT, bx0, ey);
-    lv_obj_align(s_btn_remove,    LV_ALIGN_TOP_LEFT, bx1, ey);
-}
-
-static void build_addform_screen(void)
-{
-    s_scr_addform = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_addform, PP_BG, 0);
-    make_header(s_scr_addform, "Add printer");
-
-    /* Portrait stacks label-over-field, so rows need more pitch (76 vs 44px). */
-    const int dy = ui_portrait() ? 76 : 44;
-    s_ta_name   = make_field(s_scr_addform, "Name",      72 + 0 * dy, false, NULL);
-    s_ta_host   = make_field(s_scr_addform, "IP / host", 72 + 1 * dy, false, &s_lbl_host);
-    s_ta_key    = make_field(s_scr_addform, "API key",   72 + 2 * dy, true,  &s_lbl_key);
-    s_ta_serial = make_field(s_scr_addform, "Serial",    72 + 3 * dy, false, &s_lbl_serial);
-
-    s_btn_save = lv_button_create(s_scr_addform);
-    lv_obj_set_size(s_btn_save, 140, 50);
-    lv_obj_set_style_bg_color(s_btn_save, PP_ORANGE, 0);
-    lv_obj_add_event_cb(s_btn_save, on_add_save, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *sl = lv_label_create(s_btn_save);
-    lv_label_set_text(sl, "Save");
-    lv_obj_set_style_text_color(sl, PP_WHITE, 0);
-    lv_obj_center(sl);
-
-    s_btn_cancel = lv_button_create(s_scr_addform);
-    lv_obj_set_size(s_btn_cancel, 140, 50);
-    lv_obj_set_style_bg_color(s_btn_cancel, PP_SURFACE_HI, 0);
-    lv_obj_add_event_cb(s_btn_cancel, on_add_cancel, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cl = lv_label_create(s_btn_cancel);
-    lv_label_set_text(cl, "Cancel");
-    lv_obj_set_style_text_color(cl, PP_TEXT, 0);
-    lv_obj_center(cl);
-
-    /* Edit-mode actions (hidden in add mode) */
-    s_btn_setactive = lv_button_create(s_scr_addform);
-    lv_obj_set_size(s_btn_setactive, 140, 50);
-    lv_obj_set_style_bg_color(s_btn_setactive, PP_SURFACE_HI, 0);
-    lv_obj_set_style_border_color(s_btn_setactive, PP_ORANGE, 0);
-    lv_obj_set_style_border_width(s_btn_setactive, 2, 0);
-    lv_obj_add_event_cb(s_btn_setactive, on_setactive, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *al = lv_label_create(s_btn_setactive);
-    lv_label_set_text(al, "Set active");
-    lv_obj_set_style_text_color(al, PP_TEXT, 0);
-    lv_obj_center(al);
-
-    s_btn_remove = lv_button_create(s_scr_addform);
-    lv_obj_set_size(s_btn_remove, 140, 50);
-    lv_obj_set_style_bg_color(s_btn_remove, PP_ERROR, 0);
-    lv_obj_add_event_cb(s_btn_remove, on_remove, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *rl = lv_label_create(s_btn_remove);
-    lv_label_set_text(rl, "Remove");
-    lv_obj_set_style_text_color(rl, PP_WHITE, 0);
-    lv_obj_center(rl);
-
-    /* On-screen keyboard, hidden until a field is focused. */
-    s_kb = lv_keyboard_create(s_scr_addform);
-    lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-
-    configure_add_form(0);   /* default: PrusaLink layout (serial hidden, buttons placed) */
-}
-
-/* "Add a printer" type picker — mirrors the web two-tier flow. Cloud accounts need a keyboard
- * so they're added from the web page; the device handles Local printers directly. */
 static void build_addpick_screen(void)
 {
     s_scr_addpick = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_addpick, PP_BG, 0);
+    lv_obj_clear_flag(s_scr_addpick, LV_OBJ_FLAG_SCROLLABLE);
     make_header(s_scr_addpick, "Add a printer");
 
     const bool P = ui_portrait();
@@ -1001,42 +808,46 @@ static void build_addpick_screen(void)
     lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 52);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(col, 0, 0);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(col, 16, 0);
-    /* Portrait has lots of vertical room — center the group and use taller targets + bigger gaps
-     * so it fills the tall canvas instead of floating in the top half. */
-    lv_obj_set_style_pad_row(col, P ? 16 : 9, 0);
-    if (P) lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(col, P ? 14 : 8, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *ch = lv_label_create(col);
-    lv_label_set_text(ch, "CLOUD ACCOUNTS");
-    lv_obj_set_style_text_color(ch, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(ch, &lv_font_montserrat_12, 0);
-    lv_obj_t *cn = lv_label_create(col);
-    lv_label_set_text(cn, "Prusa Connect & Bambu: sign in from the web page\n(its address is on the Wi-Fi screen).");
-    lv_obj_set_style_text_color(cn, PP_TEXT_MUTED, 0);
-    lv_label_set_long_mode(cn, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(cn, scr_w() - 32);
+    lv_obj_t *head = lv_label_create(col);
+    lv_label_set_text(head, "Add or manage printers from your phone or computer");
+    lv_obj_set_style_text_color(head, PP_TEXT, 0);
+    lv_obj_set_style_text_font(head, &lv_font_montserrat_16, 0);
+    lv_label_set_long_mode(head, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(head, scr_w() - 48);
+    lv_obj_set_style_text_align(head, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_t *lh = lv_label_create(col);
-    lv_label_set_text(lh, "LOCAL PRINTER");
-    lv_obj_set_style_text_color(lh, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(lh, &lv_font_montserrat_12, 0);
+    s_addpick_qr = lv_qrcode_create(col);
+    lv_qrcode_set_size(s_addpick_qr, P ? 220 : 150);
+    lv_qrcode_set_dark_color(s_addpick_qr, PP_BLACK);
+    lv_qrcode_set_light_color(s_addpick_qr, PP_WHITE);
+    lv_obj_set_style_border_color(s_addpick_qr, PP_WHITE, 0);
+    lv_obj_set_style_border_width(s_addpick_qr, 6, 0);   /* QR quiet-zone */
 
-    static const char *names[] = { "Prusa  (PrusaLink)", "Klipper  (Moonraker)", "Bambu Lab  (LAN)" };
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *b = make_button(col, names[i], on_pick_local, (void *)(intptr_t)i, NULL);
-        lv_obj_set_width(b, scr_w() - 32);
-        if (P) lv_obj_set_height(b, 62);
-    }
-    lv_obj_t *cancel = make_button(col, "Cancel", on_pick_cancel, NULL, NULL);
-    lv_obj_set_width(cancel, scr_w() - 32);
-    if (P) lv_obj_set_height(cancel, 56);
-    /* Cancel is a back-out, not a printer type — flatten it so it reads as secondary. */
-    lv_obj_set_style_bg_opa(cancel, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(cancel, 1, 0);
-    lv_obj_set_style_border_color(cancel, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_margin_top(cancel, P ? 8 : 4, 0);
+    s_addpick_url = lv_label_create(col);
+    lv_obj_set_style_text_color(s_addpick_url, PP_ORANGE, 0);
+    lv_obj_set_style_text_font(s_addpick_url, &lv_font_montserrat_20, 0);
+
+    lv_obj_t *why = lv_label_create(col);
+    lv_label_set_text(why, "Scan the code, or open this address in any browser on the same Wi-Fi. "
+                           "The web page handles API keys and Prusa Connect / Klipper / Bambu sign-in, "
+                           "which a touchscreen can't do well.");
+    lv_obj_set_style_text_color(why, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(why, &lv_font_montserrat_14, 0);
+    lv_label_set_long_mode(why, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(why, scr_w() - 48);
+    lv_obj_set_style_text_align(why, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *back = make_button(col, LV_SYMBOL_LEFT " Back", on_pick_cancel, NULL, NULL);
+    lv_obj_set_width(back, P ? scr_w() - 140 : 220);
+    lv_obj_set_style_margin_top(back, 4, 0);
+
+    addpick_refresh();   /* QR + URL from the current IP (build runs before Wi-Fi is up) */
 }
 
 /* ---------- WiFi setup ---------- */
@@ -2544,7 +2355,6 @@ void ui_init(void)
     build_files_screen();
     build_filedetail_screen();
     build_printers_screen();
-    build_addform_screen();
     build_addpick_screen();
     build_control_screen();
     build_wifi_screen();
@@ -2577,15 +2387,6 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "addpick"))                            lv_screen_load(s_scr_addpick);
-        else if (!strcmp(name, "addform")) {   /* add mode, Bambu (shows the Serial field) */
-            s_edit_idx = -1;
-            lv_textarea_set_text(s_ta_name, ""); lv_textarea_set_text(s_ta_host, "");
-            lv_textarea_set_text(s_ta_key, ""); lv_textarea_set_text(s_ta_serial, "");
-            lv_obj_add_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_btn_setactive, LV_OBJ_FLAG_HIDDEN);
-            configure_add_form(2);
-            lv_screen_load(s_scr_addform);
-        }
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
         else if (!strcmp(name, "farm"))                               on_farm_open(NULL);
@@ -2612,7 +2413,6 @@ const char *ui_current_screen(void)
     if (s == s_scr_files)      return "files";
     if (s == s_scr_filedetail) return "filedetail";
     if (s == s_scr_printers)   return "printers";
-    if (s == s_scr_addform)    return "addform";
     if (s == s_scr_about)      return "about";
     if (s == s_scr_prefs)      return "prefs";
     if (s == s_scr_farm)       return "farm";
