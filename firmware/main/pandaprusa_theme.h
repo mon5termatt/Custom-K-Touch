@@ -1,74 +1,94 @@
 #pragma once
 /*
- * Prusa-Touch — theme tokens, matched to the LIVE Prusa Connect dark UI
- * (extracted from connect.prusa3d.com CSS custom properties).
+ * Prusa-Touch — theme tokens.
  *
- * Note on orange: Connect's UI primary is --ui-color-primary = #FA6831, which is
- * what users see in Connect — so we match it for visual fidelity. (The print Brand
- * Manual's "Prusa Orange" is #FD5000; the web UI uses #FA6831. We follow Connect.)
+ * SKINS (issue #6): the palette is now a RUNTIME struct (g_skin, see skin.c) instead of fixed
+ * #defines. Every PP_* macro reads a field of g_skin, so all ~150 call sites in ui.c repaint from
+ * the active skin with zero edits — switching skins is just swapping g_skin and rebuilding screens
+ * (done on reboot, like an orientation change). The default skin reproduces the live Prusa Connect
+ * dark UI exactly (--ui-color-primary #FA6831; surfaces/text/state palette measured from
+ * connect.prusa3d.com). Built-in presets (Connect / Stargate / Nord) live in skin.c.
  */
 #include "lvgl.h"
 
-/* Connect primary */
-#define PP_ORANGE         lv_color_hex(0xFA6831)   /* --ui-color-primary 250,104,49 */
-#define PP_ORANGE_DARK    lv_color_hex(0x9C401E)   /* --color-primary-faded         */
+/* The live palette. One struct of lv_color_t, swapped wholesale when the skin changes.
+ * The 19 "primary" colors are authored per preset; the 14 state badge/strip TINTS are derived
+ * from them at apply time (skin_compute_tints): badge = 21% of the state color over the surface,
+ * strip = 15% over the page background — the exact blend measured from Connect's dark UI. */
+typedef struct {
+    /* accent / primary */
+    lv_color_t orange, orange_dark;
+    /* surfaces */
+    lv_color_t bg, header, surface, surface_hi, border;
+    /* text */
+    lv_color_t text, text_muted, text_inverse;
+    /* state palette (printer/job states) */
+    lv_color_t state_green, state_olive, state_gray, state_orange, state_blue, state_yellow, state_red;
+    /* temperature accents */
+    lv_color_t temp_cold, temp_hot;
+    /* derived state tints (filled by skin_compute_tints) */
+    lv_color_t badge_green, strip_green, badge_olive, strip_olive, badge_gray, strip_gray,
+               badge_orange, strip_orange, badge_blue, strip_blue, badge_yellow, strip_yellow,
+               badge_red, strip_red;
+} pp_skin_t;
 
-/* Connect dark surfaces */
-#define PP_BG             lv_color_hex(0x1C1E21)   /* --background-body  (page)     */
-#define PP_HEADER         lv_color_hex(0x111316)   /* top nav bar (Connect = black) */
-#define PP_SURFACE        lv_color_hex(0x2A2A2A)   /* --background-primary (cards)  */
-#define PP_SURFACE_HI     lv_color_hex(0x4E4E4E)   /* borders/track/hover/raised    */
-#define PP_BORDER         lv_color_hex(0x4E4E4E)   /* --neutral-500                 */
+extern pp_skin_t g_skin;   /* defined in skin.c; valid from skin_init() (before screens build) */
+
+/* Connect primary */
+#define PP_ORANGE         (g_skin.orange)        /* accent / CTA / progress */
+#define PP_ORANGE_DARK    (g_skin.orange_dark)
+
+/* Dark surfaces */
+#define PP_BG             (g_skin.bg)            /* page background           */
+#define PP_HEADER         (g_skin.header)        /* top nav bar               */
+#define PP_SURFACE        (g_skin.surface)       /* cards                     */
+#define PP_SURFACE_HI     (g_skin.surface_hi)    /* borders/track/hover/raised*/
+#define PP_BORDER         (g_skin.border)
 
 /* Text */
-#define PP_TEXT           lv_color_hex(0xFFFFFF)   /* values / primary text         */
-#define PP_TEXT_MUTED     lv_color_hex(0xA7A7A7)   /* --color-navigation labels     */
-#define PP_TEXT_INVERSE   lv_color_hex(0x212529)   /* on light/colored backgrounds  */
+#define PP_TEXT           (g_skin.text)
+#define PP_TEXT_MUTED     (g_skin.text_muted)
+#define PP_TEXT_INVERSE   (g_skin.text_inverse)
 
-/* Connect --state-* palette (printer/job states; dark text sits on these) */
-#define PP_STATE_GREEN    lv_color_hex(0xA1EA70)   /* finished                      */
-#define PP_STATE_OLIVE    lv_color_hex(0x92C78C)   /* ready                         */
-#define PP_STATE_GRAY     lv_color_hex(0xADADAD)   /* idle / offline                */
-#define PP_STATE_ORANGE   lv_color_hex(0xF59C66)   /* printing                      */
-#define PP_STATE_BLUE     lv_color_hex(0x7DA7D9)   /* busy / preparing              */
-#define PP_STATE_YELLOW   lv_color_hex(0xFDDC71)   /* paused / attention            */
-#define PP_STATE_RED      lv_color_hex(0xF8795F)   /* error / stopped               */
+/* Connect --state-* palette (printer/job states) */
+#define PP_STATE_GREEN    (g_skin.state_green)   /* finished        */
+#define PP_STATE_OLIVE    (g_skin.state_olive)   /* ready           */
+#define PP_STATE_GRAY     (g_skin.state_gray)    /* idle / offline  */
+#define PP_STATE_ORANGE   (g_skin.state_orange)  /* printing        */
+#define PP_STATE_BLUE     (g_skin.state_blue)    /* busy / preparing*/
+#define PP_STATE_YELLOW   (g_skin.state_yellow)  /* paused/attention*/
+#define PP_STATE_RED      (g_skin.state_red)     /* error / stopped */
 
-/* Temperature accents (--temp-cold/--temp-hot) */
-#define PP_TEMP_COLD      lv_color_hex(0x0072FF)
-#define PP_TEMP_HOT       lv_color_hex(0xFF0000)
+/* Temperature accents */
+#define PP_TEMP_COLD      (g_skin.temp_cold)
+#define PP_TEMP_HOT       (g_skin.temp_hot)
+
+/* Fixed, non-themed colors (functional: QR contrast, pure black/white) */
+#define PP_BLACK          lv_color_hex(0x000000)
+#define PP_WHITE          lv_color_hex(0xFFFFFF)
 
 /* Functional aliases used by existing screens */
 #define PP_GREEN          PP_STATE_GREEN
 #define PP_GREY           PP_TEXT_MUTED
-#define PP_BLACK          lv_color_hex(0x000000)
-#define PP_WHITE          lv_color_hex(0xFFFFFF)
 #define PP_OK             PP_STATE_GREEN
 #define PP_WARN           PP_STATE_YELLOW
 #define PP_ERROR          PP_STATE_RED
 
-/* ---- Dark-theme state tints (Connect's DARK UI) ----------------------------
- * On dark cards Connect renders state as a MUTED tint of the state color with
- * WHITE text — NOT the bright pastel + dark text (that's Connect's LIGHT theme).
- * Measured live from connect.prusa3d.com: the state badge ≈ 21% of the state
- * color blended over the card (#2A2A2A); the name strip behind it ≈ 15% blended
- * over the page (#1C1E21). Precomputed per state below (matches measured RGB to
- * within rounding, e.g. FINISHED badge rgb(67,82,57), strip rgb(48,61,45)).
- */
-#define PP_BADGE_GREEN    lv_color_hex(0x435239)
-#define PP_STRIP_GREEN    lv_color_hex(0x303D2D)
-#define PP_BADGE_OLIVE    lv_color_hex(0x404B3F)
-#define PP_STRIP_OLIVE    lv_color_hex(0x2E3731)
-#define PP_BADGE_GRAY     lv_color_hex(0x454545)
-#define PP_STRIP_GRAY     lv_color_hex(0x323336)
-#define PP_BADGE_ORANGE   lv_color_hex(0x554237)
-#define PP_STRIP_ORANGE   lv_color_hex(0x3D312B)
-#define PP_BADGE_BLUE     lv_color_hex(0x3C444F)
-#define PP_STRIP_BLUE     lv_color_hex(0x2B333D)
-#define PP_BADGE_YELLOW   lv_color_hex(0x564F39)
-#define PP_STRIP_YELLOW   lv_color_hex(0x3E3B2D)
-#define PP_BADGE_RED      lv_color_hex(0x553B35)
-#define PP_STRIP_RED      lv_color_hex(0x3D2C2A)
+/* Dark-theme state tints (derived from the state colors per skin) */
+#define PP_BADGE_GREEN    (g_skin.badge_green)
+#define PP_STRIP_GREEN    (g_skin.strip_green)
+#define PP_BADGE_OLIVE    (g_skin.badge_olive)
+#define PP_STRIP_OLIVE    (g_skin.strip_olive)
+#define PP_BADGE_GRAY     (g_skin.badge_gray)
+#define PP_STRIP_GRAY     (g_skin.strip_gray)
+#define PP_BADGE_ORANGE   (g_skin.badge_orange)
+#define PP_STRIP_ORANGE   (g_skin.strip_orange)
+#define PP_BADGE_BLUE     (g_skin.badge_blue)
+#define PP_STRIP_BLUE     (g_skin.strip_blue)
+#define PP_BADGE_YELLOW   (g_skin.badge_yellow)
+#define PP_STRIP_YELLOW   (g_skin.strip_yellow)
+#define PP_BADGE_RED      (g_skin.badge_red)
+#define PP_STRIP_RED      (g_skin.strip_red)
 
 typedef enum {
     PP_SC_GREEN, PP_SC_OLIVE, PP_SC_GRAY, PP_SC_ORANGE,

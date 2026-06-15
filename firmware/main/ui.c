@@ -5,6 +5,7 @@
 #include "pandaprusa_theme.h"
 #include "wifi.h"
 #include "prefs.h"
+#include "skin.h"
 #include "pandatouch_display.h"   /* pt_display_schedule_ui — for the test nav API */
 
 #include <stdio.h>
@@ -66,6 +67,7 @@ static lv_obj_t *s_pref_logo_dd;
 static lv_obj_t *s_pref_hideoff_sw;
 static lv_obj_t *s_pref_autoupd_sw;
 static lv_obj_t *s_pref_orient_dd;
+static lv_obj_t *s_pref_theme_dd;
 
 static lv_obj_t *s_pr_list;           /* the "Settings" tab list (device settings + web escort) */
 
@@ -2187,6 +2189,39 @@ static void on_pref_orient_changed(lv_event_t *e)
     lv_obj_add_event_cb(cancel, orient_cancel_cb, LV_EVENT_CLICKED, mbox);
 }
 
+/* Theme/skin: colors bake into widgets at build time, so applying one reboots to rebuild every
+ * screen (and brings the boot screen up themed). Confirm first, like an orientation class change. */
+static int s_pending_skin = -1;
+
+static void skin_confirm_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    if (s_pending_skin >= 0) app_state_set_pref(PP_PREF_SKIN, s_pending_skin);   /* reboots */
+    lv_msgbox_close(mbox);
+}
+static void skin_cancel_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    lv_dropdown_set_selected(s_pref_theme_dd, (uint16_t)skin_current());   /* revert the picker */
+    lv_msgbox_close(mbox);
+}
+static void on_pref_theme_changed(lv_event_t *e)
+{
+    int sel = (int)lv_dropdown_get_selected(lv_event_get_target(e));
+    if (sel == skin_current()) return;
+    s_pending_skin = sel;
+    lv_obj_t *mbox = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(mbox, "Apply theme");
+    char msg[112];
+    snprintf(msg, sizeof(msg), "Apply the \"%s\" theme? The device restarts to repaint every screen.", skin_name(sel));
+    lv_msgbox_add_text(mbox, msg);
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "Restart");
+    lv_obj_set_style_bg_color(ok, PP_ORANGE, 0);
+    lv_obj_add_event_cb(ok, skin_confirm_cb, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(cancel, skin_cancel_cb, LV_EVENT_CLICKED, mbox);
+}
+
 static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
 {
     lv_obj_t *l = lv_label_create(parent);
@@ -2275,6 +2310,25 @@ static void build_prefs_screen(void)
     lv_obj_align(s_pref_orient_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 512 : 224);
     dropdown_dark(s_pref_orient_dd);
     lv_obj_add_event_cb(s_pref_orient_dd, on_pref_orient_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Theme / skin — landscape: right column under orientation; portrait: stacked. */
+    lv_obj_t *tl = lv_label_create(s_scr_prefs);
+    lv_label_set_text(tl, "Theme");
+    lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(tl, &lv_font_montserrat_14, 0);
+    lv_obj_align(tl, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 596 : 308);
+    char skopts[128]; skopts[0] = '\0';
+    for (int i = 0; i < skin_count(); i++) {
+        if (i) strlcat(skopts, "\n", sizeof(skopts));
+        strlcat(skopts, skin_name(i), sizeof(skopts));
+    }
+    s_pref_theme_dd = lv_dropdown_create(s_scr_prefs);
+    lv_dropdown_set_options(s_pref_theme_dd, skopts);
+    lv_dropdown_set_selected(s_pref_theme_dd, (uint16_t)skin_current());
+    lv_obj_set_width(s_pref_theme_dd, 320);
+    lv_obj_align(s_pref_theme_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 624 : 336);
+    dropdown_dark(s_pref_theme_dd);
+    lv_obj_add_event_cb(s_pref_theme_dd, on_pref_theme_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void on_prefs_open(lv_event_t *e)

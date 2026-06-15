@@ -14,6 +14,7 @@ set(APP_SRC
   ${CMAKE_CURRENT_SOURCE_DIR}/sim_main.c
   ${CMAKE_CURRENT_SOURCE_DIR}/sim_stubs.c
   ${ROOT}/main/ui.c
+  ${ROOT}/main/skin.c
   ${ROOT}/main/pt_ic_nozzle.c
   ${ROOT}/main/pt_ic_bed.c
   ${ROOT}/main/pt_ic_speed.c
@@ -26,7 +27,7 @@ set(APP_SRC
 )
 
 add_executable(pt_sim ${APP_SRC} ${LVGL_SRC})
-target_compile_definitions(pt_sim PRIVATE LV_CONF_INCLUDE_SIMPLE _DEFAULT_SOURCE)
+target_compile_definitions(pt_sim PRIVATE LV_CONF_INCLUDE_SIMPLE _DEFAULT_SOURCE PP_HOST_SIM)
 # ui.c is device code; don't fail the host build on its warnings.
 target_compile_options(pt_sim PRIVATE -w)
 target_include_directories(pt_sim PRIVATE

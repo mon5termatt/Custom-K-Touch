@@ -25,6 +25,7 @@
 #include "printer_store.h"
 #include "app_state.h"
 #include "prefs.h"
+#include "skin.h"
 #include "ota_update.h"
 #include "web.h"
 #include "ui.h"
@@ -47,6 +48,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs);   /* fail loudly on any other NVS init error */
 
     prefs_load();   /* user prefs (sort/filter/logo) — before the UI is built */
+    skin_init();    /* load the active skin into g_skin before any screen (incl. boot) is built */
 
     /* Display + LVGL + GT911 (BSP registers the touch indev). */
     if (pt_display_init() != ESP_OK) {

@@ -6,6 +6,7 @@
  * this previews the layout work without the device. */
 #include "lvgl.h"
 #include "ui.h"
+#include "skin.h"
 #include "pandaprusa.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,6 +93,7 @@ int main(int argc, char **argv) {
     s_w = argc>2 ? atoi(argv[2]) : 800;
     s_h = argc>3 ? atoi(argv[3]) : 480;
     const char *out = argc>4 ? argv[4] : "out.bmp";
+    skin_apply_index(argc>5 ? atoi(argv[5]) : 0);   /* 0=Connect 1=Stargate 2=Nord */
 
     lv_init();
     lv_tick_set_cb(tick_cb);

@@ -6,6 +6,7 @@
 #include "bambu_cloud.h"
 #include "printer_store.h"
 #include "prefs.h"
+#include "skin.h"
 #include "wifi.h"
 #include "ui.h"
 #include "ota_update.h"
@@ -700,6 +701,14 @@ static void run_command(const pp_cmd_t *cmd)
             } else {
                 pt_display_schedule_ui(ui_apply_orient, NULL);   /* same class: rotate live */
             }
+        }
+        else if (pref == PP_PREF_SKIN) {
+            /* Colors bake into widgets at build time, so a skin change reboots to rebuild every
+             * screen (like an orientation class change) — and the boot screen comes up themed too. */
+            skin_persist_index(val);
+            ESP_LOGI(TAG, "skin changed -> reboot to apply");
+            vTaskDelay(pdMS_TO_TICKS(400));   /* let the NVS commit + HTTP response flush */
+            esp_restart();
         }
         return;
     }
