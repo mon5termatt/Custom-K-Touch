@@ -832,7 +832,9 @@ static void build_addpick_screen(void)
     lv_obj_set_style_border_width(s_addpick_qr, 6, 0);   /* QR quiet-zone */
 
     s_addpick_url = lv_label_create(col);
-    lv_obj_set_style_text_color(s_addpick_url, PP_ORANGE, 0);
+    /* The URL is the primary CTA — use high-contrast text (not the accent, which is low-contrast
+     * on some skins' backgrounds); the size already makes it prominent. */
+    lv_obj_set_style_text_color(s_addpick_url, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_addpick_url, PP_F20, 0);
 
     lv_obj_t *why = lv_label_create(col);
