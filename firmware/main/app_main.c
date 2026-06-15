@@ -26,6 +26,7 @@
 #include "app_state.h"
 #include "prefs.h"
 #include "skin.h"
+#include "layout.h"
 #include "ota_update.h"
 #include "web.h"
 #include "ui.h"
@@ -49,6 +50,7 @@ void app_main(void)
 
     prefs_load();   /* user prefs (sort/filter/logo) — before the UI is built */
     skin_init();    /* load the active skin into g_skin before any screen (incl. boot) is built */
+    layout_init();  /* load the custom layout spec (or the default) before the UI is built */
 
     /* Display + LVGL + GT911 (BSP registers the touch indev). */
     if (pt_display_init() != ESP_OK) {

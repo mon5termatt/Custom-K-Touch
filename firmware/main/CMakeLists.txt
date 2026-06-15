@@ -7,6 +7,7 @@ idf_component_register(
         "printer_store.c"
         "prefs.c"
         "skin.c"
+        "layout.c"
         "app_state.c"
         "web.c"
         "ota_update.c"

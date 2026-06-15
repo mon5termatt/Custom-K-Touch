@@ -29,6 +29,8 @@
 #include "netlog.h"
 #include "prefs.h"
 #include "skin.h"
+#include "layout.h"
+#include "esp_timer.h"
 #include "mbedtls/base64.h"
 
 static const char *TAG = "web";
@@ -82,7 +84,7 @@ static const char INDEX_HTML[] =
 "@media(max-width:560px){.ptgrid{grid-template-columns:1fr}}</style></head><body>"
 "<header>PRUSA CONNECT TOUCH</header>"
 "<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
-"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a><a onclick=\"t(7)\">Theme</a></nav>"
+"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a><a onclick=\"t(7)\">Theme</a><a onclick=\"t(8)\">Layout</a></nav>"
 "<div class=\"tab on\" id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1>"
 /* Type-first picker: choose how to add, then only the relevant fields appear. */
@@ -170,14 +172,21 @@ static const char INDEX_HTML[] =
 "<div style='margin-top:14px'><button class=p onclick=tf_save()>Save &amp; apply</button> "
 "<button onclick=tf_export()>Export</button> <button onclick=tf_pick()>Import</button>"
 "<input type=file id=tfimp accept=.json style=display:none onchange=tf_import(event)></div></div></div>"
+"<div class=tab id=t8><div class=card><b>Layout</b>"
+"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to select it, then move/resize with the buttons (or drag it). Save reboots the device into your layout.</div>"
+"<div style='margin:10px 0'>Add tile: <span id=lypal></span></div>"
+"<div id=lygrid ondragover=ly_over(event) ondrop=ly_drop(event) style='position:relative;width:560px;max-width:100%;aspect-ratio:5/3;background:#1c1e21;border:1px solid #4e4e4e;border-radius:6px'></div>"
+"<div id=lysel style='margin-top:10px;min-height:26px;color:#a7a7a7;font-size:13px'></div>"
+"<div style='margin-top:12px'><button class=p onclick=ly_save()>Save &amp; apply</button> <button onclick=ly_export()>Export</button> <button onclick=ly_pick()>Import</button>"
+"<input type=file id=lyimp accept=.json style=display:none onchange=ly_import(event)></div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
 "<div style='background:#1c1e21;padding:14px;border-radius:10px;max-width:92%'>"
 "<div style='display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px'><b id=snapt>Snapshot</b><span><button onclick=snapr()>Refresh</button><button onclick=snapx()>Close</button></span></div>"
 "<img id=snapi style='max-width:84vw;max-height:70vh;border-radius:6px;background:#000;min-width:200px;min-height:120px' onerror=\"this.alt='No snapshot available for this printer'\"></div></div>"
 "<script>"
 "var FL=[];var SNAPU='';"
-"function t(i){for(let n=0;n<8;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==6)lf_init();if(i==7)tf_load()}"
+"function t(i){for(let n=0;n<9;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
+"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -346,6 +355,29 @@ static const char INDEX_HTML[] =
 "function tf_export(){var o={name:document.getElementById('tfbrand').value||'Custom',variant:TFV,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
 "function tf_pick(){document.getElementById('tfimp').click()}"
 "function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;if(o.font!=null)document.getElementById('tffont').value=o.font;if(o.brand)document.getElementById('tfbrand').value=o.brand;if('byline' in o)document.getElementById('tfbyline').value=o.byline;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert('Invalid skin file')}};rd.readAsText(f)}"
+/* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
+ * + data-attributes only, so it embeds with no escaping. ---- */
+"var LAY={cols:8,tiles:[]},LYTYPES=[],LYSEL=-1;"
+"var LYMIN={name:[2,1],model:[2,1],state:[2,1],nozzle:[2,1],bed:[2,1],speed:[2,1],z:[2,1],progress:[3,1],eta:[2,1],thumb:[2,2]};"
+"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview'};"
+"async function ly_load(){try{var r=await fetch('/api/layout').then(x=>x.json());LAY={cols:r.cols||8,tiles:r.tiles||[]};LYTYPES=r.types||[]}catch(e){}ly_pal();ly_render()}"
+"function ly_rows(){var m=4;LAY.tiles.forEach(function(t){if(t.r+t.h>m)m=t.r+t.h});return m}"
+"function ly_pal(){var h='';LYTYPES.forEach(function(t){h+=`<button data-t='${t}' onclick=ly_addsel(this) style='margin:2px'>${LYLBL[t]||t}</button>`});document.getElementById('lypal').innerHTML=h}"
+"function ly_addsel(el){ly_add(el.getAttribute('data-t'))}"
+"function ly_free(c,r,w,h,ex){for(var i=0;i<LAY.tiles.length;i++){if(i==ex)continue;var t=LAY.tiles[i];if(c<t.c+t.w&&c+w>t.c&&r<t.r+t.h&&r+h>t.r)return false}return true}"
+"function ly_add(type){var mn=LYMIN[type]||[2,1],rows=ly_rows();for(var r=0;r<rows+2;r++)for(var c=0;c+mn[0]<=LAY.cols;c++){if(ly_free(c,r,mn[0],mn[1],-1)){LAY.tiles.push({type:type,c:c,r:r,w:mn[0],h:mn[1]});LYSEL=LAY.tiles.length-1;return ly_render()}}}"
+"function ly_render(){var rows=ly_rows(),g=document.getElementById('lygrid'),cw=100/LAY.cols,ch=100/rows,h='';LAY.tiles.forEach(function(t,i){var col=`hsl(${(t.type.charCodeAt(0)*41)%360},42%,38%)`;h+=`<div onclick='ly_sel(${i})' draggable=true ondragstart='ly_drag(event,${i})' style='position:absolute;left:${t.c*cw}%;top:${t.r*ch}%;width:${t.w*cw}%;height:${t.h*ch}%;box-sizing:border-box;padding:4px;border:2px solid ${i==LYSEL?'#fa6831':'#0007'};background:${col};border-radius:4px;font-size:11px;color:#fff;cursor:move;overflow:hidden'>${LYLBL[t.type]||t.type}</div>`});g.innerHTML=h;g.style.backgroundImage=`repeating-linear-gradient(90deg,#33373c 0px,#33373c 1px,transparent 1px,transparent ${cw}%),repeating-linear-gradient(0deg,#33373c 0px,#33373c 1px,transparent 1px,transparent ${ch}%)`;ly_selbar()}"
+"function ly_sel(i){LYSEL=i;ly_render()}"
+"function ly_selbar(){var b=document.getElementById('lysel');if(LYSEL<0||LYSEL>=LAY.tiles.length){b.innerHTML='Click a tile to move, resize, or remove it.';return}var t=LAY.tiles[LYSEL];b.innerHTML=`<b style='color:#fff'>${LYLBL[t.type]}</b> &nbsp; size <button onclick='ly_rs(-1,0)'>w-</button><button onclick='ly_rs(1,0)'>w+</button> <button onclick='ly_rs(0,-1)'>h-</button><button onclick='ly_rs(0,1)'>h+</button> &nbsp; move <button onclick='ly_mv(-1,0)'>&larr;</button><button onclick='ly_mv(1,0)'>&rarr;</button><button onclick='ly_mv(0,-1)'>&uarr;</button><button onclick='ly_mv(0,1)'>&darr;</button> &nbsp; <button onclick='ly_del()'>Remove</button>`}"
+"function ly_rs(dw,dh){var t=LAY.tiles[LYSEL],mn=LYMIN[t.type]||[1,1],nw=t.w+dw,nh=t.h+dh;if(nw<mn[0]||nh<mn[1]||t.c+nw>LAY.cols||nh>8)return;if(!ly_free(t.c,t.r,nw,nh,LYSEL))return;t.w=nw;t.h=nh;ly_render()}"
+"function ly_mv(dc,dr){var t=LAY.tiles[LYSEL],nc=t.c+dc,nr=t.r+dr;if(nc<0||nr<0||nc+t.w>LAY.cols)return;if(!ly_free(nc,nr,t.w,t.h,LYSEL))return;t.c=nc;t.r=nr;ly_render()}"
+"function ly_del(){LAY.tiles.splice(LYSEL,1);LYSEL=-1;ly_render()}"
+"function ly_drag(e,i){LYSEL=i;e.dataTransfer.setData('text',i)}function ly_over(e){e.preventDefault()}"
+"function ly_drop(e){e.preventDefault();var g=document.getElementById('lygrid'),rc=g.getBoundingClientRect(),rows=ly_rows(),t=LAY.tiles[LYSEL];if(!t)return;var c=Math.floor((e.clientX-rc.left)/rc.width*LAY.cols),r=Math.floor((e.clientY-rc.top)/rc.height*rows);c=Math.max(0,Math.min(c,LAY.cols-t.w));r=Math.max(0,r);if(ly_free(c,r,t.w,t.h,LYSEL)){t.c=c;t.r=r;ly_render()}}"
+"async function ly_save(){var r=await fetch('/api/layout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LAY)});alert(r.ok?'Saved - the device is restarting into your layout.':'Save failed (HTTP '+r.status+')')}"
+"function ly_export(){var b=new Blob([JSON.stringify(LAY,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.layout.json';a.click()}"
+"function ly_pick(){document.getElementById('lyimp').click()}"
+"function ly_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);if(o.tiles){LAY={cols:o.cols||8,tiles:o.tiles};LYSEL=-1;ly_render()}}catch(x){alert('Invalid layout file')}};rd.readAsText(f)}"
 "st();la();setInterval(st,3000);"
 "</script></body></html>";
 
@@ -1364,6 +1396,83 @@ static esp_err_t skin_post(httpd_req_t *req)   /* body {colors:{19 #rrggbb}} -> 
     return ESP_OK;
 }
 
+/* ---- Custom layout (issue #6 Phase 3): the chunk-grid spec for the active-printer view ---- */
+static void reboot_cb(void *a) { (void)a; esp_restart(); }
+static void reboot_soon(void)   /* let the HTTP response flush, then restart to rebuild the screen */
+{
+    static esp_timer_handle_t t;
+    if (!t) { const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "reboot" }; esp_timer_create(&a, &t); }
+    esp_timer_start_once(t, 500000);
+}
+
+static esp_err_t api_layout_get(httpd_req_t *req)
+{
+    const pp_layout_t *L = layout_get();
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "cols", L->cols);
+    cJSON *ts = cJSON_CreateArray();
+    for (int i = 0; i < L->n; i++) {
+        cJSON *t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "type", PP_TILE_KEYS[L->tiles[i].type]);
+        cJSON_AddNumberToObject(t, "c", L->tiles[i].c); cJSON_AddNumberToObject(t, "r", L->tiles[i].r);
+        cJSON_AddNumberToObject(t, "w", L->tiles[i].w); cJSON_AddNumberToObject(t, "h", L->tiles[i].h);
+        cJSON_AddItemToArray(ts, t);
+    }
+    cJSON_AddItemToObject(o, "tiles", ts);
+    cJSON *pal = cJSON_CreateArray();          /* the tile palette (for the designer) */
+    for (int k = 1; k < LT_COUNT; k++) cJSON_AddItemToArray(pal, cJSON_CreateString(PP_TILE_KEYS[k]));
+    cJSON_AddItemToObject(o, "types", pal);
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js ? js : "{}");
+    free(js); cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static int tile_type_of(const char *key)
+{
+    if (key) for (int k = 1; k < LT_COUNT; k++) if (!strcmp(key, PP_TILE_KEYS[k])) return k;
+    return 0;
+}
+static int jint(const cJSON *o, const char *k)   /* an int member, 0 if absent */
+{
+    const cJSON *m = cJSON_GetObjectItem(o, k);
+    return cJSON_IsNumber(m) ? m->valueint : 0;
+}
+
+static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,w,h}]} -> store + reboot */
+{
+    char *body = recv_body(req);
+    if (!body) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body);
+    bool ok = false;
+    if (j) {
+        pp_layout_t L = {0};
+        int cols = jint(j, "cols"); L.cols = (cols >= 1 && cols <= 16) ? cols : 8;
+        cJSON *ts = cJSON_GetObjectItem(j, "tiles"), *t = NULL;
+        int n = 0;
+        if (cJSON_IsArray(ts)) cJSON_ArrayForEach(t, ts) {
+            if (n >= PP_LAYOUT_MAX) break;
+            const cJSON *ty = cJSON_GetObjectItem(t, "type");
+            int type = tile_type_of(cJSON_IsString(ty) ? ty->valuestring : NULL);
+            if (!type) continue;
+            L.tiles[n].type = (uint8_t)type;
+            L.tiles[n].c = (uint8_t)jint(t, "c"); L.tiles[n].r = (uint8_t)jint(t, "r");
+            int w = jint(t, "w"), h = jint(t, "h");
+            L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
+            n++;
+        }
+        L.n = (uint8_t)n;
+        if (n > 0) { layout_set(&L); ok = true; }   /* layout_set re-validates */
+        cJSON_Delete(j);
+    }
+    free(body);
+    if (!ok) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need tiles[]"); return ESP_FAIL; }
+    httpd_resp_sendstr(req, "ok");
+    reboot_soon();   /* rebuild the layout screen from the new spec */
+    return ESP_OK;
+}
+
 void web_start(void)
 {
     s_upd_mtx = xSemaphoreCreateMutex();
@@ -1408,6 +1517,7 @@ void web_start(void)
         { "/api/bambu/logout", HTTP_POST, bambu_logout_post },
         { "/api/log", HTTP_GET, log_get },
         { "/api/skin", HTTP_GET, skin_get }, { "/api/skin", HTTP_POST, skin_post },
+        { "/api/layout", HTTP_GET, api_layout_get }, { "/api/layout", HTTP_POST, api_layout_post },
     };
     /* Register each route through auth_wrap, stashing the real handler in user_ctx. When a web
      * password is set, auth_wrap gates every route; otherwise it's a transparent pass-through. */
