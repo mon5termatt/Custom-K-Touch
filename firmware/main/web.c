@@ -28,6 +28,7 @@
 #include "bambu_cloud.h"
 #include "netlog.h"
 #include "prefs.h"
+#include "skin.h"
 #include "mbedtls/base64.h"
 
 static const char *TAG = "web";
@@ -81,7 +82,7 @@ static const char INDEX_HTML[] =
 "@media(max-width:560px){.ptgrid{grid-template-columns:1fr}}</style></head><body>"
 "<header>PRUSA CONNECT TOUCH</header>"
 "<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
-"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a></nav>"
+"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a><a onclick=\"t(7)\">Theme</a></nav>"
 "<div class=\"tab on\" id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1>"
 /* Type-first picker: choose how to add, then only the relevant fields appear. */
@@ -154,14 +155,27 @@ static const char INDEX_HTML[] =
 "<button onclick=shot()>Refresh</button>"
 "<div class=muted>What the touchscreen is showing right now.</div>"
 "<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div></div>"
+"<div class=tab id=t7><div class=card><b>Theme</b>"
+"<div class=muted>Design a custom skin from six colors. The full palette derives automatically and is contrast-checked; Save reboots the device into your theme.</div>"
+"<div id=tfseeds style='display:flex;flex-wrap:wrap;gap:12px;margin:12px 0'></div>"
+"<label>Variant <select id=tfvar onchange=tf_render()><option value=dark>Dark</option><option value=light>Light</option></select></label>"
+"<div style='display:flex;gap:20px;flex-wrap:wrap;margin-top:14px'>"
+"<div><div class=muted>Preview</div><div id=tfprev></div></div>"
+"<div style='flex:1;min-width:220px'><div class=muted>Derived palette (click a chip to copy)</div>"
+"<div id=tfsw style='display:flex;flex-wrap:wrap;gap:5px;margin-top:5px'></div>"
+"<div class=muted style='margin-top:12px'>Contrast (WCAG)</div><div id=tfwc style='display:flex;flex-wrap:wrap;gap:3px 14px'></div></div></div>"
+"<div id=tfwarn style='color:#f8795f;margin-top:10px'></div>"
+"<div style='margin-top:14px'><button class=p onclick=tf_save()>Save &amp; apply</button> "
+"<button onclick=tf_export()>Export</button> <button onclick=tf_pick()>Import</button>"
+"<input type=file id=tfimp accept=.json style=display:none onchange=tf_import(event)></div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
 "<div style='background:#1c1e21;padding:14px;border-radius:10px;max-width:92%'>"
 "<div style='display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px'><b id=snapt>Snapshot</b><span><button onclick=snapr()>Refresh</button><button onclick=snapx()>Close</button></span></div>"
 "<img id=snapi style='max-width:84vw;max-height:70vh;border-radius:6px;background:#000;min-width:200px;min-height:120px' onerror=\"this.alt='No snapshot available for this printer'\"></div></div>"
 "<script>"
 "var FL=[];var SNAPU='';"
-"function t(i){for(let n=0;n<7;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==6)lf_init()}"
+"function t(i){for(let n=0;n<8;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
+"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==6)lf_init();if(i==7)tf_load()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -299,6 +313,37 @@ static const char INDEX_HTML[] =
 "return '<div class=card style=padding:10px><b>#'+n.number+' '+n.name+'</b><br><span class=muted>'+(n.completionDate||'')+' - done '+dn+'/'+tot+(j.printing?', '+j.printing+' printing':'')+(j.needAttention?', '+j.needAttention+' attn':'')+'</span><div class=bar><i style=width:'+pct+'%></i></div></div>'}).join('')||'<div class=card style=padding:12px class=muted>No active orders</div>';"
 "forders.innerHTML='<div class=card style=padding:10px><b>Active Orders</b> <span class=muted>'+act.length+'</span></div>'+rows}"
 "catch(e){forders.innerHTML='<div class=card style=padding:12px>Orders unavailable</div>'}}"
+/* ---- ThemeForge skin editor (issue #6 Phase 1b). Single-quotes + backtick templates only, so
+ * it embeds in these C string literals with no escaping. 6 seeds -> derive 19 tokens -> WCAG. ---- */
+"var TFS={primary:'#fa6831',secondary:'#7da7d9',error:'#f8795f',surface:'#2a2a2a',ink:'#ffffff',bg:'#1c1e21'},TFV='dark',TFC={};"
+"var TFSL=[['primary','Accent'],['secondary','Info/blue'],['error','Error'],['surface','Surface'],['ink','Text'],['bg','Background']];"
+"var TFTOK=['orange','orange_dark','bg','header','surface','surface_hi','border','text','text_muted','text_inverse','state_green','state_olive','state_gray','state_orange','state_blue','state_yellow','state_red','temp_cold','temp_hot'];"
+"var TFPR=[['text','surface'],['text','bg'],['text_muted','surface'],['text_inverse','orange'],['text_inverse','state_orange'],['text','header'],['state_red','surface'],['state_green','surface'],['state_blue','surface'],['state_yellow','surface'],['temp_hot','surface'],['temp_cold','surface']];"
+"function _cl(n,a,b){return n<a?a:n>b?b:n}"
+"function h2r(h){h=String(h).trim().replace(/^#/,'');if(h.length==3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];var n=parseInt(h,16);return{r:(n>>16)&255,g:(n>>8)&255,b:n&255}}"
+"function r2h(r,g,b){var t=function(v){v=Math.round(_cl(v,0,255)).toString(16);return v.length<2?'0'+v:v};return '#'+t(r)+t(g)+t(b)}"
+"function r2l(r,g,b){r/=255;g/=255;b/=255;var mx=Math.max(r,g,b),mn=Math.min(r,g,b),h,s,l=(mx+mn)/2;if(mx==mn){h=0;s=0}else{var d=mx-mn;s=l>.5?d/(2-mx-mn):d/(mx+mn);switch(mx){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;default:h=(r-g)/d+4}h/=6}return{h:h*360,s:s*100,l:l*100}}"
+"function l2r(h,s,l){h=((h%360)+360)%360/360;s=_cl(s,0,100)/100;l=_cl(l,0,100)/100;var r,g,b;if(s==0){r=g=b=l}else{var f=function(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<.5)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};var q=l<.5?l*(1+s):l+s-l*s,p=2*l-q;r=f(p,q,h+1/3);g=f(p,q,h);b=f(p,q,h-1/3)}return{r:r*255,g:g*255,b:b*255}}"
+"function h2l(h){var c=h2r(h);return r2l(c.r,c.g,c.b)}function l2h(h,s,l){var c=l2r(h,s,l);return r2h(c.r,c.g,c.b)}"
+"function mix(a,b,t){var x=h2r(a),y=h2r(b);return r2h(x.r+(y.r-x.r)*t,x.g+(y.g-x.g)*t,x.b+(y.b-x.b)*t)}"
+"function sh(h,dl,ds){var c=h2l(h);return l2h(c.h,_cl(c.s+(ds||0),0,100),_cl(c.l+(dl||0),0,100))}"
+"var TFA={green:'#5cd35c',olive:'#9bbf6e',yellow:'#ffd23f'};"
+"function _stt(h,v){var u=h2l(h).h;return v=='light'?l2h(u,55,42):l2h(u,68,68)}"
+"function derive(s,v){var d=v!='light',T={};T.orange=s.primary;T.orange_dark=sh(s.primary,d?-22:-18,6);T.bg=s.bg;T.header=sh(s.bg,d?-6:-5);T.surface=s.surface;T.surface_hi=sh(s.surface,d?15:-12);T.border=T.surface_hi;T.text=s.ink;T.text_muted=mix(s.ink,s.surface,d?.42:.4);T.text_inverse=d?sh(s.bg,3):'#ffffff';T.state_green=_stt(TFA.green,v);T.state_olive=_stt(TFA.olive,v);T.state_gray=mix(s.ink,s.surface,d?.32:.3);T.state_orange=_stt(s.primary,v);T.state_blue=_stt(s.secondary,v);T.state_yellow=_stt(TFA.yellow,v);T.state_red=_stt(s.error,v);T.temp_cold=d?'#3a96ff':'#0072ff';T.temp_hot=d?'#ff5a40':'#e10000';return T}"
+"function exS(c){return{primary:c.orange,secondary:c.state_blue||c.temp_cold,error:c.state_red,surface:c.surface,ink:c.text,bg:c.bg}}"
+"function _lum(h){var c=h2r(h),f=function(x){x/=255;return x<=.03928?x/12.92:Math.pow((x+.055)/1.055,2.4)};return .2126*f(c.r)+.7152*f(c.g)+.0722*f(c.b)}"
+"function _cr(a,b){var L=_lum(a),M=_lum(b),hi=Math.max(L,M),lo=Math.min(L,M);return(hi+.05)/(lo+.05)}"
+"function _ct(r){return r>=7?'AAA':r>=4.5?'AA':r>=3?'AA-L':'FAIL'}"
+"async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors)}catch(e){}document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
+"function tf_si(){var h='';TFSL.forEach(function(p){h+=`<label style='font-size:12px'>${p[1]}<br><input type=color value='${TFS[p[0]]}' oninput='TFS.${p[0]}=this.value;tf_render()'></label>`});document.getElementById('tfseeds').innerHTML=h}"
+"function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38);document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>PRUSA TOUCH</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
+"function tf_render(){TFV=document.getElementById('tfvar').value;TFC=derive(TFS,TFV);var C=TFC;"
+"var sw='';TFTOK.forEach(function(k){sw+=`<div title='${k} ${C[k]}' style='width:32px;height:32px;border-radius:5px;border:1px solid #0006;background:${C[k]}'></div>`});document.getElementById('tfsw').innerHTML=sw;"
+"var wc='',wn='';TFPR.forEach(function(p){var r=_cr(C[p[0]],C[p[1]]),t=_ct(r),cc=t=='FAIL'?'#f8795f':t=='AA-L'?'#fddc71':'#a1ea70';wc+=`<span style='font-size:11px'>${p[0]}/${p[1]} <b style='color:${cc}'>${r.toFixed(1)} ${t}</b></span>`;if(t=='FAIL'&&(p[1]=='surface'||p[1]=='bg'))wn=`Low contrast: ${p[0]} on ${p[1]} may be hard to read.`});document.getElementById('tfwc').innerHTML=wc;document.getElementById('tfwarn').textContent=wn;tf_prev()}"
+"async function tf_save(){var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({colors:TFC})});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
+"function tf_export(){var o={name:'Custom',variant:TFV,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
+"function tf_pick(){document.getElementById('tfimp').click()}"
+"function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert('Invalid skin file')}};rd.readAsText(f)}"
 "st();la();setInterval(st,3000);"
 "</script></body></html>";
 
@@ -1245,6 +1290,68 @@ static esp_err_t security_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ---- Skins (issue #6 Phase 1b: the ThemeForge web editor) ---- */
+static bool parse_hex_color(const char *s, uint8_t out[3])   /* "#rrggbb" -> 3 bytes */
+{
+    if (!s) return false;
+    if (*s == '#') s++;
+    if (strlen(s) != 6) return false;
+    for (int k = 0; k < 3; k++) {
+        char buf[3] = { s[k*2], s[k*2+1], 0 }, *end;
+        long v = strtol(buf, &end, 16);
+        if (*end) return false;
+        out[k] = (uint8_t)v;
+    }
+    return true;
+}
+
+static esp_err_t skin_get(httpd_req_t *req)   /* current skin + preset names + the active 19 colors */
+{
+    uint8_t rgb[57]; skin_palette_rgb(skin_current(), rgb);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "current", skin_current());
+    cJSON_AddNumberToObject(o, "custom", skin_custom_index());
+    cJSON *names = cJSON_CreateArray();
+    for (int i = 0; i < skin_count(); i++) cJSON_AddItemToArray(names, cJSON_CreateString(skin_name(i)));
+    cJSON_AddItemToObject(o, "names", names);
+    cJSON *cols = cJSON_CreateObject();
+    for (int i = 0; i < 19; i++) {
+        char hex[8]; snprintf(hex, sizeof(hex), "#%02x%02x%02x", rgb[i*3], rgb[i*3+1], rgb[i*3+2]);
+        cJSON_AddStringToObject(cols, SKIN_TOKENS[i], hex);
+    }
+    cJSON_AddItemToObject(o, "colors", cols);
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js ? js : "{}");
+    free(js); cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static esp_err_t skin_post(httpd_req_t *req)   /* body {colors:{19 #rrggbb}} -> store custom + reboot */
+{
+    char *body = recv_body(req);
+    if (!body) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body);
+    bool ok = false;
+    if (j) {
+        cJSON *cols = cJSON_GetObjectItem(j, "colors");
+        if (cJSON_IsObject(cols)) {
+            uint8_t rgb[57]; ok = true;
+            for (int i = 0; i < 19 && ok; i++) {
+                cJSON *c = cJSON_GetObjectItem(cols, SKIN_TOKENS[i]);
+                if (!cJSON_IsString(c) || !parse_hex_color(c->valuestring, &rgb[i*3])) ok = false;
+            }
+            if (ok) skin_set_custom(rgb);   /* NVS blob write on the httpd (internal-stack) task */
+        }
+        cJSON_Delete(j);
+    }
+    free(body);
+    if (!ok) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need colors{19 #rrggbb}"); return ESP_FAIL; }
+    httpd_resp_sendstr(req, "ok");
+    app_state_set_pref(PP_PREF_SKIN, skin_custom_index());   /* persist active idx + reboot to apply */
+    return ESP_OK;
+}
+
 void web_start(void)
 {
     s_upd_mtx = xSemaphoreCreateMutex();
@@ -1288,6 +1395,7 @@ void web_start(void)
         { "/api/bambu/pull", HTTP_POST, bambu_pull_post },
         { "/api/bambu/logout", HTTP_POST, bambu_logout_post },
         { "/api/log", HTTP_GET, log_get },
+        { "/api/skin", HTTP_GET, skin_get }, { "/api/skin", HTTP_POST, skin_post },
     };
     /* Register each route through auth_wrap, stashing the real handler in user_ctx. When a web
      * password is set, auth_wrap gates every route; otherwise it's a transparent pass-through. */

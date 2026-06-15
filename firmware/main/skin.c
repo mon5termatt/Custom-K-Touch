@@ -57,7 +57,18 @@ static const char     *PRESET_NAME[] = { "Connect (default)", "Stargate", "Nord"
 
 /* The live palette. Defaults to Connect so it's valid even before skin_init() runs. */
 pp_skin_t g_skin = SKIN_CONNECT;
+static pp_skin_t s_custom = SKIN_CONNECT;   /* user's custom palette (== Connect until set) */
 static int s_current = 0;
+#define CUSTOM_IDX SKIN_N                    /* the Custom slot sits right after the presets */
+
+/* Canonical token order for the packed 57-byte (19 x RGB) custom palette — must match the web
+ * editor's POST body and the GET response. */
+const char *const SKIN_TOKENS[19] = {
+    "orange","orange_dark","bg","header","surface","surface_hi","border",
+    "text","text_muted","text_inverse",
+    "state_green","state_olive","state_gray","state_orange","state_blue","state_yellow","state_red",
+    "temp_cold","temp_hot"
+};
 
 /* Derive each state's badge (21% of the state color over the surface) and name-strip (15% over
  * the page background) — the exact blend measured from Connect's dark UI, now applied to any skin. */
@@ -72,11 +83,33 @@ static void skin_compute_tints(pp_skin_t *s)
     s->badge_red    = lv_color_mix(s->state_red,    s->surface, 54);  s->strip_red    = lv_color_mix(s->state_red,    s->bg, 38);
 }
 
-void skin_apply_index(int idx)   /* set g_skin to a preset (no NVS) — boot, sim, future live preview */
+/* Pack a skin's 19 primaries to R,G,B bytes (SKIN_TOKENS order); unpack does the reverse. */
+static void pack_palette(const pp_skin_t *s, uint8_t o[57])
 {
-    if (idx < 0 || idx >= SKIN_N) idx = 0;
+    int i = 0;
+    #define PK(f) o[i++] = (s->f).red; o[i++] = (s->f).green; o[i++] = (s->f).blue;
+    PK(orange) PK(orange_dark) PK(bg) PK(header) PK(surface) PK(surface_hi) PK(border)
+    PK(text) PK(text_muted) PK(text_inverse)
+    PK(state_green) PK(state_olive) PK(state_gray) PK(state_orange) PK(state_blue) PK(state_yellow) PK(state_red)
+    PK(temp_cold) PK(temp_hot)
+    #undef PK
+}
+static void unpack_palette(pp_skin_t *s, const uint8_t o[57])
+{
+    int i = 0;
+    #define UP(f) (s->f).red = o[i]; (s->f).green = o[i+1]; (s->f).blue = o[i+2]; i += 3;
+    UP(orange) UP(orange_dark) UP(bg) UP(header) UP(surface) UP(surface_hi) UP(border)
+    UP(text) UP(text_muted) UP(text_inverse)
+    UP(state_green) UP(state_olive) UP(state_gray) UP(state_orange) UP(state_blue) UP(state_yellow) UP(state_red)
+    UP(temp_cold) UP(temp_hot)
+    #undef UP
+}
+
+void skin_apply_index(int idx)   /* set g_skin to a preset/custom (no NVS) — boot, sim, preview */
+{
+    if (idx < 0 || idx > CUSTOM_IDX) idx = 0;
     s_current = idx;
-    g_skin = PRESETS[idx];
+    g_skin = (idx == CUSTOM_IDX) ? s_custom : PRESETS[idx];
     skin_compute_tints(&g_skin);
 }
 
@@ -87,25 +120,52 @@ void skin_init(void)
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
         uint8_t v;
-        if (nvs_get_u8(h, "idx", &v) == ESP_OK && v < SKIN_N) idx = v;
+        if (nvs_get_u8(h, "idx", &v) == ESP_OK && v <= CUSTOM_IDX) idx = v;
+        uint8_t rgb[57]; size_t sz = sizeof(rgb);   /* always load the custom palette if one exists */
+        if (nvs_get_blob(h, "custom", rgb, &sz) == ESP_OK && sz == sizeof(rgb)) unpack_palette(&s_custom, rgb);
         nvs_close(h);
     }
 #endif
     skin_apply_index(idx);
 }
 
-int         skin_count(void)        { return SKIN_N; }
-const char *skin_name(int idx)      { return (idx >= 0 && idx < SKIN_N) ? PRESET_NAME[idx] : ""; }
+int         skin_count(void)        { return SKIN_N + 1; }   /* presets + Custom */
+const char *skin_name(int idx)      { return idx == CUSTOM_IDX ? "Custom"
+                                            : (idx >= 0 && idx < SKIN_N ? PRESET_NAME[idx] : ""); }
 int         skin_current(void)      { return s_current; }
+int         skin_custom_index(void) { return CUSTOM_IDX; }
+
+void skin_palette_rgb(int idx, uint8_t out[57])
+{
+    if (idx == CUSTOM_IDX)             pack_palette(&s_custom, out);
+    else if (idx >= 0 && idx < SKIN_N) pack_palette(&PRESETS[idx], out);
+    else                               pack_palette(&g_skin, out);
+}
 
 void skin_persist_index(int idx)    /* net task only (NVS write) — caller reboots to apply */
 {
-    if (idx < 0 || idx >= SKIN_N) return;
+    if (idx < 0 || idx > CUSTOM_IDX) return;
     s_current = idx;
 #ifndef PP_HOST_SIM
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u8(h, "idx", (uint8_t)idx);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+#endif
+}
+
+void skin_set_custom(const uint8_t rgb[57])   /* httpd task: store + apply the user's palette */
+{
+    unpack_palette(&s_custom, rgb);
+    skin_compute_tints(&s_custom);
+    s_current = CUSTOM_IDX;
+    g_skin = s_custom;
+#ifndef PP_HOST_SIM
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, "custom", rgb, 57);
         nvs_commit(h);
         nvs_close(h);
     }
