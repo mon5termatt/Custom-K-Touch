@@ -159,6 +159,8 @@ static const char INDEX_HTML[] =
 "<div class=muted>Design a custom skin from six colors. The full palette derives automatically and is contrast-checked; Save reboots the device into your theme.</div>"
 "<div id=tfseeds style='display:flex;flex-wrap:wrap;gap:12px;margin:12px 0'></div>"
 "<label>Variant <select id=tfvar onchange=tf_render()><option value=dark>Dark</option><option value=light>Light</option></select></label>"
+"<label style='margin-left:16px'>Font <select id=tffont onchange=tf_render()><option value=0>Montserrat</option><option value=1>Inter</option></select></label>"
+"<div style='margin-top:10px;display:flex;gap:14px;flex-wrap:wrap'><label style='font-size:12px'>Wordmark<br><input id=tfbrand value='PRUSA | TOUCH' style='width:150px' oninput=tf_render()></label><label style='font-size:12px'>Byline<br><input id=tfbyline value='by NomadsGalaxy' style='width:150px' oninput=tf_render()></label></div>"
 "<div style='display:flex;gap:20px;flex-wrap:wrap;margin-top:14px'>"
 "<div><div class=muted>Preview</div><div id=tfprev></div></div>"
 "<div style='flex:1;min-width:220px'><div class=muted>Derived palette (click a chip to copy)</div>"
@@ -334,16 +336,16 @@ static const char INDEX_HTML[] =
 "function _lum(h){var c=h2r(h),f=function(x){x/=255;return x<=.03928?x/12.92:Math.pow((x+.055)/1.055,2.4)};return .2126*f(c.r)+.7152*f(c.g)+.0722*f(c.b)}"
 "function _cr(a,b){var L=_lum(a),M=_lum(b),hi=Math.max(L,M),lo=Math.min(L,M);return(hi+.05)/(lo+.05)}"
 "function _ct(r){return r>=7?'AAA':r>=4.5?'AA':r>=3?'AA-L':'FAIL'}"
-"async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors)}catch(e){}document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
+"async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
 "function tf_si(){var h='';TFSL.forEach(function(p){h+=`<label style='font-size:12px'>${p[1]}<br><input type=color value='${TFS[p[0]]}' oninput='TFS.${p[0]}=this.value;tf_render()'></label>`});document.getElementById('tfseeds').innerHTML=h}"
-"function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38);document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>PRUSA TOUCH</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
+"function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38),BR=(document.getElementById('tfbrand').value||'PRUSA | TOUCH');document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>${BR}</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
 "function tf_render(){TFV=document.getElementById('tfvar').value;TFC=derive(TFS,TFV);var C=TFC;"
 "var sw='';TFTOK.forEach(function(k){sw+=`<div title='${k} ${C[k]}' style='width:32px;height:32px;border-radius:5px;border:1px solid #0006;background:${C[k]}'></div>`});document.getElementById('tfsw').innerHTML=sw;"
 "var wc='',wn='';TFPR.forEach(function(p){var r=_cr(C[p[0]],C[p[1]]),t=_ct(r),cc=t=='FAIL'?'#f8795f':t=='AA-L'?'#fddc71':'#a1ea70';wc+=`<span style='font-size:11px'>${p[0]}/${p[1]} <b style='color:${cc}'>${r.toFixed(1)} ${t}</b></span>`;if(t=='FAIL'&&(p[1]=='surface'||p[1]=='bg'))wn=`Low contrast: ${p[0]} on ${p[1]} may be hard to read.`});document.getElementById('tfwc').innerHTML=wc;document.getElementById('tfwarn').textContent=wn;tf_prev()}"
-"async function tf_save(){var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({colors:TFC})});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
-"function tf_export(){var o={name:'Custom',variant:TFV,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
+"async function tf_save(){var b={colors:TFC,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value};var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
+"function tf_export(){var o={name:document.getElementById('tfbrand').value||'Custom',variant:TFV,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
 "function tf_pick(){document.getElementById('tfimp').click()}"
-"function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert('Invalid skin file')}};rd.readAsText(f)}"
+"function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;if(o.font!=null)document.getElementById('tffont').value=o.font;if(o.brand)document.getElementById('tfbrand').value=o.brand;if('byline' in o)document.getElementById('tfbyline').value=o.byline;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert('Invalid skin file')}};rd.readAsText(f)}"
 "st();la();setInterval(st,3000);"
 "</script></body></html>";
 
@@ -1320,6 +1322,9 @@ static esp_err_t skin_get(httpd_req_t *req)   /* current skin + preset names + t
         cJSON_AddStringToObject(cols, SKIN_TOKENS[i], hex);
     }
     cJSON_AddItemToObject(o, "colors", cols);
+    cJSON_AddNumberToObject(o, "font", skin_font());
+    cJSON_AddStringToObject(o, "brand", skin_brand());
+    cJSON_AddStringToObject(o, "byline", skin_byline());
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js ? js : "{}");
@@ -1341,7 +1346,14 @@ static esp_err_t skin_post(httpd_req_t *req)   /* body {colors:{19 #rrggbb}} -> 
                 cJSON *c = cJSON_GetObjectItem(cols, SKIN_TOKENS[i]);
                 if (!cJSON_IsString(c) || !parse_hex_color(c->valuestring, &rgb[i*3])) ok = false;
             }
-            if (ok) skin_set_custom(rgb);   /* NVS blob write on the httpd (internal-stack) task */
+            if (ok) {
+                cJSON *jf = cJSON_GetObjectItem(j, "font"), *jb = cJSON_GetObjectItem(j, "brand"),
+                      *jy = cJSON_GetObjectItem(j, "byline");
+                skin_set_custom(rgb,
+                                cJSON_IsNumber(jf) ? (jf->valueint ? 1 : 0) : 0,
+                                cJSON_IsString(jb) ? jb->valuestring : "",
+                                cJSON_IsString(jy) ? jy->valuestring : "");   /* NVS write on httpd task */
+            }
         }
         cJSON_Delete(j);
     }

@@ -287,7 +287,7 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text, lv_event_cb_t c
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, PP_TEXT, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(l, PP_F16, 0);
     lv_obj_center(l);
     if (out_label) *out_label = l;
     return b;
@@ -315,7 +315,7 @@ static lv_obj_t *detail_cell(lv_obj_t *parent, int x, int y, int w, const char *
     lv_obj_t *l = lv_label_create(cell);
     lv_label_set_text(l, label);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(l, PP_F12, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
 
     int vx = 0;
@@ -328,7 +328,7 @@ static lv_obj_t *detail_cell(lv_obj_t *parent, int x, int y, int w, const char *
     lv_obj_t *v = lv_label_create(cell);
     lv_label_set_text(v, "--");
     lv_obj_set_style_text_color(v, PP_TEXT, 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(v, PP_F20, 0);
     lv_obj_align(v, LV_ALIGN_BOTTOM_LEFT, vx, 0);
     return v;
 }
@@ -391,7 +391,7 @@ static void build_status_screen(void)
     s_title_lbl = lv_label_create(herotop);            /* printer name (was in the bar) */
     lv_label_set_text(s_title_lbl, "Printer");
     lv_obj_set_style_text_color(s_title_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(s_title_lbl, PP_F28, 0);
 
     s_badge = lv_obj_create(herotop);
     lv_obj_set_size(s_badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -404,13 +404,13 @@ static void build_status_screen(void)
     s_state_lbl = lv_label_create(s_badge);
     lv_label_set_text(s_state_lbl, "...");
     lv_obj_set_style_text_color(s_state_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_state_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_state_lbl, PP_F16, 0);
     lv_obj_center(s_state_lbl);
 
     s_model_lbl = lv_label_create(s_scr_status);
     lv_label_set_text(s_model_lbl, "");
     lv_obj_set_style_text_color(s_model_lbl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_model_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_model_lbl, PP_F14, 0);
     lv_label_set_long_mode(s_model_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_model_lbl, P ? scr_w() - 128 : 540);
     lv_obj_align(s_model_lbl, LV_ALIGN_TOP_LEFT, 112, 114);
@@ -446,13 +446,13 @@ static void build_status_screen(void)
     lv_obj_set_width(s_job_lbl, P ? CW - 100 : 560);
     lv_label_set_text(s_job_lbl, "");
     lv_obj_set_style_text_color(s_job_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_job_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_job_lbl, PP_F16, 0);
     lv_obj_align(s_job_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_pct_lbl = lv_label_create(jobcard);
     lv_label_set_text(s_pct_lbl, "");
     lv_obj_set_style_text_color(s_pct_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_pct_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_pct_lbl, PP_F20, 0);
     lv_obj_align(s_pct_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     s_bar = lv_bar_create(jobcard);
@@ -466,7 +466,7 @@ static void build_status_screen(void)
     s_eta_lbl = lv_label_create(jobcard);
     lv_label_set_text(s_eta_lbl, "");
     lv_obj_set_style_text_color(s_eta_lbl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_eta_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_eta_lbl, PP_F16, 0);
     lv_obj_align(s_eta_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
     /* ---- attention dialog banner (overlays the job card when the printer needs attention) ---- */
@@ -485,7 +485,7 @@ static void build_status_screen(void)
     s_attn_title = lv_label_create(s_attn_card);
     lv_label_set_text(s_attn_title, "");
     lv_obj_set_style_text_color(s_attn_title, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_attn_title, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_attn_title, PP_F16, 0);
     lv_obj_align(s_attn_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_attn_text = lv_label_create(s_attn_card);
@@ -493,7 +493,7 @@ static void build_status_screen(void)
     lv_obj_set_width(s_attn_text, (P ? CW : 768) - 28);
     lv_label_set_text(s_attn_text, "");
     lv_obj_set_style_text_color(s_attn_text, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_attn_text, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_attn_text, PP_F14, 0);
     lv_obj_align(s_attn_text, LV_ALIGN_TOP_LEFT, 0, 24);
 
     for (int i = 0; i < 3; i++) {
@@ -566,7 +566,7 @@ static void build_files_screen(void)
     lv_label_set_long_mode(s_files_banner, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_files_banner, 760);
     lv_obj_set_style_text_color(s_files_banner, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_files_banner, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_files_banner, PP_F14, 0);
     lv_obj_align(s_files_banner, LV_ALIGN_LEFT_MID, 0, 0);
 
     /* Scrollable column of Connect-style file rows. */
@@ -614,7 +614,7 @@ static void build_filedetail_screen(void)
     lv_label_set_long_mode(s_fd_name, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_fd_name, 560);
     lv_obj_set_style_text_color(s_fd_name, PP_WHITE, 0);
-    lv_obj_set_style_text_font(s_fd_name, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_fd_name, PP_F20, 0);
     lv_obj_align(s_fd_name, LV_ALIGN_LEFT_MID, 16, 0);
 
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_fd_back, NULL, 100);
@@ -738,7 +738,7 @@ static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
         lv_obj_t *t = lv_label_create(bar);
         lv_label_set_text(t, text);
         lv_obj_set_style_text_color(t, PP_TEXT, 0);
-        lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(t, PP_F20, 0);
         /* A centered title collides with the left wordmark at 480px wide — in portrait, left-align
          * it clear of the wordmark; in landscape there's room to center it. */
         if (ui_portrait()) lv_obj_align(t, LV_ALIGN_LEFT_MID, 184, 0);
@@ -819,7 +819,7 @@ static void build_addpick_screen(void)
     lv_obj_t *head = lv_label_create(col);
     lv_label_set_text(head, "Add or manage printers from your phone or computer");
     lv_obj_set_style_text_color(head, PP_TEXT, 0);
-    lv_obj_set_style_text_font(head, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(head, PP_F16, 0);
     lv_label_set_long_mode(head, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(head, scr_w() - 48);
     lv_obj_set_style_text_align(head, LV_TEXT_ALIGN_CENTER, 0);
@@ -833,14 +833,14 @@ static void build_addpick_screen(void)
 
     s_addpick_url = lv_label_create(col);
     lv_obj_set_style_text_color(s_addpick_url, PP_ORANGE, 0);
-    lv_obj_set_style_text_font(s_addpick_url, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_addpick_url, PP_F20, 0);
 
     lv_obj_t *why = lv_label_create(col);
     lv_label_set_text(why, "Scan the code, or open this address in any browser on the same Wi-Fi. "
                            "The web page handles API keys and Prusa Connect / Klipper / Bambu sign-in, "
                            "which a touchscreen can't do well.");
     lv_obj_set_style_text_color(why, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(why, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(why, PP_F14, 0);
     lv_label_set_long_mode(why, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(why, scr_w() - 48);
     lv_obj_set_style_text_align(why, LV_TEXT_ALIGN_CENTER, 0);
@@ -995,7 +995,7 @@ static void build_wifi_screen(void)
     lv_label_set_long_mode(s_wifi_ap_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_wifi_ap_lbl, fw);
     lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_wifi_ap_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_wifi_ap_lbl, PP_F14, 0);
     lv_obj_align(s_wifi_ap_lbl, LV_ALIGN_TOP_LEFT, fx, 232);
 
     /* Scan list: left half in landscape, full width below the form in portrait. */
@@ -1110,13 +1110,13 @@ static lv_obj_t *card_cell(lv_obj_t *parent, int x, int y, const char *label, co
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, label);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(l, PP_F12, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, y);
 
     lv_obj_t *v = lv_label_create(parent);
     lv_label_set_text(v, value);
     lv_obj_set_style_text_color(v, PP_TEXT, 0);
-    lv_obj_set_style_text_font(v, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(v, PP_F16, 0);
     lv_obj_align(v, LV_ALIGN_TOP_LEFT, x, y + 17);
     return v;   /* the value label, for in-place dashboard updates */
 }
@@ -1304,14 +1304,14 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     lv_obj_t *bl = lv_label_create(badge);
     lv_label_set_text(bl, st);
     lv_obj_set_style_text_color(bl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(bl, PP_F16, 0);
     lv_obj_center(bl);
     if (r) r->badge_lbl = bl;
 
     lv_obj_t *nm = lv_label_create(head);
     lv_label_set_text(nm, s->printer_name[0] ? s->printer_name : "Printer");
     lv_obj_set_style_text_color(nm, PP_TEXT, 0);
-    lv_obj_set_style_text_font(nm, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(nm, PP_F20, 0);
     lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
     lv_obj_set_width(nm, 226);
     lv_obj_align(nm, LV_ALIGN_LEFT_MID, 12, 0);
@@ -1385,7 +1385,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     lv_obj_t *md = lv_label_create(c);
     lv_label_set_text(md, s->model[0] ? s->model : (online ? "Prusa printer" : ""));
     lv_obj_set_style_text_color(md, PP_TEXT, 0);
-    lv_obj_set_style_text_font(md, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(md, PP_F14, 0);
     lv_label_set_long_mode(md, LV_LABEL_LONG_DOT);
     lv_obj_set_width(md, 300);
     lv_obj_align(md, LV_ALIGN_TOP_LEFT, 66, 40);
@@ -1395,7 +1395,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         lv_obj_t *fwl = lv_label_create(c);
         lv_label_set_text_fmt(fwl, "Firmware: %s", s->firmware);
         lv_obj_set_style_text_color(fwl, PP_TEXT_MUTED, 0);
-        lv_obj_set_style_text_font(fwl, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(fwl, PP_F12, 0);
         lv_label_set_long_mode(fwl, LV_LABEL_LONG_DOT);
         lv_obj_set_width(fwl, 300);
         lv_obj_align(fwl, LV_ALIGN_TOP_LEFT, 66, 59);
@@ -1417,7 +1417,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         lv_obj_t *pl = lv_label_create(c);
         lv_label_set_text(pl, "PROGRESS");
         lv_obj_set_style_text_color(pl, PP_TEXT_MUTED, 0);
-        lv_obj_set_style_text_font(pl, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(pl, PP_F12, 0);
         lv_obj_align(pl, LV_ALIGN_TOP_LEFT, X2, R2);
 
         lv_obj_t *bar = lv_bar_create(c);
@@ -1431,7 +1431,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         lv_obj_t *pv = lv_label_create(c);
         lv_label_set_text_fmt(pv, "%d%%", pct);
         lv_obj_set_style_text_color(pv, PP_TEXT, 0);
-        lv_obj_set_style_text_font(pv, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(pv, PP_F16, 0);
         lv_obj_align(pv, LV_ALIGN_TOP_LEFT, X3, R2 + 14);
         if (r) { r->prog_bar = bar; r->prog_lbl = pv; }
     }
@@ -1488,7 +1488,23 @@ static void make_wordmark(lv_obj_t *parent)
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(box, nav_dash, LV_EVENT_CLICKED, NULL);
 
-    /* top line: PRUSA | TOUCH */
+    /* top line: the skin's brand, split on "|" into the two-tone "left | right". */
+    char bl[16] = {0}, br[16] = {0};
+    {
+        const char *brand = g_skin.brand[0] ? g_skin.brand : "PRUSA | TOUCH";
+        const char *bar = strchr(brand, '|');
+        if (bar) {
+            int n = (int)(bar - brand);
+            while (n > 0 && brand[n - 1] == ' ') n--;
+            if (n > 15) n = 15;
+            memcpy(bl, brand, (size_t)n);
+            const char *r = bar + 1;
+            while (*r == ' ') r++;
+            strncpy(br, r, 15);
+        } else {
+            strncpy(bl, brand, 15);
+        }
+    }
     lv_obj_t *row = lv_obj_create(box);
     lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
@@ -1501,27 +1517,29 @@ static void make_wordmark(lv_obj_t *parent)
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *p = lv_label_create(row);
-    lv_label_set_text(p, "PRUSA");
+    lv_label_set_text(p, bl);
     lv_obj_set_style_text_color(p, PP_WHITE, 0);
-    lv_obj_set_style_text_font(p, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(p, PP_F16, 0);
 
-    lv_obj_t *divr = lv_obj_create(row);
-    lv_obj_set_size(divr, 2, 18);
-    lv_obj_set_style_bg_color(divr, PP_WHITE, 0);
-    lv_obj_set_style_border_width(divr, 0, 0);
-    lv_obj_set_style_radius(divr, 0, 0);
-    lv_obj_clear_flag(divr, LV_OBJ_FLAG_SCROLLABLE);
+    if (br[0]) {   /* divider + second part only when the brand has a "|" */
+        lv_obj_t *divr = lv_obj_create(row);
+        lv_obj_set_size(divr, 2, 18);
+        lv_obj_set_style_bg_color(divr, PP_WHITE, 0);
+        lv_obj_set_style_border_width(divr, 0, 0);
+        lv_obj_set_style_radius(divr, 0, 0);
+        lv_obj_clear_flag(divr, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *t = lv_label_create(row);
-    lv_label_set_text(t, "TOUCH");
-    lv_obj_set_style_text_color(t, PP_WHITE, 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_16, 0);
+        lv_obj_t *t = lv_label_create(row);
+        lv_label_set_text(t, br);
+        lv_obj_set_style_text_color(t, PP_WHITE, 0);
+        lv_obj_set_style_text_font(t, PP_F16, 0);
+    }
 
     /* bottom line: by NomadsGalaxy */
     lv_obj_t *by = lv_label_create(box);
-    lv_label_set_text(by, "by NomadsGalaxy");
+    lv_label_set_text(by, g_skin.byline);
     lv_obj_set_style_text_color(by, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(by, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(by, PP_F12, 0);
     lv_obj_add_flag(by, LV_OBJ_FLAG_EVENT_BUBBLE);
 
     /* Track for the logo preference; hide the byline in single-line mode. */
@@ -1644,7 +1662,7 @@ static void build_lock_overlay(void)
     s_lock_ind = lv_label_create(top);
     lv_label_set_text(s_lock_ind, LV_SYMBOL_BELL " LOCKED");
     lv_obj_set_style_text_color(s_lock_ind, PP_ORANGE, 0);
-    lv_obj_set_style_text_font(s_lock_ind, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_lock_ind, PP_F14, 0);
     lv_obj_set_style_bg_color(s_lock_ind, PP_HEADER, 0);
     lv_obj_set_style_bg_opa(s_lock_ind, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_lock_ind, 6, 0);
@@ -1667,7 +1685,7 @@ static void build_lock_overlay(void)
     s_lock_msg = lv_label_create(s_lock_modal);
     lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
     lv_obj_set_style_text_color(s_lock_msg, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_lock_msg, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_lock_msg, PP_F20, 0);
 
     s_lock_ta = lv_textarea_create(s_lock_modal);
     lv_textarea_set_one_line(s_lock_ta, true);
@@ -1911,7 +1929,7 @@ static void build_control_screen(void)
     lv_obj_t *tl = lv_label_create(temp_card);
     lv_label_set_text(tl, "PREHEAT");
     lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(tl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(tl, PP_F14, 0);
 
     const char *mats[] = { "PLA", "PETG", "ASA", "Cooldown" };
     for (int i = 0; i < 4; i++) {
@@ -1928,7 +1946,7 @@ static void build_control_screen(void)
     lv_obj_t *jl = lv_label_create(jog_card);
     lv_label_set_text(jl, "MOVE");
     lv_obj_set_style_text_color(jl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(jl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(jl, PP_F14, 0);
     lv_obj_align(jl, LV_ALIGN_TOP_LEFT, 12, 8);
 
     /* X / Y / home jog pad — clean 3x3 cross with gaps so outlines never touch */
@@ -1966,7 +1984,7 @@ static void build_control_screen(void)
     lv_obj_t *caml = lv_label_create(cam_card);
     lv_label_set_text(caml, "WEBCAM");
     lv_obj_set_style_text_color(caml, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(caml, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(caml, PP_F14, 0);
     lv_obj_align(caml, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_t *cam_btn = make_button(cam_card, "Load", on_snapshot_clicked, NULL, NULL);
     lv_obj_set_size(cam_btn, 84, 34);
@@ -2002,13 +2020,13 @@ static void build_about_screen(void)
     lv_obj_t *title = lv_label_create(s_scr_about);
     lv_label_set_text(title, "Prusa Touch");
     lv_obj_set_style_text_color(title, PP_ORANGE, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(title, PP_F28, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 16, 74);
 
     lv_obj_t *by = lv_label_create(s_scr_about);
     lv_label_set_text(by, "by NomadsGalaxy");
     lv_obj_set_style_text_color(by, PP_TEXT, 0);
-    lv_obj_set_style_text_font(by, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(by, PP_F16, 0);
     lv_obj_align(by, LV_ALIGN_TOP_LEFT, 16, 108);
 
     lv_obj_t *body = lv_label_create(s_scr_about);
@@ -2040,14 +2058,14 @@ static void build_about_screen(void)
     lv_obj_t *qcap = lv_label_create(s_scr_about);
     lv_label_set_text(qcap, "Scan for the project on GitHub");
     lv_obj_set_style_text_color(qcap, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(qcap, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(qcap, PP_F14, 0);
     if (P) lv_obj_align(qcap, LV_ALIGN_TOP_MID, 0, 524);
     else   lv_obj_align(qcap, LV_ALIGN_TOP_RIGHT, -40, 292);
 
     lv_obj_t *url = lv_label_create(s_scr_about);
     lv_label_set_text(url, "github.com/nomadsgalaxy/\nPrusa-Connect-Touch");
     lv_obj_set_style_text_color(url, PP_TEXT, 0);
-    lv_obj_set_style_text_font(url, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(url, PP_F14, 0);
     lv_obj_set_style_text_align(url, LV_TEXT_ALIGN_CENTER, 0);
     if (P) lv_obj_align(url, LV_ALIGN_TOP_MID, 0, 548);
     else   lv_obj_align(url, LV_ALIGN_TOP_RIGHT, -55, 314);
@@ -2068,7 +2086,7 @@ static void build_farm_screen(void)
     s_farm_stat = lv_label_create(s_scr_farm);
     lv_label_set_text(s_farm_stat, "Loading Prusa Farm...");
     lv_obj_set_style_text_color(s_farm_stat, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_farm_stat, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_farm_stat, PP_F16, 0);
     lv_label_set_long_mode(s_farm_stat, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_farm_stat, scr_w() - 32);
     lv_obj_align(s_farm_stat, LV_ALIGN_TOP_LEFT, 16, 70);
@@ -2227,7 +2245,7 @@ static lv_obj_t *pref_label(lv_obj_t *parent, const char *text, int y)
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(l, PP_F14, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, 24, y);
     return l;
 }
@@ -2291,7 +2309,7 @@ static void build_prefs_screen(void)
     lv_obj_t *aul = lv_label_create(s_scr_prefs);
     lv_label_set_text(aul, "Automatic firmware updates");
     lv_obj_set_style_text_color(aul, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(aul, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(aul, PP_F14, 0);
     lv_obj_align(aul, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 392 : 84);
     s_pref_autoupd_sw = lv_switch_create(s_scr_prefs);
     lv_obj_align(s_pref_autoupd_sw, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 418 : 110);
@@ -2302,7 +2320,7 @@ static void build_prefs_screen(void)
     lv_obj_t *ol = lv_label_create(s_scr_prefs);
     lv_label_set_text(ol, "Screen orientation");
     lv_obj_set_style_text_color(ol, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(ol, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(ol, PP_F14, 0);
     lv_obj_align(ol, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 484 : 196);
     s_pref_orient_dd = lv_dropdown_create(s_scr_prefs);
     lv_dropdown_set_options(s_pref_orient_dd, "Landscape\nLandscape (flipped)\nPortrait\nPortrait (flipped)");
@@ -2315,7 +2333,7 @@ static void build_prefs_screen(void)
     lv_obj_t *tl = lv_label_create(s_scr_prefs);
     lv_label_set_text(tl, "Theme");
     lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(tl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(tl, PP_F14, 0);
     lv_obj_align(tl, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 596 : 308);
     char skopts[128]; skopts[0] = '\0';
     for (int i = 0; i < skin_count(); i++) {
@@ -2347,20 +2365,20 @@ static void on_prefs_open(lv_event_t *e)
 static void build_boot_screen(void)
 {
     s_scr_boot = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_boot, lv_color_hex(0x111316), 0);
+    lv_obj_set_style_bg_color(s_scr_boot, PP_BG, 0);   /* themed splash */
     lv_obj_clear_flag(s_scr_boot, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* PRUSA | TOUCH */
+    /* brand (the skin's wordmark, "|" shown literally here) */
     lv_obj_t *l1 = lv_label_create(s_scr_boot);
-    lv_label_set_text(l1, "PRUSA | TOUCH");
-    lv_obj_set_style_text_font(l1, &lv_font_montserrat_40, 0);
-    lv_obj_set_style_text_color(l1, lv_color_white(), 0);
+    lv_label_set_text(l1, g_skin.brand[0] ? g_skin.brand : "PRUSA | TOUCH");
+    lv_obj_set_style_text_font(l1, PP_F40, 0);
+    lv_obj_set_style_text_color(l1, PP_TEXT, 0);
     lv_obj_align(l1, LV_ALIGN_CENTER, 0, -40);
 
-    /* By NomadsGalaxy */
+    /* byline */
     lv_obj_t *l2 = lv_label_create(s_scr_boot);
-    lv_label_set_text(l2, "By NomadsGalaxy");
-    lv_obj_set_style_text_font(l2, &lv_font_montserrat_16, 0);
+    lv_label_set_text(l2, g_skin.byline);
+    lv_obj_set_style_text_font(l2, PP_F16, 0);
     lv_obj_set_style_text_color(l2, PP_ORANGE, 0);
     lv_obj_align(l2, LV_ALIGN_CENTER, 0, 10);
 
@@ -2368,13 +2386,13 @@ static void build_boot_screen(void)
     s_boot_bar = lv_bar_create(s_scr_boot);
     lv_obj_set_size(s_boot_bar, 400, 12);
     lv_obj_align(s_boot_bar, LV_ALIGN_CENTER, 0, 80);
-    lv_obj_set_style_bg_color(s_boot_bar, lv_color_hex(0x333333), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_boot_bar, PP_SURFACE_HI, LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_boot_bar, PP_ORANGE, LV_PART_INDICATOR);
     lv_bar_set_value(s_boot_bar, 0, LV_ANIM_OFF);
 
     s_boot_status = lv_label_create(s_scr_boot);
     lv_label_set_text(s_boot_status, "Starting...");
-    lv_obj_set_style_text_font(s_boot_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_boot_status, PP_F14, 0);
     lv_obj_set_style_text_color(s_boot_status, PP_TEXT_MUTED, 0);
     lv_obj_align(s_boot_status, LV_ALIGN_CENTER, 0, 110);
 }
@@ -2611,7 +2629,7 @@ void ui_apply_files(void *arg)
         lv_obj_t *ic = lv_label_create(row);
         lv_label_set_text(ic, LV_SYMBOL_FILE);
         lv_obj_set_style_text_color(ic, PP_ORANGE, 0);
-        lv_obj_set_style_text_font(ic, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(ic, PP_F20, 0);
         lv_obj_align(ic, LV_ALIGN_LEFT_MID, 0, 0);
 
         lv_obj_t *nm = lv_label_create(row);
@@ -2619,14 +2637,14 @@ void ui_apply_files(void *arg)
         lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
         lv_obj_set_width(nm, 700);
         lv_obj_set_style_text_color(nm, PP_TEXT, 0);
-        lv_obj_set_style_text_font(nm, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(nm, PP_F16, 0);
         lv_obj_align(nm, LV_ALIGN_TOP_LEFT, 36, 0);
 
         if (list->items[i].meta[0]) {
             lv_obj_t *mt = lv_label_create(row);
             lv_label_set_text(mt, list->items[i].meta);
             lv_obj_set_style_text_color(mt, PP_TEXT_MUTED, 0);
-            lv_obj_set_style_text_font(mt, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_font(mt, PP_F12, 0);
             lv_obj_align(mt, LV_ALIGN_BOTTOM_LEFT, 36, 0);
         }
         s_file_count++;

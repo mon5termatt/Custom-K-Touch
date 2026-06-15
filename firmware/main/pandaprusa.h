@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.5.5"
+#define PP_FW_VERSION "0.5.6"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU } pp_backend_t;

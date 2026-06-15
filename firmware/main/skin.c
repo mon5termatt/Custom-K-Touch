@@ -1,11 +1,30 @@
 /* Prusa-Touch — UI skins (issue #6). See skin.h. */
 #include "skin.h"
 #include "pandaprusa_theme.h"
+#include "inter_fonts.h"   /* Inter (Medium) LVGL fonts — the alternate typeface */
+#include <string.h>
 #ifndef PP_HOST_SIM
 #include "nvs.h"        /* ESP-IDF only; the desktop sim renders skins without persistence */
 #endif
 
 #define NS "ppskin"
+
+/* Active font set for the current skin (PP_F12..PP_F40 read these). Default to Montserrat so they
+ * are valid even before skin_apply_index() runs. */
+const lv_font_t *g_f12 = &lv_font_montserrat_12, *g_f14 = &lv_font_montserrat_14,
+                *g_f16 = &lv_font_montserrat_16, *g_f20 = &lv_font_montserrat_20,
+                *g_f28 = &lv_font_montserrat_28, *g_f40 = &lv_font_montserrat_40;
+
+static void set_fonts(uint8_t fam)   /* 0 = Montserrat (LVGL built-in), 1 = Inter */
+{
+    if (fam == 1) {
+        g_f12 = &inter_12; g_f14 = &inter_14; g_f16 = &inter_16;
+        g_f20 = &inter_20; g_f28 = &inter_28; g_f40 = &inter_40;
+    } else {
+        g_f12 = &lv_font_montserrat_12; g_f14 = &lv_font_montserrat_14; g_f16 = &lv_font_montserrat_16;
+        g_f20 = &lv_font_montserrat_20; g_f28 = &lv_font_montserrat_28; g_f40 = &lv_font_montserrat_40;
+    }
+}
 
 /* Each preset authors only the 19 "primary" colors; the 14 state badge/strip tints are derived
  * (skin_compute_tints). LV_COLOR_MAKE is a compile-time lv_color_t aggregate, so these are const. */
@@ -21,7 +40,8 @@
     .state_gray=LV_COLOR_MAKE(0xAD,0xAD,0xAD), .state_orange=LV_COLOR_MAKE(0xF5,0x9C,0x66), \
     .state_blue=LV_COLOR_MAKE(0x7D,0xA7,0xD9), .state_yellow=LV_COLOR_MAKE(0xFD,0xDC,0x71), \
     .state_red=LV_COLOR_MAKE(0xF8,0x79,0x5F), \
-    .temp_cold=LV_COLOR_MAKE(0x00,0x72,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x00,0x00) }
+    .temp_cold=LV_COLOR_MAKE(0x00,0x72,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x00,0x00), \
+    .font_family=0, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }
 
 /* "Stargate" — deep-space blue-black + DHD amber, event-horizon blue. Dark, so white text reads. */
 #define SKIN_STARGATE { \
@@ -35,7 +55,8 @@
     .state_gray=LV_COLOR_MAKE(0x85,0x95,0xAD), .state_orange=LV_COLOR_MAKE(0xC7,0x7B,0x2A), \
     .state_blue=LV_COLOR_MAKE(0x4E,0x9F,0xD6), .state_yellow=LV_COLOR_MAKE(0xD9,0xB8,0x4A), \
     .state_red=LV_COLOR_MAKE(0xD9,0x60,0x5A), \
-    .temp_cold=LV_COLOR_MAKE(0x2E,0x96,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x4E,0x3A) }
+    .temp_cold=LV_COLOR_MAKE(0x2E,0x96,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x4E,0x3A), \
+    .font_family=0, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }
 
 /* "Nord" — the popular polar-night dark palette with a frost-blue accent. */
 #define SKIN_NORD { \
@@ -49,7 +70,8 @@
     .state_gray=LV_COLOR_MAKE(0x9A,0xA4,0xB8), .state_orange=LV_COLOR_MAKE(0xD0,0x87,0x70), \
     .state_blue=LV_COLOR_MAKE(0x81,0xA1,0xC1), .state_yellow=LV_COLOR_MAKE(0xEB,0xCB,0x8B), \
     .state_red=LV_COLOR_MAKE(0xBF,0x61,0x6A), \
-    .temp_cold=LV_COLOR_MAKE(0x81,0xA1,0xC1), .temp_hot=LV_COLOR_MAKE(0xBF,0x61,0x6A) }
+    .temp_cold=LV_COLOR_MAKE(0x81,0xA1,0xC1), .temp_hot=LV_COLOR_MAKE(0xBF,0x61,0x6A), \
+    .font_family=1, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }   /* Nord showcases the Inter font */
 
 static const pp_skin_t PRESETS[]    = { SKIN_CONNECT, SKIN_STARGATE, SKIN_NORD };
 static const char     *PRESET_NAME[] = { "Connect (default)", "Stargate", "Nord" };
@@ -111,6 +133,7 @@ void skin_apply_index(int idx)   /* set g_skin to a preset/custom (no NVS) — b
     s_current = idx;
     g_skin = (idx == CUSTOM_IDX) ? s_custom : PRESETS[idx];
     skin_compute_tints(&g_skin);
+    set_fonts(g_skin.font_family);
 }
 
 void skin_init(void)
@@ -121,8 +144,13 @@ void skin_init(void)
     if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
         uint8_t v;
         if (nvs_get_u8(h, "idx", &v) == ESP_OK && v <= CUSTOM_IDX) idx = v;
-        uint8_t rgb[57]; size_t sz = sizeof(rgb);   /* always load the custom palette if one exists */
-        if (nvs_get_blob(h, "custom", rgb, &sz) == ESP_OK && sz == sizeof(rgb)) unpack_palette(&s_custom, rgb);
+        uint8_t blob[106]; size_t sz = sizeof(blob);   /* custom palette (+ font/brand/byline) if any */
+        if (nvs_get_blob(h, "custom", blob, &sz) == ESP_OK && sz >= 57) {
+            unpack_palette(&s_custom, blob);
+            if (sz >= 58)  s_custom.font_family = blob[57] ? 1 : 0;   /* newer blobs carry typography */
+            if (sz >= 82)  strlcpy(s_custom.brand,  (char *)blob + 58, sizeof(s_custom.brand));
+            if (sz >= 106) strlcpy(s_custom.byline, (char *)blob + 82, sizeof(s_custom.byline));
+        }
         nvs_close(h);
     }
 #endif
@@ -134,6 +162,9 @@ const char *skin_name(int idx)      { return idx == CUSTOM_IDX ? "Custom"
                                             : (idx >= 0 && idx < SKIN_N ? PRESET_NAME[idx] : ""); }
 int         skin_current(void)      { return s_current; }
 int         skin_custom_index(void) { return CUSTOM_IDX; }
+uint8_t     skin_font(void)         { return g_skin.font_family; }
+const char *skin_brand(void)        { return g_skin.brand; }
+const char *skin_byline(void)       { return g_skin.byline; }
 
 void skin_palette_rgb(int idx, uint8_t out[57])
 {
@@ -156,16 +187,26 @@ void skin_persist_index(int idx)    /* net task only (NVS write) — caller rebo
 #endif
 }
 
-void skin_set_custom(const uint8_t rgb[57])   /* httpd task: store + apply the user's palette */
+void skin_set_custom(const uint8_t rgb[57], uint8_t font, const char *brand, const char *byline)
 {
     unpack_palette(&s_custom, rgb);
+    s_custom.font_family = font ? 1 : 0;
+    strlcpy(s_custom.brand,  (brand && brand[0]) ? brand : "PRUSA | TOUCH", sizeof(s_custom.brand));
+    strlcpy(s_custom.byline, byline ? byline : "", sizeof(s_custom.byline));
     skin_compute_tints(&s_custom);
     s_current = CUSTOM_IDX;
     g_skin = s_custom;
+    set_fonts(s_custom.font_family);
 #ifndef PP_HOST_SIM
+    uint8_t blob[106];
+    memcpy(blob, rgb, 57);
+    blob[57] = s_custom.font_family;
+    memset(blob + 58, 0, 48);
+    strlcpy((char *)blob + 58, s_custom.brand,  24);
+    strlcpy((char *)blob + 82, s_custom.byline, 24);
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_blob(h, "custom", rgb, 57);
+        nvs_set_blob(h, "custom", blob, sizeof(blob));
         nvs_commit(h);
         nvs_close(h);
     }

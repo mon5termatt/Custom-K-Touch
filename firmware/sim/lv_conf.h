@@ -76,7 +76,7 @@
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /* FontAwesome symbols (LV_SYMBOL_*) are merged into the Montserrat fonts on device. */
-#define LV_USE_FONT_COMPRESSED 0
+#define LV_USE_FONT_COMPRESSED 1   /* Inter fonts are compressed (bitmap_format=1) */
 
 /* ---- misc ---- */
 #define LV_USE_OBSERVER 1

@@ -15,6 +15,11 @@ void skin_init(void);
 /* Set g_skin to a preset WITHOUT touching NVS (used at boot, by the sim, and for live preview). */
 void skin_apply_index(int idx);
 
+/* Current (active) skin's typography + brand — for the web GET. */
+uint8_t     skin_font(void);
+const char *skin_brand(void);
+const char *skin_byline(void);
+
 int         skin_count(void);            /* number of built-in presets */
 const char *skin_name(int idx);          /* display name, or "" if out of range */
 int         skin_current(void);          /* the active preset index */
@@ -29,5 +34,7 @@ void skin_persist_index(int idx);
  * (after the built-in presets). The device derives the 14 state tints itself (skin_compute_tints). */
 extern const char *const SKIN_TOKENS[19];        /* canonical token order for the 57-byte palette */
 int  skin_custom_index(void);                    /* the "Custom" slot index (== skin_count()-1)    */
-void skin_set_custom(const uint8_t rgb[57]);     /* install + persist a custom palette (httpd task) */
+/* install + persist a custom palette (httpd task): 19 colors (57 bytes, SKIN_TOKENS order) + font
+ * family (0=Montserrat, 1=Inter) + wordmark brand/byline strings. */
+void skin_set_custom(const uint8_t rgb[57], uint8_t font, const char *brand, const char *byline);
 void skin_palette_rgb(int idx, uint8_t out[57]); /* pack a preset's (or custom's) 19 primaries->RGB */

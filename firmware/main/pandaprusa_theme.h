@@ -26,6 +26,10 @@ typedef struct {
     lv_color_t state_green, state_olive, state_gray, state_orange, state_blue, state_yellow, state_red;
     /* temperature accents */
     lv_color_t temp_cold, temp_hot;
+    /* typography + brand (Phase 2: themeable fonts + wordmark) */
+    uint8_t    font_family;   /* 0 = Montserrat, 1 = Inter */
+    char       brand[24];     /* header wordmark; a "|" splits it two-tone (e.g. "PRUSA | TOUCH") */
+    char       byline[24];    /* small byline under the wordmark */
     /* derived state tints (filled by skin_compute_tints) */
     lv_color_t badge_green, strip_green, badge_olive, strip_olive, badge_gray, strip_gray,
                badge_orange, strip_orange, badge_blue, strip_blue, badge_yellow, strip_yellow,
@@ -33,6 +37,16 @@ typedef struct {
 } pp_skin_t;
 
 extern pp_skin_t g_skin;   /* defined in skin.c; valid from skin_init() (before screens build) */
+
+/* Active fonts for the current skin's family (Montserrat or Inter), pointed at the right set in
+ * skin_apply_index. Text reads them via PP_F12..PP_F40 so a skin can swap the whole typeface. */
+extern const lv_font_t *g_f12, *g_f14, *g_f16, *g_f20, *g_f28, *g_f40;
+#define PP_F12 (g_f12)
+#define PP_F14 (g_f14)
+#define PP_F16 (g_f16)
+#define PP_F20 (g_f20)
+#define PP_F28 (g_f28)
+#define PP_F40 (g_f40)
 
 /* Connect primary */
 #define PP_ORANGE         (g_skin.orange)        /* accent / CTA / progress */

@@ -15,6 +15,12 @@ set(APP_SRC
   ${CMAKE_CURRENT_SOURCE_DIR}/sim_stubs.c
   ${ROOT}/main/ui.c
   ${ROOT}/main/skin.c
+  ${ROOT}/main/inter_12.c
+  ${ROOT}/main/inter_14.c
+  ${ROOT}/main/inter_16.c
+  ${ROOT}/main/inter_20.c
+  ${ROOT}/main/inter_28.c
+  ${ROOT}/main/inter_40.c
   ${ROOT}/main/pt_ic_nozzle.c
   ${ROOT}/main/pt_ic_bed.c
   ${ROOT}/main/pt_ic_speed.c

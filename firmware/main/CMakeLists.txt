@@ -24,6 +24,12 @@ idf_component_register(
         "pt_ic_bed.c"
         "pt_ic_speed.c"
         "pt_fluidd.c"
+        "inter_12.c"
+        "inter_14.c"
+        "inter_16.c"
+        "inter_20.c"
+        "inter_28.c"
+        "inter_40.c"
     INCLUDE_DIRS "."
     REQUIRES
         PandaTouch_IDF      # display + GT911 touch + backlight + USB-MSC (BTT MIT BSP)
