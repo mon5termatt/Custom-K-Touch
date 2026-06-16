@@ -179,7 +179,7 @@ static const char INDEX_HTML[] =
 "<button onclick=tf_export()>Export</button> <button onclick=tf_pick()>Import</button>"
 "<input type=file id=tfimp accept=.json style=display:none onchange=tf_import(event)></div></div></div>"
 "<div class=tab id=t8><div class=card><b>Layout</b>"
-"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to select it, then move/resize with the buttons (or drag it). Save stores your layout; Generate preview renders exactly how it looks on the device.</div>"
+"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to move, resize, or restyle it (Card / Bare / Accent). The Header tile is the name + state strip; the default is a 1:1 of the status screen. Save stores your layout; Generate preview renders exactly how it looks on the device.</div>"
 "<div style='margin:10px 0'>Add tile: <span id=lypal></span></div>"
 "<div id=lygrid ondragover=ly_over(event) ondrop=ly_drop(event) style='position:relative;width:560px;max-width:100%;aspect-ratio:5/3;background:#1c1e21;border:1px solid #4e4e4e;border-radius:6px'></div>"
 "<div id=lysel style='margin-top:10px;min-height:26px;color:#a7a7a7;font-size:13px'></div>"
@@ -370,26 +370,29 @@ static const char INDEX_HTML[] =
 /* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
  * + data-attributes only, so it embeds with no escaping. ---- */
 "var LAY={cols:8,tiles:[]},LYTYPES=[],LYSEL=-1;"
-"var LYMIN={name:[2,1],model:[2,1],state:[2,1],nozzle:[2,1],bed:[2,1],speed:[2,1],z:[2,1],progress:[3,1],eta:[2,1],thumb:[2,2]};"
-"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview'};"
-"var LYSAMPLE={name:'Apollo',model:'CORE One',state:'PRINTING',nozzle:'215\\u00b0',bed:'60\\u00b0',speed:'100%',z:'12.4',progress:'64%',eta:'1h 04m',thumb:''};"
+"var LYMIN={name:[2,1],model:[2,1],state:[2,1],nozzle:[2,1],bed:[2,1],speed:[2,1],z:[2,1],progress:[3,1],eta:[1,1],thumb:[1,1],header:[2,1],job:[2,1]};"
+"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview',header:'Header',job:'File'};"
+"var LYSAMPLE={name:'Apollo',model:'CORE One',state:'PRINTING',nozzle:'215\\u00b0',bed:'60\\u00b0',speed:'100%',z:'12.4',progress:'64%',eta:'1h 04m',thumb:'',header:'Apollo',job:'benchy.gcode'};"
 "async function ly_load(){try{var r=await fetch('/api/layout').then(x=>x.json());LAY={cols:r.cols||8,tiles:r.tiles||[]};LYTYPES=r.types||[]}catch(e){}ly_pal();ly_render()}"
 "function ly_rows(){var m=4;LAY.tiles.forEach(function(t){if(t.r+t.h>m)m=t.r+t.h});return m}"
 "function ly_pal(){var h='';LYTYPES.forEach(function(t){h+=`<button data-t='${t}' onclick=ly_addsel(this) style='margin:2px'>${LYLBL[t]||t}</button>`});document.getElementById('lypal').innerHTML=h}"
 "function ly_addsel(el){ly_add(el.getAttribute('data-t'))}"
 "function ly_free(c,r,w,h,ex){for(var i=0;i<LAY.tiles.length;i++){if(i==ex)continue;var t=LAY.tiles[i];if(c<t.c+t.w&&c+w>t.c&&r<t.r+t.h&&r+h>t.r)return false}return true}"
-"function ly_add(type){var mn=LYMIN[type]||[2,1],rows=ly_rows();for(var r=0;r<rows+2;r++)for(var c=0;c+mn[0]<=LAY.cols;c++){if(ly_free(c,r,mn[0],mn[1],-1)){LAY.tiles.push({type:type,c:c,r:r,w:mn[0],h:mn[1]});LYSEL=LAY.tiles.length-1;return ly_render()}}}"
+"function ly_add(type){var mn=LYMIN[type]||[2,1],rows=ly_rows();for(var r=0;r<rows+2;r++)for(var c=0;c+mn[0]<=LAY.cols;c++){if(ly_free(c,r,mn[0],mn[1],-1)){LAY.tiles.push({type:type,c:c,r:r,w:mn[0],h:mn[1],style:0});LYSEL=LAY.tiles.length-1;return ly_render()}}}"
 "function ly_render(){var rows=ly_rows(),g=document.getElementById('lygrid'),cw=100/LAY.cols,ch=100/rows,h='';"
-"LAY.tiles.forEach(function(t,i){var sv=LYSAMPLE[t.type]||'',cap=(t.type=='name'||t.type=='thumb')?'':(LYLBL[t.type]||t.type).toUpperCase(),inner='';"
-"if(t.type=='thumb'){inner=`<div style='width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#4e4e4e;border-radius:3px;color:#9a9a9a;font-size:9px;letter-spacing:1px'>PREVIEW</div>`}"
-"else if(t.type=='progress'){inner=`<div style='color:#a7a7a7;font-size:9px'>${cap}</div><div style='position:absolute;left:6px;right:6px;bottom:6px;height:8px;background:#4e4e4e;border-radius:4px;overflow:hidden'><div style='width:64%;height:100%;background:#fa6831'></div></div>`}"
-"else if(t.type=='state'){inner=`<div style='color:#a7a7a7;font-size:9px'>${cap}</div><div style='position:absolute;left:6px;bottom:6px;background:#464646;color:#fff;font-size:10px;padding:1px 7px;border-radius:3px'>${sv}</div>`}"
-"else if(t.type=='name'){inner=`<div style='position:absolute;left:7px;top:0;bottom:0;display:flex;align-items:center;color:#fff;font-size:14px;font-weight:600'>${sv}</div>`}"
-"else{inner=`<div style='color:#a7a7a7;font-size:9px'>${cap}</div><div style='position:absolute;left:6px;bottom:3px;color:#fff;font-size:14px'>${sv}</div>`}"
-"h+=`<div onclick='ly_sel(${i})' draggable=true ondragstart='ly_drag(event,${i})' style='position:absolute;left:${t.c*cw}%;top:${t.r*ch}%;width:${t.w*cw}%;height:${t.h*ch}%;box-sizing:border-box;padding:6px;border:2px solid ${i==LYSEL?'#fa6831':'#1c1e21'};background:#2a2a2a;border-radius:5px;color:#fff;cursor:move;overflow:hidden'>${inner}</div>`});"
+"LAY.tiles.forEach(function(t,i){var sv=LYSAMPLE[t.type]||'',sy=t.style||0,bg=sy==2?'#fa6831':(sy==1?'transparent':'#2a2a2a'),fg=sy==2?'#212529':'#fff',cc=sy==2?'#212529':'#a7a7a7',cap=(t.type=='name'||t.type=='thumb'||t.type=='header'||sy==1)?'':(LYLBL[t.type]||t.type).toUpperCase(),inner='';"
+"if(t.type=='header'){bg='#2f3a28';inner=`<div style='position:absolute;left:7px;right:7px;top:0;bottom:0;display:flex;align-items:center;gap:8px'><span style='flex:1;color:#fff;font-size:13px;font-weight:600;overflow:hidden;white-space:nowrap'>${sv}</span><span style='background:#46603a;color:#fff;font-size:9px;padding:1px 6px;border-radius:3px'>PRINTING</span></div>`}"
+"else if(t.type=='thumb'){inner=`<div style='width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:${sy==2?'#fa6831':'#4e4e4e'};border-radius:3px;color:${sy==2?'#b35021':'#9a9a9a'};font-size:9px;letter-spacing:1px'>PREVIEW</div>`}"
+"else if(t.type=='progress'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;right:6px;bottom:6px;height:8px;background:#4e4e4e;border-radius:4px;overflow:hidden'><div style='width:64%;height:100%;background:#fa6831'></div></div>`}"
+"else if(t.type=='state'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;bottom:6px;background:#464646;color:#fff;font-size:10px;padding:1px 7px;border-radius:3px'>${sv}</div>`}"
+"else if(t.type=='name'){inner=`<div style='position:absolute;left:7px;top:0;bottom:0;display:flex;align-items:center;color:${fg};font-size:14px;font-weight:600'>${sv}</div>`}"
+"else{var vp=sy==1?'top:0;bottom:0;display:flex;align-items:center':'bottom:3px';inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;${vp};color:${fg};font-size:14px'>${sv}</div>`}"
+"var bd=i==LYSEL?'2px solid #fa6831':(sy==1?'1px dashed #4e4e4e':'2px solid #1c1e21');"
+"h+=`<div onclick='ly_sel(${i})' draggable=true ondragstart='ly_drag(event,${i})' style='position:absolute;left:${t.c*cw}%;top:${t.r*ch}%;width:${t.w*cw}%;height:${t.h*ch}%;box-sizing:border-box;padding:6px;border:${bd};background:${bg};border-radius:5px;color:#fff;cursor:move;overflow:hidden'>${inner}</div>`});"
 "g.innerHTML=h;g.style.backgroundImage=`repeating-linear-gradient(90deg,#2f3338 0px,#2f3338 1px,transparent 1px,transparent ${cw}%),repeating-linear-gradient(0deg,#2f3338 0px,#2f3338 1px,transparent 1px,transparent ${ch}%)`;ly_selbar()}"
 "function ly_sel(i){LYSEL=i;ly_render()}"
-"function ly_selbar(){var b=document.getElementById('lysel');if(LYSEL<0||LYSEL>=LAY.tiles.length){b.innerHTML='Click a tile to move, resize, or remove it.';return}var t=LAY.tiles[LYSEL];b.innerHTML=`<b style='color:#fff'>${LYLBL[t.type]}</b> &nbsp; size <button onclick='ly_rs(-1,0)'>w-</button><button onclick='ly_rs(1,0)'>w+</button> <button onclick='ly_rs(0,-1)'>h-</button><button onclick='ly_rs(0,1)'>h+</button> &nbsp; move <button onclick='ly_mv(-1,0)'>&larr;</button><button onclick='ly_mv(1,0)'>&rarr;</button><button onclick='ly_mv(0,-1)'>&uarr;</button><button onclick='ly_mv(0,1)'>&darr;</button> &nbsp; <button onclick='ly_del()'>Remove</button>`}"
+"function ly_selbar(){var b=document.getElementById('lysel');if(LYSEL<0||LYSEL>=LAY.tiles.length){b.innerHTML='Click a tile to move, resize, restyle, or remove it.';return}var t=LAY.tiles[LYSEL],so=[0,1,2].map(function(s){return `<option value='${s}'${(t.style||0)==s?' selected':''}>${['Card','Bare','Accent'][s]}</option>`}).join('');b.innerHTML=`<b style='color:#fff'>${LYLBL[t.type]}</b> &nbsp; style <select onchange='ly_setstyle(this.value)'>${so}</select> &nbsp; size <button onclick='ly_rs(-1,0)'>w-</button><button onclick='ly_rs(1,0)'>w+</button> <button onclick='ly_rs(0,-1)'>h-</button><button onclick='ly_rs(0,1)'>h+</button> &nbsp; move <button onclick='ly_mv(-1,0)'>&larr;</button><button onclick='ly_mv(1,0)'>&rarr;</button><button onclick='ly_mv(0,-1)'>&uarr;</button><button onclick='ly_mv(0,1)'>&darr;</button> &nbsp; <button onclick='ly_del()'>Remove</button>`}"
+"function ly_setstyle(s){LAY.tiles[LYSEL].style=parseInt(s);ly_render()}"
 "function ly_rs(dw,dh){var t=LAY.tiles[LYSEL],mn=LYMIN[t.type]||[1,1],nw=t.w+dw,nh=t.h+dh;if(nw<mn[0]||nh<mn[1]||t.c+nw>LAY.cols||nh>8)return;if(!ly_free(t.c,t.r,nw,nh,LYSEL))return;t.w=nw;t.h=nh;ly_render()}"
 "function ly_mv(dc,dr){var t=LAY.tiles[LYSEL],nc=t.c+dc,nr=t.r+dr;if(nc<0||nr<0||nc+t.w>LAY.cols)return;if(!ly_free(nc,nr,t.w,t.h,LYSEL))return;t.c=nc;t.r=nr;ly_render()}"
 "function ly_del(){LAY.tiles.splice(LYSEL,1);LYSEL=-1;ly_render()}"
@@ -1478,6 +1481,7 @@ static esp_err_t api_layout_get(httpd_req_t *req)
         cJSON_AddStringToObject(t, "type", PP_TILE_KEYS[L->tiles[i].type]);
         cJSON_AddNumberToObject(t, "c", L->tiles[i].c); cJSON_AddNumberToObject(t, "r", L->tiles[i].r);
         cJSON_AddNumberToObject(t, "w", L->tiles[i].w); cJSON_AddNumberToObject(t, "h", L->tiles[i].h);
+        cJSON_AddNumberToObject(t, "style", L->tiles[i].style);
         cJSON_AddItemToArray(ts, t);
     }
     cJSON_AddItemToObject(o, "tiles", ts);
@@ -1522,6 +1526,7 @@ static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,
             L.tiles[n].c = (uint8_t)jint(t, "c"); L.tiles[n].r = (uint8_t)jint(t, "r");
             int w = jint(t, "w"), h = jint(t, "h");
             L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
+            int sty = jint(t, "style"); L.tiles[n].style = (uint8_t)((sty >= 0 && sty < LS_COUNT) ? sty : 0);
             n++;
         }
         L.n = (uint8_t)n;
@@ -1555,13 +1560,14 @@ static esp_err_t api_layout_preview_post(httpd_req_t *req)
             L.tiles[n].c = (uint8_t)jint(t, "c"); L.tiles[n].r = (uint8_t)jint(t, "r");
             int w = jint(t, "w"), h = jint(t, "h");
             L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
+            int sty = jint(t, "style"); L.tiles[n].style = (uint8_t)((sty >= 0 && sty < LS_COUNT) ? sty : 0);
             n++;
         }
         L.n = (uint8_t)n; ok = (n > 0);
         cJSON_Delete(j);
     }
     free(body);
-    if (!ok) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need tiles[]"); return ESP_FAIL; }
+    if (!ok || !layout_valid(&L)) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad spec"); return ESP_FAIL; }
 
     if (xSemaphoreTake(s_preview_mtx, pdMS_TO_TICKS(8000)) != pdTRUE) {
         httpd_resp_set_status(req, "503 Service Unavailable");

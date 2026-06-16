@@ -8,24 +8,25 @@
 #define NS "pplayout"
 
 const char *const PP_TILE_KEYS[LT_COUNT] = {
-    "", "name", "model", "state", "nozzle", "bed", "speed", "z", "progress", "eta", "thumb"
+    "", "name", "model", "state", "nozzle", "bed", "speed", "z", "progress", "eta", "thumb", "header", "job"
 };
 const char *const PP_TILE_LABELS[LT_COUNT] = {
-    "", "PRINTER", "MODEL", "STATE", "NOZZLE", "BED", "SPEED", "Z AXIS", "PROGRESS", "ETA", ""
+    "", "PRINTER", "MODEL", "STATE", "NOZZLE", "BED", "SPEED", "Z AXIS", "PROGRESS", "ETA", "", "", "FILE"
 };
 
-/* Built-in default: mirrors the on-device status screen — a hero (model thumbnail at left, printer
- * name + state badge, model line), a 2x2 telemetry block (nozzle/bed/speed/z), then the job card
- * (progress bar + ETA). 4 columns so the cells stay roomy in portrait, matching the status screen's
- * portrait layout; it reflows to landscape too. Opening the editor starts from the real layout. */
+/* Built-in default: a 1:1 recreation of the on-device status screen — an accent (orange) thumbnail,
+ * the name+state header strip, a bare model line, a 2x2 telemetry block (nozzle/bed/speed/z), the
+ * print's file name, then progress + ETA. 4 columns keeps the cells roomy in portrait (matching the
+ * status screen's portrait layout) and reflows to landscape. Opening the editor starts from this. */
 static const pp_layout_t DEFAULT_LAYOUT = {
     .cols = 4, .n = 10, .tiles = {
-        { LT_THUMB,    0, 0, 2, 2 },
-        { LT_NAME,     2, 0, 2, 1 }, { LT_STATE, 2, 1, 2, 1 },
-        { LT_MODEL,    0, 2, 4, 1 },
-        { LT_NOZZLE,   0, 3, 2, 1 }, { LT_BED,   2, 3, 2, 1 },
-        { LT_SPEED,    0, 4, 2, 1 }, { LT_ZAXIS, 2, 4, 2, 1 },
-        { LT_PROGRESS, 0, 5, 3, 1 }, { LT_ETA,   3, 5, 1, 1 },
+        { LT_THUMB,    0, 0, 1, 1, LS_ACCENT },
+        { LT_HEADER,   1, 0, 3, 1, LS_CARD },
+        { LT_MODEL,    1, 1, 3, 1, LS_BARE },
+        { LT_NOZZLE,   0, 2, 2, 1, LS_CARD }, { LT_BED,   2, 2, 2, 1, LS_CARD },
+        { LT_SPEED,    0, 3, 2, 1, LS_CARD }, { LT_ZAXIS, 2, 3, 2, 1, LS_CARD },
+        { LT_JOB,      0, 4, 4, 1, LS_BARE },
+        { LT_PROGRESS, 0, 5, 3, 1, LS_CARD }, { LT_ETA, 3, 5, 1, 1, LS_CARD },
     }
 };
 
@@ -33,12 +34,13 @@ static pp_layout_t s_layout = DEFAULT_LAYOUT;
 static bool        s_has_custom;
 
 /* Sanity-check a spec: cols 1..16, n<=MAX, every tile in-bounds with a known type. */
-static bool layout_valid(const pp_layout_t *l)
+bool layout_valid(const pp_layout_t *l)
 {
     if (!l || l->cols < 1 || l->cols > 16 || l->n > PP_LAYOUT_MAX) return false;
     for (int i = 0; i < l->n; i++) {
         const pp_tile_t *t = &l->tiles[i];
         if (t->type == 0 || t->type >= LT_COUNT) return false;
+        if (t->style >= LS_COUNT) return false;
         if (t->w < 1 || t->h < 1) return false;
         if (t->c + t->w > l->cols || t->r + t->h > 32) return false;
     }

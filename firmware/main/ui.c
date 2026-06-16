@@ -2014,7 +2014,7 @@ static void build_control_screen(void)
  * AND bound inline (no live-update array, no header bar). Used only by the off-screen preview. */
 static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_status_t *st, int w, int h)
 {
-    if (!parent || !L) return;
+    if (!parent || !L || !st) return;
     char buf[40];
     int cols = L->cols ? L->cols : 8, rows = 1;
     for (int i = 0; i < L->n; i++) { int rr = L->tiles[i].r + L->tiles[i].h; if (rr > rows) rows = rr; }
@@ -2024,17 +2024,60 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
     for (int i = 0; i < L->n; i++) {
         const pp_tile_t *t = &L->tiles[i];
         if (t->type == 0 || t->type >= LT_COUNT) continue;
+        int tw = t->w * cw - 2 * pad, th = t->h * ch - 2 * pad;
         lv_obj_t *card = lv_obj_create(parent);
         lv_obj_set_pos(card, t->c * cw + pad, t->r * ch + pad);
-        lv_obj_set_size(card, t->w * cw - 2 * pad, t->h * ch - 2 * pad);
-        lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
-        lv_obj_set_style_border_width(card, 0, 0);   /* match the existing telemetry cells (no border) */
+        lv_obj_set_size(card, tw, th);
+        lv_obj_set_style_border_width(card, 0, 0);
         lv_obj_set_style_radius(card, 6, 0);
-        lv_obj_set_style_pad_all(card, 8, 0);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-        /* NAME shows just the printer name (like the card header), so it skips the caption. */
-        bool has_cap = PP_TILE_LABELS[t->type][0] != '\0' && t->type != LT_NAME;
+        /* HEADER: printer name + state badge fused in the state-tinted strip (the hero header). */
+        if (t->type == LT_HEADER) {
+            lv_obj_set_style_bg_color(card, st->online ? pp_state_strip(st->state) : PP_STRIP_GRAY, 0);
+            lv_obj_set_style_pad_hor(card, 10, 0);
+            lv_obj_set_style_pad_ver(card, 4, 0);
+            lv_obj_set_style_pad_column(card, 10, 0);
+            lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_t *nm = lv_label_create(card);
+            lv_label_set_text(nm, st->printer_name[0] ? st->printer_name : "Printer");
+            lv_obj_set_style_text_color(nm, PP_TEXT, 0);
+            lv_obj_set_style_text_font(nm, PP_F20, 0);
+            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+            lv_obj_set_flex_grow(nm, 1);
+            lv_obj_t *bdg = lv_obj_create(card);
+            lv_obj_set_size(bdg, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_obj_set_style_pad_hor(bdg, 10, 0);
+            lv_obj_set_style_pad_ver(bdg, 3, 0);
+            lv_obj_set_style_radius(bdg, 4, 0);
+            lv_obj_set_style_border_width(bdg, 0, 0);
+            lv_obj_set_style_bg_color(bdg, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0);
+            lv_obj_clear_flag(bdg, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *sl = lv_label_create(bdg);
+            lv_label_set_text(sl, st->state[0] ? st->state : "...");
+            lv_obj_set_style_text_color(sl, PP_TEXT, 0);
+            lv_obj_set_style_text_font(sl, PP_F16, 0);
+            continue;
+        }
+
+        /* tile chrome per style: CARD = surface; BARE = transparent (floating label); ACCENT = orange */
+        bool bare = (t->style == LS_BARE), accent = (t->style == LS_ACCENT);
+        if (bare) {
+            lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(card, 4, 0);
+        } else if (accent) {
+            lv_obj_set_style_bg_color(card, PP_ORANGE, 0);
+            lv_obj_set_style_radius(card, 8, 0);
+            lv_obj_set_style_pad_all(card, 8, 0);
+        } else {
+            lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
+            lv_obj_set_style_pad_all(card, 8, 0);
+        }
+        lv_color_t vcol = accent ? PP_TEXT_INVERSE : PP_TEXT;
+
+        /* caption only on CARD style (BARE/ACCENT drop it); NAME never captions. */
+        bool has_cap = !bare && !accent && PP_TILE_LABELS[t->type][0] != '\0' && t->type != LT_NAME;
         if (has_cap) {
             lv_obj_t *cap = lv_label_create(card);
             lv_label_set_text(cap, PP_TILE_LABELS[t->type]);
@@ -2046,23 +2089,21 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         lv_obj_t *val = NULL, *barw = NULL, *img = NULL;
         if (t->type == LT_PROGRESS) {
             barw = lv_bar_create(card);
-            lv_obj_set_size(barw, t->w * cw - 2 * pad - 16, 12);
+            lv_obj_set_size(barw, tw - 16, 12);
             lv_obj_align(barw, LV_ALIGN_BOTTOM_LEFT, 0, -2);
             lv_bar_set_range(barw, 0, 100);
             lv_bar_set_value(barw, 0, LV_ANIM_OFF);
             lv_obj_set_style_bg_color(barw, PP_SURFACE_HI, LV_PART_MAIN);
             lv_obj_set_style_bg_color(barw, PP_ORANGE, LV_PART_INDICATOR);
             val = lv_label_create(card);
-            lv_obj_set_style_text_color(val, PP_TEXT, 0);
+            lv_obj_set_style_text_color(val, vcol, 0);
             lv_obj_set_style_text_font(val, PP_F16, 0);
             lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 0);
         } else if (t->type == LT_THUMB) {
-            lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);   /* model-image slot, like the card thumb */
+            if (!accent) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);   /* ACCENT keeps the orange */
             lv_obj_set_style_pad_all(card, 0, 0);
             img = lv_image_create(card);
-            /* Scale the 48px model asset to fill ~80% of the slot's smaller side (slots run far
-             * larger than the 48px card thumb, so the native image would look lost otherwise). */
-            int tw = t->w * cw - 2 * pad, th = t->h * ch - 2 * pad;
+            /* Scale the 48px model asset to fill ~80% of the slot's smaller side. */
             int side = (tw < th) ? tw : th;
             uint32_t sc = (uint32_t)(side * 4 / 5) * 256u / 48u;
             if (sc < 256) sc = 256;
@@ -2078,17 +2119,16 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_pad_hor(val, 12, 0);
             lv_obj_set_style_pad_ver(val, 3, 0);
             lv_obj_set_style_radius(val, 4, 0);
-            lv_label_set_text(val, "...");
             lv_obj_center(val);
         } else if (t->type == LT_NAME) {
             val = lv_label_create(card);
-            lv_obj_set_style_text_color(val, PP_TEXT, 0);
+            lv_obj_set_style_text_color(val, vcol, 0);
             lv_obj_set_style_text_font(val, PP_F20, 0);
             lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(val, t->w * cw - 2 * pad - 4);
+            lv_obj_set_width(val, tw - 4);
             lv_obj_align(val, LV_ALIGN_LEFT_MID, 0, 0);
         } else {
-            /* telemetry cell: muted caption on top, orange icon + big value on the bottom (detail_cell) */
+            /* MODEL / JOB (secondary, muted-ish) or NOZZLE/BED/SPEED/Z/ETA (telemetry detail_cell). */
             const lv_image_dsc_t *ic = (t->type == LT_NOZZLE) ? &pt_ic_nozzle
                                      : (t->type == LT_BED)    ? &pt_ic_bed
                                      : (t->type == LT_SPEED)  ? &pt_ic_speed : NULL;
@@ -2099,17 +2139,19 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
                 lv_obj_align(im, LV_ALIGN_BOTTOM_LEFT, 0, 2);
                 vx = 34;
             }
+            bool secondary = (t->type == LT_MODEL || t->type == LT_JOB);
             val = lv_label_create(card);
-            lv_obj_set_style_text_color(val, PP_TEXT, 0);
-            lv_obj_set_style_text_font(val, PP_F20, 0);
+            lv_obj_set_style_text_color(val, (t->type == LT_MODEL) ? PP_TEXT_MUTED : vcol, 0);
+            lv_obj_set_style_text_font(val, secondary ? PP_F16 : PP_F20, 0);
             lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(val, t->w * cw - 2 * pad - vx);
-            lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, vx, 0);
+            lv_obj_set_width(val, tw - vx);
+            lv_obj_align(val, bare ? LV_ALIGN_LEFT_MID : LV_ALIGN_BOTTOM_LEFT, vx, 0);
         }
         /* bind the sample status inline (folded-in layout_bind) */
         switch (t->type) {
         case LT_NAME:  if (val) lv_label_set_text(val, st->printer_name[0] ? st->printer_name : "Printer"); break;
         case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : "Prusa printer"); break;
+        case LT_JOB:   if (val) lv_label_set_text(val, st->job_name[0] ? st->job_name : "--"); break;
         case LT_STATE: if (val) { lv_label_set_text(val, st->state[0] ? st->state : "...");
                                   lv_obj_set_style_bg_color(val, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0); } break;
         case LT_NOZZLE:
@@ -2180,6 +2222,7 @@ void ui_layout_preview_render(void *arg)
     strlcpy(st.printer_name, "Apollo", sizeof(st.printer_name));
     strlcpy(st.model, "Prusa CORE One", sizeof(st.model));
     strlcpy(st.state, "PRINTING", sizeof(st.state));
+    strlcpy(st.job_name, "benchy.gcode", sizeof(st.job_name));
     st.temp_nozzle = 215; st.target_nozzle = 215;
     st.temp_bed = 60;  st.target_bed = 60;
     st.speed = 100;    st.axis_z = 12.4f;
