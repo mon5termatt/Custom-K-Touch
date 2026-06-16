@@ -179,7 +179,7 @@ static const char INDEX_HTML[] =
 "<button onclick=tf_export()>Export</button> <button onclick=tf_pick()>Import</button>"
 "<input type=file id=tfimp accept=.json style=display:none onchange=tf_import(event)></div></div></div>"
 "<div class=tab id=t8><div class=card><b>Layout</b>"
-"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to move, resize, or restyle it (Card / Bare / Accent). The Header tile is the name + state strip; the default is a 1:1 of the status screen. Save stores your layout; Generate preview renders exactly how it looks on the device.</div>"
+"<div class=muted>Arrange data tiles on a grid for your printer view. Click a tile to move, resize, restyle it (Card / Bare / Accent), or combine it with neighbours into one card (give them the same Combine group, like the stock job card). The Header tile is the name + state strip; the default is a 1:1 of the status screen. Save stores your layout; Generate preview renders exactly how it looks on the device.</div>"
 "<div style='margin:10px 0'>Add tile: <span id=lypal></span></div>"
 "<div id=lygrid ondragover=ly_over(event) ondrop=ly_drop(event) style='position:relative;width:560px;max-width:100%;aspect-ratio:5/3;background:#1c1e21;border:1px solid #4e4e4e;border-radius:6px'></div>"
 "<div id=lysel style='margin-top:10px;min-height:26px;color:#a7a7a7;font-size:13px'></div>"
@@ -378,20 +378,22 @@ static const char INDEX_HTML[] =
 "function ly_pal(){var h='';LYTYPES.forEach(function(t){h+=`<button data-t='${t}' onclick=ly_addsel(this) style='margin:2px'>${LYLBL[t]||t}</button>`});document.getElementById('lypal').innerHTML=h}"
 "function ly_addsel(el){ly_add(el.getAttribute('data-t'))}"
 "function ly_free(c,r,w,h,ex){for(var i=0;i<LAY.tiles.length;i++){if(i==ex)continue;var t=LAY.tiles[i];if(c<t.c+t.w&&c+w>t.c&&r<t.r+t.h&&r+h>t.r)return false}return true}"
-"function ly_add(type){var mn=LYMIN[type]||[2,1],rows=ly_rows();for(var r=0;r<rows+2;r++)for(var c=0;c+mn[0]<=LAY.cols;c++){if(ly_free(c,r,mn[0],mn[1],-1)){LAY.tiles.push({type:type,c:c,r:r,w:mn[0],h:mn[1],style:0});LYSEL=LAY.tiles.length-1;return ly_render()}}}"
+"function ly_add(type){var mn=LYMIN[type]||[2,1],rows=ly_rows();for(var r=0;r<rows+2;r++)for(var c=0;c+mn[0]<=LAY.cols;c++){if(ly_free(c,r,mn[0],mn[1],-1)){LAY.tiles.push({type:type,c:c,r:r,w:mn[0],h:mn[1],style:0,group:0});LYSEL=LAY.tiles.length-1;return ly_render()}}}"
 "function ly_render(){var rows=ly_rows(),g=document.getElementById('lygrid'),cw=100/LAY.cols,ch=100/rows,h='';"
-"LAY.tiles.forEach(function(t,i){var sv=LYSAMPLE[t.type]||'',sy=t.style||0,bg=sy==2?'#fa6831':(sy==1?'transparent':'#2a2a2a'),fg=sy==2?'#212529':'#fff',cc=sy==2?'#212529':'#a7a7a7',cap=(t.type=='name'||t.type=='thumb'||t.type=='header'||sy==1)?'':(LYLBL[t.type]||t.type).toUpperCase(),inner='';"
+"var gs={};LAY.tiles.forEach(function(t){var gp=t.group||0;if(!gp||gs[gp])return;gs[gp]=1;var mc=99,mr=99,xc=0,xr=0;LAY.tiles.forEach(function(u){if((u.group||0)!=gp)return;if(u.c<mc)mc=u.c;if(u.r<mr)mr=u.r;if(u.c+u.w>xc)xc=u.c+u.w;if(u.r+u.h>xr)xr=u.r+u.h});h+=`<div style='position:absolute;left:${mc*cw}%;top:${mr*ch}%;width:${(xc-mc)*cw}%;height:${(xr-mr)*ch}%;box-sizing:border-box;padding:6px'><div style='width:100%;height:100%;background:#2a2a2a;border-radius:5px'></div></div>`});"
+"LAY.tiles.forEach(function(t,i){var sv=LYSAMPLE[t.type]||'',sy=t.style||0,gp=t.group||0,bg=gp?'transparent':(sy==2?'#fa6831':(sy==1?'transparent':'#2a2a2a')),fg=sy==2?'#212529':'#fff',cc=sy==2?'#212529':'#a7a7a7',cap=(t.type=='name'||t.type=='thumb'||t.type=='header'||sy==1)?'':(LYLBL[t.type]||t.type).toUpperCase(),inner='';"
 "if(t.type=='header'){bg='#2f3a28';inner=`<div style='position:absolute;left:7px;right:7px;top:0;bottom:0;display:flex;align-items:center;gap:8px'><span style='flex:1;color:#fff;font-size:13px;font-weight:600;overflow:hidden;white-space:nowrap'>${sv}</span><span style='background:#46603a;color:#fff;font-size:9px;padding:1px 6px;border-radius:3px'>PRINTING</span></div>`}"
 "else if(t.type=='thumb'){inner=`<div style='width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:${sy==2?'#fa6831':'#4e4e4e'};border-radius:3px;color:${sy==2?'#b35021':'#9a9a9a'};font-size:9px;letter-spacing:1px'>PREVIEW</div>`}"
 "else if(t.type=='progress'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;right:6px;bottom:6px;height:8px;background:#4e4e4e;border-radius:4px;overflow:hidden'><div style='width:64%;height:100%;background:#fa6831'></div></div>`}"
 "else if(t.type=='state'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;bottom:6px;background:#464646;color:#fff;font-size:10px;padding:1px 7px;border-radius:3px'>${sv}</div>`}"
 "else if(t.type=='name'){inner=`<div style='position:absolute;left:7px;top:0;bottom:0;display:flex;align-items:center;color:${fg};font-size:14px;font-weight:600'>${sv}</div>`}"
 "else{var vp=sy==1?'top:0;bottom:0;display:flex;align-items:center':'bottom:3px';inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;${vp};color:${fg};font-size:14px'>${sv}</div>`}"
-"var bd=i==LYSEL?'2px solid #fa6831':(sy==1?'1px dashed #4e4e4e':'2px solid #1c1e21');"
+"var bd=i==LYSEL?'2px solid #fa6831':(gp?'none':(sy==1?'1px dashed #4e4e4e':'2px solid #1c1e21'));"
 "h+=`<div onclick='ly_sel(${i})' draggable=true ondragstart='ly_drag(event,${i})' style='position:absolute;left:${t.c*cw}%;top:${t.r*ch}%;width:${t.w*cw}%;height:${t.h*ch}%;box-sizing:border-box;padding:6px;border:${bd};background:${bg};border-radius:5px;color:#fff;cursor:move;overflow:hidden'>${inner}</div>`});"
 "g.innerHTML=h;g.style.backgroundImage=`repeating-linear-gradient(90deg,#2f3338 0px,#2f3338 1px,transparent 1px,transparent ${cw}%),repeating-linear-gradient(0deg,#2f3338 0px,#2f3338 1px,transparent 1px,transparent ${ch}%)`;ly_selbar()}"
 "function ly_sel(i){LYSEL=i;ly_render()}"
-"function ly_selbar(){var b=document.getElementById('lysel');if(LYSEL<0||LYSEL>=LAY.tiles.length){b.innerHTML='Click a tile to move, resize, restyle, or remove it.';return}var t=LAY.tiles[LYSEL],so=[0,1,2].map(function(s){return `<option value='${s}'${(t.style||0)==s?' selected':''}>${['Card','Bare','Accent'][s]}</option>`}).join('');b.innerHTML=`<b style='color:#fff'>${LYLBL[t.type]}</b> &nbsp; style <select onchange='ly_setstyle(this.value)'>${so}</select> &nbsp; size <button onclick='ly_rs(-1,0)'>w-</button><button onclick='ly_rs(1,0)'>w+</button> <button onclick='ly_rs(0,-1)'>h-</button><button onclick='ly_rs(0,1)'>h+</button> &nbsp; move <button onclick='ly_mv(-1,0)'>&larr;</button><button onclick='ly_mv(1,0)'>&rarr;</button><button onclick='ly_mv(0,-1)'>&uarr;</button><button onclick='ly_mv(0,1)'>&darr;</button> &nbsp; <button onclick='ly_del()'>Remove</button>`}"
+"function ly_selbar(){var b=document.getElementById('lysel');if(LYSEL<0||LYSEL>=LAY.tiles.length){b.innerHTML='Click a tile to move, resize, restyle, combine, or remove it. Tiles sharing a Combine group render as one card.';return}var t=LAY.tiles[LYSEL],so=[0,1,2].map(function(s){return `<option value='${s}'${(t.style||0)==s?' selected':''}>${['Card','Bare','Accent'][s]}</option>`}).join(''),go=[0,1,2,3,4].map(function(gv){return `<option value='${gv}'${(t.group||0)==gv?' selected':''}>${gv==0?'None':'Group '+gv}</option>`}).join('');b.innerHTML=`<b style='color:#fff'>${LYLBL[t.type]}</b> &nbsp; style <select onchange='ly_setstyle(this.value)'>${so}</select> &nbsp; combine <select onchange='ly_setgroup(this.value)'>${go}</select> &nbsp; size <button onclick='ly_rs(-1,0)'>w-</button><button onclick='ly_rs(1,0)'>w+</button> <button onclick='ly_rs(0,-1)'>h-</button><button onclick='ly_rs(0,1)'>h+</button> &nbsp; move <button onclick='ly_mv(-1,0)'>&larr;</button><button onclick='ly_mv(1,0)'>&rarr;</button><button onclick='ly_mv(0,-1)'>&uarr;</button><button onclick='ly_mv(0,1)'>&darr;</button> &nbsp; <button onclick='ly_del()'>Remove</button>`}"
+"function ly_setgroup(gv){LAY.tiles[LYSEL].group=parseInt(gv);ly_render()}"
 "function ly_setstyle(s){LAY.tiles[LYSEL].style=parseInt(s);ly_render()}"
 "function ly_rs(dw,dh){var t=LAY.tiles[LYSEL],mn=LYMIN[t.type]||[1,1],nw=t.w+dw,nh=t.h+dh;if(nw<mn[0]||nh<mn[1]||t.c+nw>LAY.cols||nh>8)return;if(!ly_free(t.c,t.r,nw,nh,LYSEL))return;t.w=nw;t.h=nh;ly_render()}"
 "function ly_mv(dc,dr){var t=LAY.tiles[LYSEL],nc=t.c+dc,nr=t.r+dr;if(nc<0||nr<0||nc+t.w>LAY.cols)return;if(!ly_free(nc,nr,t.w,t.h,LYSEL))return;t.c=nc;t.r=nr;ly_render()}"
@@ -1482,6 +1484,7 @@ static esp_err_t api_layout_get(httpd_req_t *req)
         cJSON_AddNumberToObject(t, "c", L->tiles[i].c); cJSON_AddNumberToObject(t, "r", L->tiles[i].r);
         cJSON_AddNumberToObject(t, "w", L->tiles[i].w); cJSON_AddNumberToObject(t, "h", L->tiles[i].h);
         cJSON_AddNumberToObject(t, "style", L->tiles[i].style);
+        cJSON_AddNumberToObject(t, "group", L->tiles[i].group);
         cJSON_AddItemToArray(ts, t);
     }
     cJSON_AddItemToObject(o, "tiles", ts);
@@ -1527,6 +1530,7 @@ static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,
             int w = jint(t, "w"), h = jint(t, "h");
             L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
             int sty = jint(t, "style"); L.tiles[n].style = (uint8_t)((sty >= 0 && sty < LS_COUNT) ? sty : 0);
+            int grp = jint(t, "group"); L.tiles[n].group = (uint8_t)((grp >= 0 && grp < PP_LAYOUT_GROUPS) ? grp : 0);
             n++;
         }
         L.n = (uint8_t)n;
@@ -1561,6 +1565,7 @@ static esp_err_t api_layout_preview_post(httpd_req_t *req)
             int w = jint(t, "w"), h = jint(t, "h");
             L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
             int sty = jint(t, "style"); L.tiles[n].style = (uint8_t)((sty >= 0 && sty < LS_COUNT) ? sty : 0);
+            int grp = jint(t, "group"); L.tiles[n].group = (uint8_t)((grp >= 0 && grp < PP_LAYOUT_GROUPS) ? grp : 0);
             n++;
         }
         L.n = (uint8_t)n; ok = (n > 0);

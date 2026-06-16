@@ -2021,6 +2021,32 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
     const int pad = 6;
     int cw = w / cols, ch = h / rows;     /* no header off-screen: the full canvas is tile area */
 
+    /* Pass 1: one shared surface card behind each group's bounding box (combined cards), drawn first
+     * so the grouped tiles' content sits on top of it. */
+    bool gdrawn[PP_LAYOUT_GROUPS] = {0};
+    for (int i = 0; i < L->n; i++) {
+        if (L->tiles[i].type == 0 || L->tiles[i].type >= LT_COUNT) continue;
+        int g = L->tiles[i].group;
+        if (g == 0 || g >= PP_LAYOUT_GROUPS || gdrawn[g]) continue;
+        gdrawn[g] = true;
+        int minc = 255, minr = 255, maxc = 0, maxr = 0;
+        for (int j = 0; j < L->n; j++) {
+            const pp_tile_t *u = &L->tiles[j];
+            if (u->group != g || u->type == 0 || u->type >= LT_COUNT) continue;
+            if (u->c < minc) minc = u->c;
+            if (u->r < minr) minr = u->r;
+            if (u->c + u->w > maxc) maxc = u->c + u->w;
+            if (u->r + u->h > maxr) maxr = u->r + u->h;
+        }
+        lv_obj_t *gc = lv_obj_create(parent);
+        lv_obj_set_pos(gc, minc * cw + pad, minr * ch + pad);
+        lv_obj_set_size(gc, (maxc - minc) * cw - 2 * pad, (maxr - minr) * ch - 2 * pad);
+        lv_obj_set_style_bg_color(gc, PP_SURFACE, 0);
+        lv_obj_set_style_border_width(gc, 0, 0);
+        lv_obj_set_style_radius(gc, 6, 0);
+        lv_obj_clear_flag(gc, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
     for (int i = 0; i < L->n; i++) {
         const pp_tile_t *t = &L->tiles[i];
         if (t->type == 0 || t->type >= LT_COUNT) continue;
@@ -2061,9 +2087,14 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             continue;
         }
 
-        /* tile chrome per style: CARD = surface; BARE = transparent (floating label); ACCENT = orange */
+        /* tile chrome per style: CARD = surface; BARE = transparent (floating label); ACCENT = orange.
+         * A grouped tile is always transparent — its group's shared card (pass 1) is the background. */
         bool bare = (t->style == LS_BARE), accent = (t->style == LS_ACCENT);
-        if (bare) {
+        bool grouped = (t->group >= 1 && t->group < PP_LAYOUT_GROUPS);
+        if (grouped) {
+            lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(card, bare ? 4 : 8, 0);
+        } else if (bare) {
             lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
             lv_obj_set_style_pad_all(card, 4, 0);
         } else if (accent) {
@@ -2074,7 +2105,7 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
             lv_obj_set_style_pad_all(card, 8, 0);
         }
-        lv_color_t vcol = accent ? PP_TEXT_INVERSE : PP_TEXT;
+        lv_color_t vcol = (accent && !grouped) ? PP_TEXT_INVERSE : PP_TEXT;   /* grouped drops the orange bg */
 
         /* caption only on CARD style (BARE/ACCENT drop it); NAME never captions. */
         bool has_cap = !bare && !accent && PP_TILE_LABELS[t->type][0] != '\0' && t->type != LT_NAME;
@@ -2100,7 +2131,7 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_text_font(val, PP_F16, 0);
             lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 0);
         } else if (t->type == LT_THUMB) {
-            if (!accent) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);   /* ACCENT keeps the orange */
+            if (!accent && !grouped) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);   /* ACCENT/group keep their bg */
             lv_obj_set_style_pad_all(card, 0, 0);
             img = lv_image_create(card);
             /* Scale the 48px model asset to fill ~80% of the slot's smaller side. */

@@ -20,7 +20,10 @@ typedef enum {
  * floating label, e.g. the model line); ACCENT = orange background (the hero thumbnail). */
 typedef enum { LS_CARD = 0, LS_BARE, LS_ACCENT, LS_COUNT } pp_tile_style_t;
 
-typedef struct { uint8_t type, c, r, w, h, style; } pp_tile_t;  /* type + chunk col/row + span + style */
+/* group: 0 = standalone tile. Tiles sharing a nonzero group (1..PP_LAYOUT_GROUPS-1) render on ONE
+ * shared surface card spanning their bounding box (like the stock job card bundling name+%+bar+ETA). */
+#define PP_LAYOUT_GROUPS 16
+typedef struct { uint8_t type, c, r, w, h, style, group; } pp_tile_t;
 
 #define PP_LAYOUT_MAX 20
 typedef struct { uint8_t cols, n; pp_tile_t tiles[PP_LAYOUT_MAX]; } pp_layout_t;
