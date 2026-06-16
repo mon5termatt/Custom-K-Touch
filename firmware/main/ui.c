@@ -2020,6 +2020,9 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
     for (int i = 0; i < L->n; i++) { int rr = L->tiles[i].r + L->tiles[i].h; if (rr > rows) rows = rr; }
     const int pad = 6;
     int cw = w / cols, ch = h / rows;     /* no header off-screen: the full canvas is tile area */
+    /* Cap the row height so cells stay as compact as the stock ones (a 1-row cell ~= the 56px
+     * detail_cell) instead of stretching tall to fill the panel; the layout then top-aligns. */
+    if (ch > 68) ch = 68;
 
     /* Pass 1: one shared surface card behind each group's bounding box (combined cards), drawn first
      * so the grouped tiles' content sits on top of it. */

@@ -20,7 +20,7 @@ const char *const PP_TILE_LABELS[LT_COUNT] = {
  * status screen's portrait layout) and reflows to landscape. Opening the editor starts from this. */
 static const pp_layout_t DEFAULT_LAYOUT = {
     .cols = 4, .n = 10, .tiles = {
-        { LT_THUMB,    0, 0, 1, 1, LS_ACCENT, 0 },
+        { LT_THUMB,    0, 0, 1, 2, LS_ACCENT, 0 },
         { LT_HEADER,   1, 0, 3, 1, LS_CARD,   0 },
         { LT_MODEL,    1, 1, 3, 1, LS_BARE,   0 },
         { LT_NOZZLE,   0, 2, 2, 1, LS_CARD,   0 }, { LT_BED,   2, 2, 2, 1, LS_CARD, 0 },
