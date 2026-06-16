@@ -30,7 +30,6 @@
 #include "prefs.h"
 #include "skin.h"
 #include "layout.h"
-#include "esp_timer.h"
 #include "mbedtls/base64.h"
 
 static const char *TAG = "web";
@@ -158,8 +157,15 @@ static const char INDEX_HTML[] =
 "<div class=muted>What the touchscreen is showing right now.</div>"
 "<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div></div>"
 "<div class=tab id=t7><div class=card><b>Theme</b>"
-"<div class=muted>Design a custom skin from six colors. The full palette derives automatically and is contrast-checked; Save reboots the device into your theme.</div>"
-"<div id=tfseeds style='display:flex;flex-wrap:wrap;gap:12px;margin:12px 0'></div>"
+"<div class=muted>Pick a pre-baked theme, or design your own from six colors. The full palette derives automatically and is contrast-checked; applying reboots the device into the theme.</div>"
+"<div style='margin:12px 0;padding:10px;background:#2a2a2a;border-radius:8px'><b style='font-size:13px'>Pre-baked themes</b>"
+"<div style='margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap'>"
+"<select id=tfpreset style='width:auto' onchange=tf_preset_load()></select>"
+"<button class=p onclick=tf_preset_apply()>Apply this theme</button>"
+"<button onclick=tf_default()>Reset to default</button></div>"
+"<div class=muted style='margin-top:6px'>Selecting one loads it below to preview &amp; tweak; Apply restarts into the theme as-is.</div></div>"
+"<div class=muted style='margin-top:6px'>Or design your own:</div>"
+"<div id=tfseeds style='display:flex;flex-wrap:wrap;gap:14px;margin:12px 0'></div>"
 "<label>Variant <select id=tfvar onchange=tf_render()><option value=dark>Dark</option><option value=light>Light</option></select></label>"
 "<label style='margin-left:16px'>Font <select id=tffont onchange=tf_render()><option value=0>Montserrat</option><option value=1>Inter</option></select></label>"
 "<div style='margin-top:10px;display:flex;gap:14px;flex-wrap:wrap'><label style='font-size:12px'>Wordmark<br><input id=tfbrand value='PRUSA | TOUCH' style='width:150px' oninput=tf_render()></label><label style='font-size:12px'>Byline<br><input id=tfbyline value='by NomadsGalaxy' style='width:150px' oninput=tf_render()></label></div>"
@@ -173,12 +179,14 @@ static const char INDEX_HTML[] =
 "<button onclick=tf_export()>Export</button> <button onclick=tf_pick()>Import</button>"
 "<input type=file id=tfimp accept=.json style=display:none onchange=tf_import(event)></div></div></div>"
 "<div class=tab id=t8><div class=card><b>Layout</b>"
-"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to select it, then move/resize with the buttons (or drag it). Save reboots the device into your layout.</div>"
+"<div class=muted>Arrange data tiles on a grid for your printer view. Click to add a tile; click a tile to select it, then move/resize with the buttons (or drag it). Save stores your layout; Generate preview renders exactly how it looks on the device.</div>"
 "<div style='margin:10px 0'>Add tile: <span id=lypal></span></div>"
 "<div id=lygrid ondragover=ly_over(event) ondrop=ly_drop(event) style='position:relative;width:560px;max-width:100%;aspect-ratio:5/3;background:#1c1e21;border:1px solid #4e4e4e;border-radius:6px'></div>"
 "<div id=lysel style='margin-top:10px;min-height:26px;color:#a7a7a7;font-size:13px'></div>"
-"<div style='margin-top:12px'><button class=p onclick=ly_save()>Save &amp; apply</button> <button onclick=ly_export()>Export</button> <button onclick=ly_pick()>Import</button>"
-"<input type=file id=lyimp accept=.json style=display:none onchange=ly_import(event)></div></div></div>"
+"<div style='margin-top:12px'><button class=p onclick=ly_preview()>Generate preview</button> <button onclick=ly_save()>Save</button> <button onclick=ly_export()>Export</button> <button onclick=ly_pick()>Import</button>"
+"<input type=file id=lyimp accept=.json style=display:none onchange=ly_import(event)></div>"
+"<div style='margin-top:14px'><div class=muted>Device preview (rendered on the device, exactly as it appears)</div>"
+"<img id=lyprev alt='Generate a preview to see it as rendered on the device.' style='max-width:100%;width:340px;border:1px solid #4e4e4e;border-radius:6px;background:#111316;margin-top:6px'></div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
 "<div style='background:#1c1e21;padding:14px;border-radius:10px;max-width:92%'>"
 "<div style='display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px'><b id=snapt>Snapshot</b><span><button onclick=snapr()>Refresh</button><button onclick=snapx()>Close</button></span></div>"
@@ -326,7 +334,7 @@ static const char INDEX_HTML[] =
 "catch(e){forders.innerHTML='<div class=card style=padding:12px>Orders unavailable</div>'}}"
 /* ---- ThemeForge skin editor (issue #6 Phase 1b). Single-quotes + backtick templates only, so
  * it embeds in these C string literals with no escaping. 6 seeds -> derive 19 tokens -> WCAG. ---- */
-"var TFS={primary:'#fa6831',secondary:'#7da7d9',error:'#f8795f',surface:'#2a2a2a',ink:'#ffffff',bg:'#1c1e21'},TFV='dark',TFC={};"
+"var TFS={primary:'#fa6831',secondary:'#7da7d9',error:'#f8795f',surface:'#2a2a2a',ink:'#ffffff',bg:'#1c1e21'},TFV='dark',TFC={},TFPRESETS=[];"
 "var TFSL=[['primary','Accent'],['secondary','Info/blue'],['error','Error'],['surface','Surface'],['ink','Text'],['bg','Background']];"
 "var TFTOK=['orange','orange_dark','bg','header','surface','surface_hi','border','text','text_muted','text_inverse','state_green','state_olive','state_gray','state_orange','state_blue','state_yellow','state_red','temp_cold','temp_hot'];"
 "var TFPR=[['text','surface'],['text','bg'],['text_muted','surface'],['text_inverse','orange'],['text_inverse','state_orange'],['text','header'],['state_red','surface'],['state_green','surface'],['state_blue','surface'],['state_yellow','surface'],['temp_hot','surface'],['temp_cold','surface']];"
@@ -345,10 +353,14 @@ static const char INDEX_HTML[] =
 "function _lum(h){var c=h2r(h),f=function(x){x/=255;return x<=.03928?x/12.92:Math.pow((x+.055)/1.055,2.4)};return .2126*f(c.r)+.7152*f(c.g)+.0722*f(c.b)}"
 "function _cr(a,b){var L=_lum(a),M=_lum(b),hi=Math.max(L,M),lo=Math.min(L,M);return(hi+.05)/(lo+.05)}"
 "function _ct(r){return r>=7?'AAA':r>=4.5?'AA':r>=3?'AA-L':'FAIL'}"
-"async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
-"function tf_si(){var h='';TFSL.forEach(function(p){h+=`<label style='font-size:12px'>${p[1]}<br><input type=color value='${TFS[p[0]]}' oninput='TFS.${p[0]}=this.value;tf_render()'></label>`});document.getElementById('tfseeds').innerHTML=h}"
+"async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);TFPRESETS=r.presets||[];if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfpreset').innerHTML=TFPRESETS.map(function(p){return `<option value='${p.index}'>${p.name}</option>`}).join('');document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
+"function tf_preset_load(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx});if(!p)return;TFS=exS(p.colors);TFV='dark';document.getElementById('tfvar').value='dark';if(p.font!=null)document.getElementById('tffont').value=p.font;if(p.brand)document.getElementById('tfbrand').value=p.brand;if('byline' in p)document.getElementById('tfbyline').value=p.byline;tf_si();tf_render()}"
+"async function tf_preset_apply(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx}),nm=p?p.name:'theme';var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});alert(r.ok?'Applying '+nm+' - the device is restarting.':'Failed (HTTP '+r.status+')')}"
+"async function tf_default(){var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:0})});alert(r.ok?'Resetting to the default theme - the device is restarting.':'Failed (HTTP '+r.status+')')}"
+"function tf_si(){var h='';TFSL.forEach(function(p){h+=`<label style='font-size:12px;text-align:center'>${p[1]}<br><input type=color value='${TFS[p[0]]}' style='width:58px;height:42px;padding:2px;border:1px solid #4e4e4e;border-radius:6px;cursor:pointer' oninput='TFS.${p[0]}=this.value;tf_render()'><br><span id='tfsl_${p[0]}' style='font-family:monospace;font-size:11px;color:#a7a7a7'>${TFS[p[0]]}</span></label>`});document.getElementById('tfseeds').innerHTML=h}"
 "function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38),BR=(document.getElementById('tfbrand').value||'PRUSA | TOUCH');document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>${BR}</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
 "function tf_render(){TFV=document.getElementById('tfvar').value;TFC=derive(TFS,TFV);var C=TFC;"
+"TFSL.forEach(function(p){var s=document.getElementById('tfsl_'+p[0]);if(s)s.textContent=TFS[p[0]]});"
 "var sw='';TFTOK.forEach(function(k){sw+=`<div title='${k} ${C[k]}' style='width:32px;height:32px;border-radius:5px;border:1px solid #0006;background:${C[k]}'></div>`});document.getElementById('tfsw').innerHTML=sw;"
 "var wc='',wn='';TFPR.forEach(function(p){var r=_cr(C[p[0]],C[p[1]]),t=_ct(r),cc=t=='FAIL'?'#f8795f':t=='AA-L'?'#fddc71':'#a1ea70';wc+=`<span style='font-size:11px'>${p[0]}/${p[1]} <b style='color:${cc}'>${r.toFixed(1)} ${t}</b></span>`;if(t=='FAIL'&&(p[1]=='surface'||p[1]=='bg'))wn=`Low contrast: ${p[0]} on ${p[1]} may be hard to read.`});document.getElementById('tfwc').innerHTML=wc;document.getElementById('tfwarn').textContent=wn;tf_prev()}"
 "async function tf_save(){var b={colors:TFC,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value};var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
@@ -383,7 +395,10 @@ static const char INDEX_HTML[] =
 "function ly_del(){LAY.tiles.splice(LYSEL,1);LYSEL=-1;ly_render()}"
 "function ly_drag(e,i){LYSEL=i;e.dataTransfer.setData('text',i)}function ly_over(e){e.preventDefault()}"
 "function ly_drop(e){e.preventDefault();var g=document.getElementById('lygrid'),rc=g.getBoundingClientRect(),rows=ly_rows(),t=LAY.tiles[LYSEL];if(!t)return;var c=Math.floor((e.clientX-rc.left)/rc.width*LAY.cols),r=Math.floor((e.clientY-rc.top)/rc.height*rows);c=Math.max(0,Math.min(c,LAY.cols-t.w));r=Math.max(0,r);if(ly_free(c,r,t.w,t.h,LYSEL)){t.c=c;t.r=r;ly_render()}}"
-"async function ly_save(){var r=await fetch('/api/layout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LAY)});alert(r.ok?'Saved - the device is restarting into your layout.':'Save failed (HTTP '+r.status+')')}"
+"async function ly_save(){var r=await fetch('/api/layout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LAY)});alert(r.ok?'Saved.':'Save failed (HTTP '+r.status+')')}"
+"async function ly_preview(){var img=document.getElementById('lyprev');if(img._u){URL.revokeObjectURL(img._u);img._u=null}img.alt='Rendering on the device...';"
+"var r=await fetch('/api/layout/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LAY)});"
+"if(!r.ok){img.removeAttribute('src');img.alt='Preview failed (HTTP '+r.status+')';return}var b=await r.blob();img._u=URL.createObjectURL(b);img.src=img._u;img.alt=''}"
 "function ly_export(){var b=new Blob([JSON.stringify(LAY,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.layout.json';a.click()}"
 "function ly_pick(){document.getElementById('lyimp').click()}"
 "function ly_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);if(o.tiles){LAY={cols:o.cols||8,tiles:o.tiles};LYSEL=-1;ly_render()}}catch(x){alert('Invalid layout file')}};rd.readAsText(f)}"
@@ -617,6 +632,7 @@ static ota_check_t s_upd;
 static bool s_upd_have;
 static volatile bool s_upd_busy;
 static SemaphoreHandle_t s_upd_mtx;
+static SemaphoreHandle_t s_preview_mtx;   /* serializes off-screen layout-preview renders */
 
 static void upd_check_task(void *arg)
 {
@@ -1134,28 +1150,40 @@ static esp_err_t connect_default_team_post(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t screen_get(httpd_req_t *req)
+/* Stream a native-endian RGB565 image as a 24-bit bottom-up BMP over a chunked httpd response.
+ * src_stride_px = uint16 per source row (w for a packed buffer; draw_buf->header.stride/2 otherwise). */
+static esp_err_t bmp_send(httpd_req_t *req, const uint16_t *rgb565, int w, int h, int src_stride_px)
 {
-    esp_lcd_panel_handle_t panel = pt_get_panel(); void *fb = NULL;
-    if (!panel || esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &fb) != ESP_OK || !fb) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no fb");
-    const int W = 800, H = 480; uint8_t hdr[54] = { 'B','M', 0 };
-    uint32_t imgsize = W*H*3, v = 54+imgsize; memcpy(&hdr[2],&v,4); hdr[10]=54; v=40; memcpy(&hdr[14],&v,4);
-    int32_t iw=W, ih=H; memcpy(&hdr[18],&iw,4); memcpy(&hdr[22],&ih,4); hdr[26]=1; hdr[28]=24;
+    const int rowbytes = w * 3;
+    const int pad = (4 - (rowbytes & 3)) & 3;        /* BMP rows align to a 4-byte boundary */
+    const int stride = rowbytes + pad;
+    uint8_t hdr[54] = { 'B','M', 0 };
+    uint32_t imgsize = (uint32_t)stride * h, v = 54 + imgsize; memcpy(&hdr[2],&v,4); hdr[10]=54; v=40; memcpy(&hdr[14],&v,4);
+    int32_t iw=w, ih=h; memcpy(&hdr[18],&iw,4); memcpy(&hdr[22],&ih,4); hdr[26]=1; hdr[28]=24;
     httpd_resp_set_type(req, "image/bmp");
     if (httpd_resp_send_chunk(req, (const char*)hdr, 54) != ESP_OK) return ESP_FAIL;
-    uint8_t *row = malloc(W*3); const uint16_t *src = (const uint16_t*)fb;
+    uint8_t *row = calloc(1, stride);                /* calloc => the padding bytes are zero */
     if (!row) { httpd_resp_send_chunk(req, NULL, 0); return ESP_FAIL; }
     esp_err_t e = ESP_OK;
-    for (int y=H-1; y>=0 && e==ESP_OK; y--) {
-        for (int x=0; x<W; x++) {
-            uint16_t c = src[y*W+x];
+    for (int y = h-1; y >= 0 && e == ESP_OK; y--) {
+        const uint16_t *line = rgb565 + (size_t)y * src_stride_px;
+        for (int x = 0; x < w; x++) {
+            uint16_t c = line[x];
             row[x*3+0]=(c&0x1F)<<3; row[x*3+1]=((c>>5)&0x3F)<<2; row[x*3+2]=((c>>11)&0x1F)<<3;
         }
-        e = httpd_resp_send_chunk(req, (const char*)row, W*3);   /* abort the stream if the client hung up */
+        e = httpd_resp_send_chunk(req, (const char*)row, stride);   /* abort the stream if the client hung up */
     }
     free(row);
     if (e == ESP_OK) httpd_resp_send_chunk(req, NULL, 0);   /* terminate cleanly only on success */
     return e;
+}
+
+static esp_err_t screen_get(httpd_req_t *req)
+{
+    esp_lcd_panel_handle_t panel = pt_get_panel(); void *fb = NULL;
+    if (!panel || esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &fb) != ESP_OK || !fb)
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no fb");
+    return bmp_send(req, (const uint16_t*)fb, 800, 480, 800);   /* panel fb is packed at 800px */
 }
 
 static esp_err_t ui_get(httpd_req_t *req)
@@ -1366,6 +1394,25 @@ static esp_err_t skin_get(httpd_req_t *req)   /* current skin + preset names + t
     cJSON_AddNumberToObject(o, "font", skin_font());
     cJSON_AddStringToObject(o, "brand", skin_brand());
     cJSON_AddStringToObject(o, "byline", skin_byline());
+    /* Built-in presets (0..custom-1) with full palettes, so the editor can list + load them. */
+    cJSON *presets = cJSON_CreateArray();
+    for (int p = 0; p < skin_custom_index(); p++) {
+        uint8_t prgb[57]; skin_palette_rgb(p, prgb);
+        cJSON *pe = cJSON_CreateObject();
+        cJSON_AddNumberToObject(pe, "index", p);
+        cJSON_AddStringToObject(pe, "name", skin_name(p));
+        cJSON *pc = cJSON_CreateObject();
+        for (int i = 0; i < 19; i++) {
+            char hx[8]; snprintf(hx, sizeof(hx), "#%02x%02x%02x", prgb[i*3], prgb[i*3+1], prgb[i*3+2]);
+            cJSON_AddStringToObject(pc, SKIN_TOKENS[i], hx);
+        }
+        cJSON_AddItemToObject(pe, "colors", pc);
+        cJSON_AddNumberToObject(pe, "font", skin_font_of(p));
+        cJSON_AddStringToObject(pe, "brand", skin_brand_of(p));
+        cJSON_AddStringToObject(pe, "byline", skin_byline_of(p));
+        cJSON_AddItemToArray(presets, pe);
+    }
+    cJSON_AddItemToObject(o, "presets", presets);
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js ? js : "{}");
@@ -1379,6 +1426,17 @@ static esp_err_t skin_post(httpd_req_t *req)   /* body {colors:{19 #rrggbb}} -> 
     if (!body) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL; }
     cJSON *j = cJSON_Parse(body);
     bool ok = false;
+    /* {index:N} selects a built-in preset (incl. 0 = Connect default) — no custom write, just reboot. */
+    if (j) {
+        cJSON *jidx = cJSON_GetObjectItem(j, "index");
+        if (cJSON_IsNumber(jidx) && jidx->valueint >= 0 && jidx->valueint < skin_custom_index()) {
+            int idx = jidx->valueint;
+            cJSON_Delete(j); free(body);
+            httpd_resp_sendstr(req, "ok");
+            app_state_set_pref(PP_PREF_SKIN, idx);   /* persist active idx on the net task + reboot */
+            return ESP_OK;
+        }
+    }
     if (j) {
         cJSON *cols = cJSON_GetObjectItem(j, "colors");
         if (cJSON_IsObject(cols)) {
@@ -1405,14 +1463,9 @@ static esp_err_t skin_post(httpd_req_t *req)   /* body {colors:{19 #rrggbb}} -> 
     return ESP_OK;
 }
 
-/* ---- Custom layout (issue #6 Phase 3): the chunk-grid spec for the active-printer view ---- */
-static void reboot_cb(void *a) { (void)a; esp_restart(); }
-static void reboot_soon(void)   /* let the HTTP response flush, then restart to rebuild the screen */
-{
-    static esp_timer_handle_t t;
-    if (!t) { const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "reboot" }; esp_timer_create(&a, &t); }
-    esp_timer_start_once(t, 500000);
-}
+/* ---- Custom layout (issue #6): the chunk-grid spec — designed, saved, and previewed in the web UI.
+ * The device no longer shows it as a navigable screen, so saving just persists the spec; the preview
+ * is rendered off-screen on demand (POST /api/layout/preview). ---- */
 
 static esp_err_t api_layout_get(httpd_req_t *req)
 {
@@ -1449,7 +1502,7 @@ static int jint(const cJSON *o, const char *k)   /* an int member, 0 if absent *
     return cJSON_IsNumber(m) ? m->valueint : 0;
 }
 
-static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,w,h}]} -> store + reboot */
+static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,w,h}]} -> persist spec */
 {
     char *body = recv_body(req);
     if (!body) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL; }
@@ -1477,16 +1530,83 @@ static esp_err_t api_layout_post(httpd_req_t *req)   /* {cols, tiles:[{type,c,r,
     }
     free(body);
     if (!ok) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need tiles[]"); return ESP_FAIL; }
-    httpd_resp_sendstr(req, "ok");
-    reboot_soon();   /* rebuild the layout screen from the new spec */
+    httpd_resp_sendstr(req, "ok");   /* spec persisted; no reboot — the device no longer displays it */
     return ESP_OK;
+}
+
+/* POST /api/layout/preview — render the POSTed spec off the live screen (sample data) at the panel's
+ * native resolution and return a 24-bit BMP. Does NOT call layout_set (the stored spec is untouched).
+ * One render at a time: schedule the LVGL-task applier, block on a binary sem, then stream its snapshot. */
+static esp_err_t api_layout_preview_post(httpd_req_t *req)
+{
+    char *body = recv_body(req);
+    if (!body) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL; }
+    cJSON *j = cJSON_Parse(body);
+    pp_layout_t L = {0}; bool ok = false;
+    if (j) {
+        int cols = jint(j, "cols"); L.cols = (cols >= 1 && cols <= 16) ? cols : 8;
+        cJSON *ts = cJSON_GetObjectItem(j, "tiles"), *t = NULL; int n = 0;
+        if (cJSON_IsArray(ts)) cJSON_ArrayForEach(t, ts) {
+            if (n >= PP_LAYOUT_MAX) break;
+            const cJSON *ty = cJSON_GetObjectItem(t, "type");
+            int type = tile_type_of(cJSON_IsString(ty) ? ty->valuestring : NULL);
+            if (!type) continue;
+            L.tiles[n].type = (uint8_t)type;
+            L.tiles[n].c = (uint8_t)jint(t, "c"); L.tiles[n].r = (uint8_t)jint(t, "r");
+            int w = jint(t, "w"), h = jint(t, "h");
+            L.tiles[n].w = (uint8_t)(w < 1 ? 1 : w); L.tiles[n].h = (uint8_t)(h < 1 ? 1 : h);
+            n++;
+        }
+        L.n = (uint8_t)n; ok = (n > 0);
+        cJSON_Delete(j);
+    }
+    free(body);
+    if (!ok) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need tiles[]"); return ESP_FAIL; }
+
+    if (xSemaphoreTake(s_preview_mtx, pdMS_TO_TICKS(8000)) != pdTRUE) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "render busy");
+        return ESP_OK;
+    }
+
+    pp_preview_job_t *job = calloc(1, sizeof(*job));
+    SemaphoreHandle_t sem = job ? xSemaphoreCreateBinary() : NULL;
+    if (!job || !sem) {
+        free(job); if (sem) vSemaphoreDelete(sem);
+        xSemaphoreGive(s_preview_mtx);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
+    }
+    job->spec = L; job->sem = sem;   /* the applier fills job->w/h with the panel's native size */
+    job->refs = 2;                   /* one ref for the handler, one for the applier */
+    job->mux = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
+
+    if (pt_display_schedule_ui(ui_layout_preview_render, job) != LV_RESULT_OK) {
+        pp_preview_job_release(job); pp_preview_job_release(job);   /* applier won't run: drop both refs */
+        xSemaphoreGive(s_preview_mtx);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "schedule");
+    }
+
+    esp_err_t ret;
+    if (xSemaphoreTake(sem, pdMS_TO_TICKS(10000)) == pdTRUE) {
+        if (job->ok && job->rgb) ret = bmp_send(req, (const uint16_t *)job->rgb, job->w, job->h, job->w);
+        else                     ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "render");
+    } else {
+        /* The LVGL task is wedged (should never happen for a bounded render). Our ref is dropped here;
+         * the still-pending applier holds the other and frees everything when it finally runs. */
+        ESP_LOGE(TAG, "layout preview render timed out");
+        ret = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "render timeout");
+    }
+    pp_preview_job_release(job);   /* drop the handler's ref (frees iff the applier already dropped its) */
+    xSemaphoreGive(s_preview_mtx);
+    return ret;
 }
 
 void web_start(void)
 {
     s_upd_mtx = xSemaphoreCreateMutex();
+    s_preview_mtx = xSemaphoreCreateMutex();
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 56; cfg.stack_size = 20480;
+    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 58; cfg.stack_size = 20480;
     httpd_handle_t srv = NULL;
     if (httpd_start(&srv, &cfg) != ESP_OK) return;
     httpd_uri_t rs[] = {
@@ -1527,6 +1647,7 @@ void web_start(void)
         { "/api/log", HTTP_GET, log_get },
         { "/api/skin", HTTP_GET, skin_get }, { "/api/skin", HTTP_POST, skin_post },
         { "/api/layout", HTTP_GET, api_layout_get }, { "/api/layout", HTTP_POST, api_layout_post },
+        { "/api/layout/preview", HTTP_POST, api_layout_preview_post },
     };
     /* Register each route through auth_wrap, stashing the real handler in user_ctx. When a web
      * password is set, auth_wrap gates every route; otherwise it's a transparent pass-through. */

@@ -14,13 +14,18 @@ const char *const PP_TILE_LABELS[LT_COUNT] = {
     "", "PRINTER", "MODEL", "STATE", "NOZZLE", "BED", "SPEED", "Z AXIS", "PROGRESS", "ETA", ""
 };
 
-/* Built-in default: a sensible 8-column overview of the active printer. */
+/* Built-in default: mirrors the on-device status screen — a hero (model thumbnail at left, printer
+ * name + state badge, model line), a 2x2 telemetry block (nozzle/bed/speed/z), then the job card
+ * (progress bar + ETA). 4 columns so the cells stay roomy in portrait, matching the status screen's
+ * portrait layout; it reflows to landscape too. Opening the editor starts from the real layout. */
 static const pp_layout_t DEFAULT_LAYOUT = {
-    .cols = 8, .n = 9, .tiles = {
-        { LT_NAME,     0, 0, 5, 1 }, { LT_STATE,    5, 0, 3, 1 },
-        { LT_THUMB,    0, 1, 2, 2 }, { LT_NOZZLE,   2, 1, 3, 1 }, { LT_BED, 5, 1, 3, 1 },
-        { LT_SPEED,    2, 2, 3, 1 }, { LT_ZAXIS,    5, 2, 3, 1 },
-        { LT_PROGRESS, 0, 3, 6, 1 }, { LT_ETA,      6, 3, 2, 1 },
+    .cols = 4, .n = 10, .tiles = {
+        { LT_THUMB,    0, 0, 2, 2 },
+        { LT_NAME,     2, 0, 2, 1 }, { LT_STATE, 2, 1, 2, 1 },
+        { LT_MODEL,    0, 2, 4, 1 },
+        { LT_NOZZLE,   0, 3, 2, 1 }, { LT_BED,   2, 3, 2, 1 },
+        { LT_SPEED,    0, 4, 2, 1 }, { LT_ZAXIS, 2, 4, 2, 1 },
+        { LT_PROGRESS, 0, 5, 3, 1 }, { LT_ETA,   3, 5, 1, 1 },
     }
 };
 

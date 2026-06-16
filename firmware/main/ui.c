@@ -50,7 +50,6 @@ static lv_obj_t *s_scr_files;
 static lv_obj_t *s_scr_printers;
 static lv_obj_t *s_scr_addpick;    /* "Add a printer" -> QR/IP escort to the web UI (issue #5) */
 static lv_obj_t *s_scr_about;
-static lv_obj_t *s_scr_layout;     /* custom chunk-grid view of the active printer (issue #6 Phase 3) */
 static lv_obj_t *s_scr_prefs;      /* Preferences (sort/filter/logo) */
 static lv_obj_t *s_scr_farm;       /* Prusa Farm (org stats + orders) */
 static lv_obj_t *s_farm_stat;      /* farm printer-summary label */
@@ -151,7 +150,6 @@ static bool ui_locked_block(void);
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
 static void on_farm_open(lv_event_t *e);
-static void on_layout_open(lv_event_t *e);
 static void on_prefs_open(lv_event_t *e);
 static void thumb_clear(void);
 static void snap_clear(void);
@@ -715,11 +713,6 @@ static void refresh_printers_list(void)
     lv_obj_set_style_bg_color(fm, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(fm, PP_TEXT, 0);
     lv_obj_add_event_cb(fm, on_farm_open, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *ly = lv_list_add_button(s_pr_list, LV_SYMBOL_EDIT, "My Layout");
-    lv_obj_set_style_bg_color(ly, PP_SURFACE_HI, 0);
-    lv_obj_set_style_text_color(ly, PP_TEXT, 0);
-    lv_obj_add_event_cb(ly, on_layout_open, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *ab = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "About / License");
     lv_obj_set_style_bg_color(ab, PP_SURFACE_HI, 0);
@@ -2013,36 +2006,26 @@ static void build_control_screen(void)
     lv_obj_add_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* ---------- Custom layout (issue #6 Phase 3): a chunk-grid of data tiles for the active printer.
- * The web designer emits a pp_layout_t; we compute pixel rects from chunk coords and bind each
- * tile to a field of the live pp_status_t. ---------- */
-static struct { lv_obj_t *val, *bar, *img; uint8_t type; } s_lay[PP_LAYOUT_MAX];
-static int s_lay_n;
+/* ---------- Custom layout (issue #6): the web designer emits a pp_layout_t. The device no longer
+ * shows it as a navigable screen — it renders the spec OFF-SCREEN into a snapshot for the web
+ * "Generate preview" button (editing AND previewing both live in the web UI). ---------- */
 
-static void on_layout_back(lv_event_t *e) { (void)e; lv_screen_load(s_scr_dash); }
-static void on_layout_open(lv_event_t *e) { (void)e; lv_screen_load(s_scr_layout); }
-
-static void build_layout_screen(void)
+/* Render layout spec L, bound to status st, into `parent` sized w x h. One-shot: each tile is built
+ * AND bound inline (no live-update array, no header bar). Used only by the off-screen preview. */
+static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_status_t *st, int w, int h)
 {
-    s_scr_layout = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_layout, PP_BG, 0);
-    lv_obj_clear_flag(s_scr_layout, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *bar = make_header(s_scr_layout, "My Layout");
-    lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_layout_back, NULL, 100);
-    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
-
-    const pp_layout_t *L = layout_get();
+    if (!parent || !L) return;
+    char buf[40];
     int cols = L->cols ? L->cols : 8, rows = 1;
     for (int i = 0; i < L->n; i++) { int rr = L->tiles[i].r + L->tiles[i].h; if (rr > rows) rows = rr; }
-    const int top = 56, pad = 6;
-    int cw = scr_w() / cols, ch = (scr_h() - top) / rows;
-    s_lay_n = 0;
+    const int pad = 6;
+    int cw = w / cols, ch = h / rows;     /* no header off-screen: the full canvas is tile area */
 
-    for (int i = 0; i < L->n && s_lay_n < PP_LAYOUT_MAX; i++) {
+    for (int i = 0; i < L->n; i++) {
         const pp_tile_t *t = &L->tiles[i];
         if (t->type == 0 || t->type >= LT_COUNT) continue;
-        lv_obj_t *card = lv_obj_create(s_scr_layout);
-        lv_obj_set_pos(card, t->c * cw + pad, top + t->r * ch + pad);
+        lv_obj_t *card = lv_obj_create(parent);
+        lv_obj_set_pos(card, t->c * cw + pad, t->r * ch + pad);
         lv_obj_set_size(card, t->w * cw - 2 * pad, t->h * ch - 2 * pad);
         lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
         lv_obj_set_style_border_width(card, 0, 0);   /* match the existing telemetry cells (no border) */
@@ -2123,64 +2106,119 @@ static void build_layout_screen(void)
             lv_obj_set_width(val, t->w * cw - 2 * pad - vx);
             lv_obj_align(val, LV_ALIGN_BOTTOM_LEFT, vx, 0);
         }
-        s_lay[s_lay_n].img = img;
-        s_lay[s_lay_n].val = val;
-        s_lay[s_lay_n].bar = barw;
-        s_lay[s_lay_n].type = t->type;
-        s_lay_n++;
-    }
-}
-
-/* Bind the active printer's status into the layout tiles (called from ui_apply_status). */
-static void layout_bind(const pp_status_t *s)
-{
-    if (!s_scr_layout) return;
-    char buf[40];
-    for (int i = 0; i < s_lay_n; i++) {
-        lv_obj_t *v = s_lay[i].val;
-        switch (s_lay[i].type) {
-        case LT_NAME:  if (v) lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer"); break;
-        case LT_MODEL: if (v) lv_label_set_text(v, s->model[0] ? s->model : "Prusa printer"); break;
-        case LT_STATE: if (v) { lv_label_set_text(v, s->state[0] ? s->state : "...");
-                                lv_obj_set_style_bg_color(v, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0); } break;
+        /* bind the sample status inline (folded-in layout_bind) */
+        switch (t->type) {
+        case LT_NAME:  if (val) lv_label_set_text(val, st->printer_name[0] ? st->printer_name : "Printer"); break;
+        case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : "Prusa printer"); break;
+        case LT_STATE: if (val) { lv_label_set_text(val, st->state[0] ? st->state : "...");
+                                  lv_obj_set_style_bg_color(val, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0); } break;
         case LT_NOZZLE:
-            if (v) {
-                if (s->target_nozzle > 0) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle);
-                else                      snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_nozzle);
-                lv_label_set_text(v, buf);
+            if (val) {
+                if (st->target_nozzle > 0) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)st->temp_nozzle, (int)st->target_nozzle);
+                else                       snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)st->temp_nozzle);
+                lv_label_set_text(val, buf);
             }
             break;
         case LT_BED:
-            if (v) {
-                if (s->target_bed > 0) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed);
-                else                   snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_bed);
-                lv_label_set_text(v, buf);
+            if (val) {
+                if (st->target_bed > 0) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)st->temp_bed, (int)st->target_bed);
+                else                    snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)st->temp_bed);
+                lv_label_set_text(val, buf);
             }
             break;
-        case LT_SPEED: if (v) { snprintf(buf, sizeof(buf), "%d%%", s->speed); lv_label_set_text(v, buf); } break;
-        case LT_ZAXIS: if (v) { snprintf(buf, sizeof(buf), "%.2fmm", s->axis_z); lv_label_set_text(v, buf); } break;
+        case LT_SPEED: if (val) { snprintf(buf, sizeof(buf), "%d%%", st->speed); lv_label_set_text(val, buf); } break;
+        case LT_ZAXIS: if (val) { snprintf(buf, sizeof(buf), "%.2fmm", st->axis_z); lv_label_set_text(val, buf); } break;
         case LT_PROGRESS: {
-            int pct = (int)s->progress;
-            if (s_lay[i].bar) lv_bar_set_value(s_lay[i].bar, pct, LV_ANIM_OFF);
-            if (v) { snprintf(buf, sizeof(buf), "%d%%", pct); lv_label_set_text(v, buf); }
+            int pct = (int)st->progress;
+            if (barw) lv_bar_set_value(barw, pct, LV_ANIM_OFF);
+            if (val) { snprintf(buf, sizeof(buf), "%d%%", pct); lv_label_set_text(val, buf); }
         } break;
         case LT_ETA:
-            if (v) {
-                if (s->time_remaining > 0) { int m = s->time_remaining / 60; snprintf(buf, sizeof(buf), "%dh %02dm", m / 60, m % 60); }
+            if (val) {
+                if (st->time_remaining > 0) { int m = st->time_remaining / 60; snprintf(buf, sizeof(buf), "%dh %02dm", m / 60, m % 60); }
                 else strlcpy(buf, "--", sizeof(buf));
-                lv_label_set_text(v, buf);
+                lv_label_set_text(val, buf);
             }
             break;
         case LT_THUMB:
-            if (s_lay[i].img) {
-                const lv_image_dsc_t *m = model_image(s->model);
-                if (m) lv_image_set_src(s_lay[i].img, m);
-            }
+            if (img) { const lv_image_dsc_t *m = model_image(st->model); if (m) lv_image_set_src(img, m); }
             break;
         default: break;
         }
     }
 }
+
+#ifndef PP_HOST_SIM
+/* Shared ownership for the preview job: the httpd handler and the (possibly-late) LVGL applier each
+ * hold one ref; whichever drops the last ref frees everything. This makes the timeout path leak-free
+ * AND use-after-free-free regardless of which side finishes first. */
+void pp_preview_job_release(pp_preview_job_t *j)
+{
+    bool last;
+    taskENTER_CRITICAL(&j->mux);
+    last = (--j->refs <= 0);
+    taskEXIT_CRITICAL(&j->mux);
+    if (last) {
+        free(j->rgb);
+        if (j->sem) vSemaphoreDelete(j->sem);
+        free(j);
+    }
+}
+
+/* Off-screen preview applier — runs on the LVGL task via pt_display_schedule_ui. Renders the spec
+ * with sample data onto a throwaway (never-loaded) screen on the LIVE display at the panel's NATIVE
+ * resolution, snapshots it to a packed RGB565 PSRAM buffer the httpd task streams as BMP, then
+ * signals the handler. Native-resolution = exactly what the device shows; rendering wider than the
+ * panel corrupts the draw pipeline, so we always match the panel. ALWAYS gives the semaphore. */
+void ui_layout_preview_render(void *arg)
+{
+    pp_preview_job_t *j = (pp_preview_job_t *)arg;
+    j->ok = false; j->rgb = NULL;
+
+    pp_status_t st = {0};      /* representative sample so a preview always looks populated */
+    st.online = true;
+    strlcpy(st.printer_name, "Apollo", sizeof(st.printer_name));
+    strlcpy(st.model, "Prusa CORE One", sizeof(st.model));
+    strlcpy(st.state, "PRINTING", sizeof(st.state));
+    st.temp_nozzle = 215; st.target_nozzle = 215;
+    st.temp_bed = 60;  st.target_bed = 60;
+    st.speed = 100;    st.axis_z = 12.4f;
+    st.progress = 64;  st.time_remaining = 64 * 60;
+
+    lv_display_t *disp = lv_display_get_default();
+    int w = (int)lv_display_get_horizontal_resolution(disp);
+    int h = (int)lv_display_get_vertical_resolution(disp);
+    j->w = w; j->h = h;        /* report the actual size back to the handler for the BMP header */
+
+    lv_obj_t *host = lv_obj_create(NULL);   /* a screen on the live display; never lv_screen_load'ed */
+    lv_obj_set_size(host, w, h);
+    lv_obj_set_style_bg_color(host, PP_BG, 0);
+    lv_obj_set_style_radius(host, 0, 0);
+    lv_obj_set_style_border_width(host, 0, 0);
+    lv_obj_set_style_pad_all(host, 0, 0);
+    lv_obj_clear_flag(host, LV_OBJ_FLAG_SCROLLABLE);
+
+    layout_render_into(host, &j->spec, &st, w, h);
+    lv_obj_update_layout(host);
+
+    lv_draw_buf_t *snap = lv_snapshot_take(host, LV_COLOR_FORMAT_RGB565);
+    if (snap) {
+        size_t rowbytes = (size_t)w * 2;
+        uint8_t *raw = heap_caps_malloc(rowbytes * (size_t)h, MALLOC_CAP_SPIRAM);
+        if (raw) {
+            const uint8_t *src = (const uint8_t *)snap->data;
+            uint32_t stride = snap->header.stride;   /* source bytes per row (may be padded) */
+            for (int y = 0; y < h; y++)
+                memcpy(raw + (size_t)y * rowbytes, src + (size_t)y * stride, rowbytes);
+            j->rgb = raw; j->ok = true;
+        }
+        lv_draw_buf_destroy(snap);
+    }
+    lv_obj_delete(host);
+    xSemaphoreGive(j->sem);     /* wake the handler (if it's still waiting) */
+    pp_preview_job_release(j);  /* drop the applier's ref; frees if the handler already gave up */
+}
+#endif /* !PP_HOST_SIM */
 
 static void build_about_screen(void)
 {
@@ -2610,7 +2648,6 @@ void ui_init(void)
     build_control_screen();
     build_wifi_screen();
     build_about_screen();
-    build_layout_screen();
     build_prefs_screen();
     build_farm_screen();
     ui_apply_orient(NULL);   /* apply the saved screen orientation */
@@ -2639,7 +2676,6 @@ static void ui_apply_nav(void *arg)
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "addpick"))                            lv_screen_load(s_scr_addpick);
-        else if (!strcmp(name, "layout"))                             lv_screen_load(s_scr_layout);
         else if (!strcmp(name, "about"))                              lv_screen_load(s_scr_about);
         else if (!strcmp(name, "prefs"))                              on_prefs_open(NULL);
         else if (!strcmp(name, "farm"))                               on_farm_open(NULL);
@@ -2666,7 +2702,6 @@ const char *ui_current_screen(void)
     if (s == s_scr_files)      return "files";
     if (s == s_scr_filedetail) return "filedetail";
     if (s == s_scr_printers)   return "printers";
-    if (s == s_scr_layout)     return "layout";
     if (s == s_scr_about)      return "about";
     if (s == s_scr_prefs)      return "prefs";
     if (s == s_scr_farm)       return "farm";
@@ -2687,7 +2722,6 @@ void ui_apply_status(void *arg)
     strlcpy(s_active_model, s->model, sizeof(s_active_model));
     lv_obj_set_style_bg_color(s_conn_dot, s->online ? PP_OK : PP_ERROR, 0);
     wifi_status_label_refresh();   /* keep the Wi-Fi screen's IP line current */
-    layout_bind(s);                /* feed the same status into the custom-layout tiles */
 
     /* hero: model render on the orange tile, scaled to fill */
     const lv_image_dsc_t *mimg = model_image(s->model);

@@ -20,9 +20,14 @@ uint8_t     skin_font(void);
 const char *skin_brand(void);
 const char *skin_byline(void);
 
-int         skin_count(void);            /* number of built-in presets */
+int         skin_count(void);            /* presets + the Custom slot (so built-ins are 0..count-2) */
 const char *skin_name(int idx);          /* display name, or "" if out of range */
 int         skin_current(void);          /* the active preset index */
+
+/* Per-index typography + wordmark (any preset or the Custom slot) — for listing presets in the web editor. */
+uint8_t     skin_font_of(int idx);
+const char *skin_brand_of(int idx);
+const char *skin_byline_of(int idx);
 
 /* Persist a new skin index to NVS. Call ONLY from the net task (NVS write). Does NOT repaint —
  * the caller reboots so the new skin is applied when screens are rebuilt at boot. */

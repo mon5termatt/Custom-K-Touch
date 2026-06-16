@@ -166,6 +166,14 @@ uint8_t     skin_font(void)         { return g_skin.font_family; }
 const char *skin_brand(void)        { return g_skin.brand; }
 const char *skin_byline(void)       { return g_skin.byline; }
 
+/* Per-index typography/wordmark — so the web editor can list every built-in preset's palette. */
+uint8_t     skin_font_of(int idx)   { return idx == CUSTOM_IDX ? s_custom.font_family
+                                            : (idx >= 0 && idx < SKIN_N ? PRESETS[idx].font_family : g_skin.font_family); }
+const char *skin_brand_of(int idx)  { return idx == CUSTOM_IDX ? s_custom.brand
+                                            : (idx >= 0 && idx < SKIN_N ? PRESETS[idx].brand : g_skin.brand); }
+const char *skin_byline_of(int idx) { return idx == CUSTOM_IDX ? s_custom.byline
+                                            : (idx >= 0 && idx < SKIN_N ? PRESETS[idx].byline : g_skin.byline); }
+
 void skin_palette_rgb(int idx, uint8_t out[57])
 {
     if (idx == CUSTOM_IDX)             pack_palette(&s_custom, out);

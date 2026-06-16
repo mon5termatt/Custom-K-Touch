@@ -1,6 +1,11 @@
 #pragma once
 /* Prusa-Touch — LVGL UI (Prusa-themed). */
 #include "pandaprusa.h"
+#include "layout.h"               /* pp_layout_t — for the off-screen layout preview */
+#ifndef PP_HOST_SIM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"      /* SemaphoreHandle_t — preview render handshake (device only) */
+#endif
 
 typedef struct {
     int       count;
@@ -59,4 +64,21 @@ void ui_apply_orient(void *unused);
 
 /* Apply a fetched webcam snapshot (JPEG) to the Control screen. arg: pp_image_t* (owned). */
 void ui_apply_snapshot(void *arg);
+
+#ifndef PP_HOST_SIM
+/* Off-screen layout preview (web "Generate preview"). The httpd handler fills spec/w/h + a binary
+ * sem, schedules ui_layout_preview_render on the LVGL task, and blocks on sem; the applier renders
+ * the spec to a packed RGB565 buffer (w*h*2, PSRAM) in `rgb` and gives `sem`. The caller owns rgb. */
+typedef struct {
+    pp_layout_t       spec;   /* in                                                   */
+    int               w, h;   /* out: panel native size, filled by the applier        */
+    uint8_t          *rgb;    /* out: packed RGB565, heap_caps PSRAM                   */
+    bool              ok;     /* out                                                  */
+    SemaphoreHandle_t sem;    /* signalled once when done (success or failure)        */
+    int               refs;   /* shared ownership: handler + applier each hold one ref */
+    portMUX_TYPE      mux;     /* guards refs so exactly one side frees (no leak/UAF)  */
+} pp_preview_job_t;
+void ui_layout_preview_render(void *arg);   /* runs on the LVGL task via pt_display_schedule_ui */
+void pp_preview_job_release(pp_preview_job_t *j);   /* drop one ref; last one frees rgb+sem+job */
+#endif
 
