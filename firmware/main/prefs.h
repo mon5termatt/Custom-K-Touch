@@ -52,3 +52,10 @@ const char *prefs_scrpin(void);                /* on-device unlock PIN ("" = no 
 void        prefs_set_scrpin(const char *p);
 const char *prefs_web_pass(void);              /* web-interface password ("" = open access)  */
 void        prefs_set_web_pass(const char *p);
+
+/* Daily maintenance reboot to clear RAM. hour = local hour 0..23 (0xFF = disabled, the default).
+ * tz_off = the device's UTC offset in hours, so "hour" is wall-clock local (no DST handling). */
+uint8_t prefs_reboot_hour(void);
+void    prefs_set_reboot_hour(uint8_t h);      /* 0..23 enables; anything else disables */
+int8_t  prefs_tz_offset(void);
+void    prefs_set_tz_offset(int8_t hrs);

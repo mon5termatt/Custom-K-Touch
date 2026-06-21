@@ -15,6 +15,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -736,6 +737,27 @@ static void drain_commands(void)
 #define DASH_PUBLISH_MIN_MS 2500
 static int64_t s_last_dash_pub_us;
 
+/* Optional daily maintenance reboot to clear/defragment RAM (prefs_reboot_hour, default off).
+ * Skips for the first 10 min after a (re)boot — so it never loops and never fires when RAM is
+ * already fresh — and only inside the first 5 min of the chosen local hour. No DST handling: the
+ * local hour is just UTC + the configured offset. */
+static void maybe_scheduled_reboot(void)
+{
+    uint8_t rh = prefs_reboot_hour();
+    if (rh > 23) return;                                    /* disabled            */
+    if (esp_timer_get_time() < 600LL * 1000000) return;     /* just booted          */
+    time_t now = time(NULL);
+    if (now < 1700000000) return;                           /* clock not synced yet */
+    time_t local = now + (time_t)prefs_tz_offset() * 3600;
+    struct tm tm;
+    gmtime_r(&local, &tm);
+    if (tm.tm_hour == rh && tm.tm_min < 5) {
+        ESP_LOGW(TAG, "scheduled maintenance reboot (%02d:%02d local)", tm.tm_hour, tm.tm_min);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        esp_restart();
+    }
+}
+
 static void net_task(void *arg)
 {
     (void)arg;
@@ -747,6 +769,7 @@ static void net_task(void *arg)
     publish_status();
     for (;;) {
         drain_commands();   /* service pending button presses before the (slow) poll cycle */
+        maybe_scheduled_reboot();
         int n = printer_store_count();
         if (n > 0) {
             /* If we have cloud printers, poll Connect once per cycle. */

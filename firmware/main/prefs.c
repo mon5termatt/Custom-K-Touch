@@ -14,6 +14,8 @@ static pp_orient_t s_orient = PP_ORIENT_LANDSCAPE;
 static uint8_t   s_lock_min = 0;          /* auto-lock the screen after N idle minutes (0 = off) */
 static char      s_scrpin[12] = "";       /* PIN to unlock on-device actions while locked        */
 static char      s_webpw[40]  = "";       /* password gating the web interface (Basic auth)      */
+static uint8_t   s_reboot_hour = 0xFF;    /* daily maintenance reboot at this local hour (0xFF=off) */
+static int8_t    s_tz_offset = 0;         /* device UTC offset (hours) for the reboot hour          */
 
 static void save_u8(const char *key, uint8_t v)
 {
@@ -47,6 +49,8 @@ void prefs_load(void)
     if (nvs_get_u8(h, "autoupd", &v) == ESP_OK) s_auto_update = (v != 0);
     if (nvs_get_u8(h, "orient", &v) == ESP_OK && v <= PP_ORIENT_PORTRAIT_FLIPPED) s_orient = (pp_orient_t)v;
     if (nvs_get_u8(h, "lockmin", &v) == ESP_OK) s_lock_min = v;
+    if (nvs_get_u8(h, "rbthr", &v) == ESP_OK) s_reboot_hour = v;
+    if (nvs_get_u8(h, "tzoff", &v) == ESP_OK) s_tz_offset = (int8_t)v;
     size_t sz = sizeof(s_scrpin); nvs_get_str(h, "scrpin", s_scrpin, &sz);
     sz = sizeof(s_webpw); nvs_get_str(h, "webpw", s_webpw, &sz);
     nvs_close(h);
@@ -76,3 +80,9 @@ void prefs_set_scrpin(const char *p) { strlcpy(s_scrpin, p ? p : "", sizeof(s_sc
 
 const char *prefs_web_pass(void) { return s_webpw; }
 void prefs_set_web_pass(const char *p) { strlcpy(s_webpw, p ? p : "", sizeof(s_webpw)); save_str("webpw", s_webpw); }
+
+uint8_t prefs_reboot_hour(void) { return s_reboot_hour; }
+void prefs_set_reboot_hour(uint8_t h) { s_reboot_hour = (h <= 23) ? h : 0xFF; save_u8("rbthr", s_reboot_hour); }
+
+int8_t prefs_tz_offset(void) { return s_tz_offset; }
+void prefs_set_tz_offset(int8_t hrs) { if (hrs < -12) hrs = -12; if (hrs > 14) hrs = 14; s_tz_offset = hrs; save_u8("tzoff", (uint8_t)hrs); }

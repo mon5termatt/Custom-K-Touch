@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
+#include "esp_netif_sntp.h"
 
 #include "pandatouch_display.h"
 #include "lvgl.h"
@@ -77,6 +78,10 @@ void app_main(void)
 
     ui_boot_update(30, "Connecting WiFi...");
     wifi_init_start();
+    /* SNTP gives the optional daily maintenance reboot a wall clock. Fire-and-forget: syncs once
+     * WiFi is up, then periodically. Harmless if the network never comes up. */
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_netif_sntp_init(&sntp);
     vTaskDelay(pdMS_TO_TICKS(100));
     
     ui_boot_update(50, "Starting services...");

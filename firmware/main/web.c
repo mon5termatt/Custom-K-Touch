@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -151,7 +152,11 @@ static const char INDEX_HTML[] =
 "<div class=card><b>Manual firmware upload</b>"
 "<p class=muted>Upload the <b>prusa-touch-app.bin</b> (the OTA image, ~2 MB). The device reboots into it. Don't upload the full 16 MB image here &mdash; that's for a USB flash.</p>"
 "<input type=file id=fw accept=.bin><button class=p onclick=ota()>Flash</button>"
-"<div id=otalog class=muted></div></div></div>"
+"<div id=otalog class=muted></div></div>"
+"<div class=card><b>Scheduled reboot</b>"
+"<div class=muted>Optionally reboot the device daily to keep its RAM fresh. Set your UTC offset so the hour is local time.</div>"
+"<div style='margin-top:8px'><label><input type=checkbox id=rben> Daily reboot at</label> <select id=rbhr></select>:00 &nbsp; UTC offset <select id=rbtz></select> <button class=p onclick=rbsave()>Save</button></div>"
+"<div id=rbmsg class=muted style='margin-top:6px'></div></div></div>"
 "<div class=tab id=t4><div class=card><b>Live screen</b> "
 "<button onclick=shot()>Refresh</button>"
 "<div class=muted>What the touchscreen is showing right now.</div>"
@@ -194,7 +199,7 @@ static const char INDEX_HTML[] =
 "<script>"
 "var FL=[];var SNAPU='';"
 "function t(i){for(let n=0;n<9;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
+"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -353,6 +358,12 @@ static const char INDEX_HTML[] =
 "function _lum(h){var c=h2r(h),f=function(x){x/=255;return x<=.03928?x/12.92:Math.pow((x+.055)/1.055,2.4)};return .2126*f(c.r)+.7152*f(c.g)+.0722*f(c.b)}"
 "function _cr(a,b){var L=_lum(a),M=_lum(b),hi=Math.max(L,M),lo=Math.min(L,M);return(hi+.05)/(lo+.05)}"
 "function _ct(r){return r>=7?'AAA':r>=4.5?'AA':r>=3?'AA-L':'FAIL'}"
+"async function rbload(){var r=await fetch('/api/info').then(x=>x.json()),en=r.reboot_hour<=23,hr=document.getElementById('rbhr'),tz=document.getElementById('rbtz');"
+"var hh='';for(var v=0;v<24;v++)hh+=`<option value='${v}'${v==(en?r.reboot_hour:4)?' selected':''}>${(''+v).padStart(2,'0')}</option>`;hr.innerHTML=hh;"
+"var th='';for(var v=-12;v<=14;v++)th+=`<option value='${v}'${v==r.tz_offset?' selected':''}>${v>=0?'+':''}${v}</option>`;tz.innerHTML=th;"
+"document.getElementById('rben').checked=en;document.getElementById('rbmsg').textContent=r.clock_ok?('Device local time now: '+r.local+' (adjust the UTC offset if that is wrong).'):'Device clock not synced yet (needs internet).'}"
+"async function rbsave(){var en=document.getElementById('rben').checked,hr=en?parseInt(document.getElementById('rbhr').value):255,tz=parseInt(document.getElementById('rbtz').value);"
+"var r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hour:hr,tz:tz})});document.getElementById('rbmsg').textContent=r.ok?'Saved.':'Save failed (HTTP '+r.status+')'}"
 "async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);TFPRESETS=r.presets||[];if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfpreset').innerHTML=TFPRESETS.map(function(p){return `<option value='${p.index}'>${p.name}</option>`}).join('');document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
 "function tf_preset_load(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx});if(!p)return;TFS=exS(p.colors);TFV='dark';document.getElementById('tfvar').value='dark';if(p.font!=null)document.getElementById('tffont').value=p.font;if(p.brand)document.getElementById('tfbrand').value=p.brand;if('byline' in p)document.getElementById('tfbyline').value=p.byline;tf_si();tf_render()}"
 "async function tf_preset_apply(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx}),nm=p?p.name:'theme';var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});alert(r.ok?'Applying '+nm+' - the device is restarting.':'Failed (HTTP '+r.status+')')}"
@@ -718,6 +729,11 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddBoolToObject(o, "webauth", prefs_web_pass()[0] != '\0');
     cJSON_AddBoolToObject(o, "scrlock", prefs_scrpin()[0] != '\0');
     cJSON_AddNumberToObject(o, "lockmin", prefs_lock_min());
+    cJSON_AddNumberToObject(o, "reboot_hour", prefs_reboot_hour());   /* 0..23 or 255 = off */
+    cJSON_AddNumberToObject(o, "tz_offset", prefs_tz_offset());
+    { time_t t = time(NULL); cJSON_AddNumberToObject(o, "clock_ok", t > 1700000000 ? 1 : 0);
+      if (t > 1700000000) { time_t l = t + (time_t)prefs_tz_offset() * 3600; struct tm tm; gmtime_r(&l, &tm);
+        char hm[6]; snprintf(hm, sizeof(hm), "%02d:%02d", tm.tm_hour, tm.tm_min); cJSON_AddStringToObject(o, "local", hm); } }
     char *js = cJSON_PrintUnformatted(o);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
@@ -1366,6 +1382,23 @@ static esp_err_t security_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Daily maintenance reboot config: {hour:0..23 (>23 disables), tz:UTC offset hours}. */
+static esp_err_t reboot_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    if (j) {
+        cJSON *hr = cJSON_GetObjectItem(j, "hour");
+        cJSON *tz = cJSON_GetObjectItem(j, "tz");
+        if (cJSON_IsNumber(hr)) prefs_set_reboot_hour((uint8_t)hr->valueint);
+        if (cJSON_IsNumber(tz)) prefs_set_tz_offset((int8_t)tz->valueint);
+        cJSON_Delete(j);
+    }
+    free(body);
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
 /* ---- Skins (issue #6 Phase 1b: the ThemeForge web editor) ---- */
 static bool parse_hex_color(const char *s, uint8_t out[3])   /* "#rrggbb" -> 3 bytes */
 {
@@ -1649,6 +1682,7 @@ void web_start(void)
         { "/api/fleet", HTTP_GET, fleet_get }, { "/api/screen.bmp", HTTP_GET, screen_get },
         { "/api/ui", HTTP_GET, ui_get }, { "/api/ui/nav", HTTP_GET, ui_nav_get },
         { "/api/security", HTTP_POST, security_post },
+        { "/api/reboot", HTTP_POST, reboot_post },
         { "/api/bambu/info", HTTP_GET, bambu_info_get },
         { "/api/bambu/login", HTTP_POST, bambu_login_post },
         { "/api/bambu/code", HTTP_POST, bambu_code_post },
