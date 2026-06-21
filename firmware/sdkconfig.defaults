@@ -91,6 +91,11 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 # — status freezes until reboot. ponytail: stdlib/platform fix, the one flag that solves the symptom.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 
+# Structural fix: put mbedTLS's heap in PSRAM (8 MB) instead of the scarce ~150 KB internal SRAM, so
+# TLS can't starve internal RAM regardless of fragmentation. The AES/SHA/MPI hardware accelerators
+# keep their own internal DMA buffers, so only the large software buffers move to PSRAM.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
 # OTA rollback safety net: a freshly OTA'd app must call
 # esp_ota_mark_app_valid_cancel_rollback() (app_main does, once healthy) or the
 # bootloader reverts to the previous slot on next boot.
