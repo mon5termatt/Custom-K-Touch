@@ -85,6 +85,12 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 
+# Allocate the 16 KB TLS RX / 4 KB TX buffers per-handshake and free/shrink them when idle, instead
+# of pinning ~20 KB of internal RAM for the life of each connection. Without this, internal SRAM
+# fragments over hours until mbedtls_ssl_setup fails (-0x7F00 ALLOC_FAILED) and the Connect poll dies
+# — status freezes until reboot. ponytail: stdlib/platform fix, the one flag that solves the symptom.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
 # OTA rollback safety net: a freshly OTA'd app must call
 # esp_ota_mark_app_valid_cancel_rollback() (app_main does, once healthy) or the
 # bootloader reverts to the previous slot on next boot.
