@@ -29,6 +29,7 @@
 #include "bambu_cloud.h"
 #include "netlog.h"
 #include "prefs.h"
+#include "i18n.h"
 #include "skin.h"
 #include "layout.h"
 #include "mbedtls/base64.h"
@@ -160,7 +161,10 @@ static const char INDEX_HTML[] =
 "<div class=tab id=t4><div class=card><b>Live screen</b> "
 "<button onclick=shot()>Refresh</button>"
 "<div class=muted>What the touchscreen is showing right now.</div>"
-"<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div></div>"
+"<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div>"
+"<div class=card><b>Language</b>"
+"<div class=muted>On-screen UI language. Saving reboots the device. Only English ships translated today; other languages also need fonts with the matching glyphs.</div>"
+"<div style='margin-top:8px'><select id=lgsel></select> <button class=p onclick=lgsave()>Save &amp; reboot</button></div></div></div>"
 "<div class=tab id=t7><div class=card><b>Theme</b>"
 "<div class=muted>Pick a pre-baked theme, or design your own from six colors. The full palette derives automatically and is contrast-checked; applying reboots the device into the theme.</div>"
 "<div style='margin:12px 0;padding:10px;background:#2a2a2a;border-radius:8px'><b style='font-size:13px'>Pre-baked themes</b>"
@@ -199,7 +203,7 @@ static const char INDEX_HTML[] =
 "<script>"
 "var FL=[];var SNAPU='';"
 "function t(i){for(let n=0;n<9;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4)shot();if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
+"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -364,6 +368,8 @@ static const char INDEX_HTML[] =
 "document.getElementById('rben').checked=en;document.getElementById('rbmsg').textContent=r.clock_ok?('Device local time now: '+r.local+' (adjust the UTC offset if that is wrong).'):'Device clock not synced yet (needs internet).'}"
 "async function rbsave(){var en=document.getElementById('rben').checked,hr=en?parseInt(document.getElementById('rbhr').value):255,tz=parseInt(document.getElementById('rbtz').value);"
 "var r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hour:hr,tz:tz})});document.getElementById('rbmsg').textContent=r.ok?'Saved.':'Save failed (HTTP '+r.status+')'}"
+"async function lgload(){var r=await fetch('/api/info').then(x=>x.json()),s=document.getElementById('lgsel');s.innerHTML=(r.langs||['English']).map(function(n,i){return `<option value='${i}'${i==r.lang?' selected':''}>${n}</option>`}).join('')}"
+"async function lgsave(){var l=parseInt(document.getElementById('lgsel').value);var r=await fetch('/api/lang',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:l})});alert(r.ok?'Saved - the device is restarting in the selected language.':'Failed (HTTP '+r.status+')')}"
 "async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);TFPRESETS=r.presets||[];if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfpreset').innerHTML=TFPRESETS.map(function(p){return `<option value='${p.index}'>${p.name}</option>`}).join('');document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
 "function tf_preset_load(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx});if(!p)return;TFS=exS(p.colors);TFV='dark';document.getElementById('tfvar').value='dark';if(p.font!=null)document.getElementById('tffont').value=p.font;if(p.brand)document.getElementById('tfbrand').value=p.brand;if('byline' in p)document.getElementById('tfbyline').value=p.byline;tf_si();tf_render()}"
 "async function tf_preset_apply(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx}),nm=p?p.name:'theme';var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});alert(r.ok?'Applying '+nm+' - the device is restarting.':'Failed (HTTP '+r.status+')')}"
@@ -731,6 +737,10 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "lockmin", prefs_lock_min());
     cJSON_AddNumberToObject(o, "reboot_hour", prefs_reboot_hour());   /* 0..23 or 255 = off */
     cJSON_AddNumberToObject(o, "tz_offset", prefs_tz_offset());
+    cJSON_AddNumberToObject(o, "lang", prefs_lang());
+    { cJSON *la = cJSON_CreateArray();
+      for (int i = 0; i < LANG_COUNT; i++) cJSON_AddItemToArray(la, cJSON_CreateString(i18n_lang_label((pp_lang_t)i)));
+      cJSON_AddItemToObject(o, "langs", la); }
     { time_t t = time(NULL); cJSON_AddNumberToObject(o, "clock_ok", t > 1700000000 ? 1 : 0);
       if (t > 1700000000) { time_t l = t + (time_t)prefs_tz_offset() * 3600; struct tm tm; gmtime_r(&l, &tm);
         char hm[6]; snprintf(hm, sizeof(hm), "%02d:%02d", tm.tm_hour, tm.tm_min); cJSON_AddStringToObject(o, "local", hm); } }
@@ -1399,6 +1409,22 @@ static esp_err_t reboot_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Set UI language {lang:N} and reboot so every screen rebuilds in the new language. */
+static esp_err_t lang_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    int l = -1;
+    if (j) { cJSON *n = cJSON_GetObjectItem(j, "lang"); if (cJSON_IsNumber(n)) l = n->valueint; cJSON_Delete(j); }
+    free(body);
+    if (l < 0 || l >= LANG_COUNT) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad lang"); return ESP_FAIL; }
+    prefs_set_lang((uint8_t)l);
+    httpd_resp_sendstr(req, "OK - rebooting");
+    vTaskDelay(pdMS_TO_TICKS(400));
+    esp_restart();
+    return ESP_OK;
+}
+
 /* ---- Skins (issue #6 Phase 1b: the ThemeForge web editor) ---- */
 static bool parse_hex_color(const char *s, uint8_t out[3])   /* "#rrggbb" -> 3 bytes */
 {
@@ -1683,6 +1709,7 @@ void web_start(void)
         { "/api/ui", HTTP_GET, ui_get }, { "/api/ui/nav", HTTP_GET, ui_nav_get },
         { "/api/security", HTTP_POST, security_post },
         { "/api/reboot", HTTP_POST, reboot_post },
+        { "/api/lang", HTTP_POST, lang_post },
         { "/api/bambu/info", HTTP_GET, bambu_info_get },
         { "/api/bambu/login", HTTP_POST, bambu_login_post },
         { "/api/bambu/code", HTTP_POST, bambu_code_post },

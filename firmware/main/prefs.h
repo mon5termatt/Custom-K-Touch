@@ -43,6 +43,11 @@ void prefs_set_auto_update(bool v);      /* persists */
 pp_orient_t prefs_orient(void);
 void        prefs_set_orient(pp_orient_t o);   /* persists */
 
+/* UI language (index into pp_lang_t; default 0 = English). Stored as a small int
+ * so prefs.h needn't depend on i18n.h. */
+uint8_t prefs_lang(void);
+void    prefs_set_lang(uint8_t l);             /* persists */
+
 /* --- security opt-ins (all off/empty by default) --- */
 /* Auto-lock the touchscreen after N idle minutes (0 = off). While locked, browsing is allowed
  * but actions need the screen PIN. */

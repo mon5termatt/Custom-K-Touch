@@ -5,6 +5,7 @@
 #include "pandaprusa_theme.h"
 #include "wifi.h"
 #include "prefs.h"
+#include "i18n.h"
 #include "skin.h"
 #include "layout.h"
 #include "pandatouch_display.h"   /* pt_display_schedule_ui — for the test nav API */
@@ -190,7 +191,7 @@ static void on_pause_clicked(lv_event_t *e)
     if (ui_locked_block()) return;
     /* The label text tells us which action applies. */
     const char *txt = lv_label_get_text(s_btn_pause_lbl);
-    if (txt && strcmp(txt, "RESUME") == 0) {
+    if (txt && strcmp(txt, tr(STR_RESUME)) == 0) {
         app_state_post_cmd(PP_CMD_RESUME, NULL);
     } else {
         app_state_post_cmd(PP_CMD_PAUSE, NULL);
@@ -224,7 +225,7 @@ static void on_control_clicked(lv_event_t *e)
 {
     (void)e;
     snap_clear();                  /* drop any prior printer's frame */
-    if (s_snap_ph) lv_label_set_text(s_snap_ph, "Loading webcam\xE2\x80\xA6");
+    if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING_WEBCAM));
     app_state_fetch_snapshot();    /* load immediately; the 7s timer keeps it live */
     lv_screen_load(s_scr_control);
 }
@@ -249,10 +250,10 @@ static void on_file_clicked(lv_event_t *e)
                                                          : s_files[idx].path);
     thumb_clear();
     if (s_files[idx].thumb[0]) {
-        lv_label_set_text(s_thumb_ph, "Loading preview...");
+        lv_label_set_text(s_thumb_ph, tr(STR_LOADING_PREVIEW));
         app_state_fetch_thumb(s_files[idx].thumb);   /* -> ui_apply_thumb */
     } else {
-        lv_label_set_text(s_thumb_ph, "No preview");
+        lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
     }
     lv_screen_load(s_scr_filedetail);
 }
@@ -506,7 +507,7 @@ static void build_status_screen(void)
 
     /* ---- action buttons (above the 60px bottom nav) ---- landscape: 4 in a row;
      * portrait: 2x2 grid (left column 16, right column flush to the right margin) ---- */
-    lv_obj_t *pause_btn = make_button(s_scr_status, "PAUSE", on_pause_clicked, NULL, &s_btn_pause_lbl);
+    lv_obj_t *pause_btn = make_button(s_scr_status, tr(STR_PAUSE), on_pause_clicked, NULL, &s_btn_pause_lbl);
     lv_obj_t *stop_btn  = make_button(s_scr_status, "STOP", on_stop_clicked, NULL, NULL);
     lv_obj_t *files_btn = make_button(s_scr_status, "FILES", on_files_clicked, NULL, NULL);
     s_btn_control = make_button(s_scr_status, "CONTROL", on_control_clicked, NULL, NULL);
@@ -531,12 +532,12 @@ static void on_storage_toggle(lv_event_t *e)
     lv_obj_t *btn = lv_event_get_target(e);
     lv_obj_t *lbl = lv_obj_get_child(btn, 0);
     if (s_files_usb_mode) {
-        lv_label_set_text(lbl, LV_SYMBOL_USB " USB");
-        lv_label_set_text(s_files_banner, "Local files on USB drive");
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_USB "%s", tr(STR_USB));
+        lv_label_set_text(s_files_banner, tr(STR_LOCAL_FILES_USB));
         app_state_post_cmd(PP_CMD_LIST_USB, NULL);
     } else {
-        lv_label_set_text(lbl, LV_SYMBOL_IMAGE " Printer");
-        lv_label_set_text(s_files_banner, "Files on this printer");
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_IMAGE "%s", tr(STR_PRINTER));
+        lv_label_set_text(s_files_banner, tr(STR_FILES_ON_THIS));
         app_state_post_cmd(PP_CMD_LIST, NULL);
     }
 }
@@ -563,7 +564,7 @@ static void build_files_screen(void)
     lv_obj_set_style_pad_hor(banner, 16, 0);
     lv_obj_clear_flag(banner, LV_OBJ_FLAG_SCROLLABLE);
     s_files_banner = lv_label_create(banner);
-    lv_label_set_text(s_files_banner, "Files on this printer");
+    lv_label_set_text(s_files_banner, tr(STR_FILES_ON_THIS));
     lv_label_set_long_mode(s_files_banner, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_files_banner, 760);
     lv_obj_set_style_text_color(s_files_banner, PP_TEXT_MUTED, 0);
@@ -611,7 +612,7 @@ static void build_filedetail_screen(void)
     /* black header with file name + Back */
     lv_obj_t *bar = make_header(s_scr_filedetail, "");
     s_fd_name = lv_label_create(bar);
-    lv_label_set_text(s_fd_name, "File");
+    lv_label_set_text(s_fd_name, tr(STR_FILE));
     lv_label_set_long_mode(s_fd_name, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_fd_name, 560);
     lv_obj_set_style_text_color(s_fd_name, PP_WHITE, 0);
@@ -626,7 +627,7 @@ static void build_filedetail_screen(void)
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 70);
 
     s_thumb_ph = lv_label_create(card);
-    lv_label_set_text(s_thumb_ph, "No preview");
+    lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
     lv_obj_set_style_text_color(s_thumb_ph, PP_TEXT_MUTED, 0);
     lv_obj_center(s_thumb_ph);
 
@@ -818,7 +819,7 @@ static void build_addpick_screen(void)
     lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *head = lv_label_create(col);
-    lv_label_set_text(head, "Add or manage printers from your phone or computer");
+    lv_label_set_text(head, tr(STR_ADD_MANAGE));
     lv_obj_set_style_text_color(head, PP_TEXT, 0);
     lv_obj_set_style_text_font(head, PP_F16, 0);
     lv_label_set_long_mode(head, LV_LABEL_LONG_WRAP);
@@ -839,9 +840,7 @@ static void build_addpick_screen(void)
     lv_obj_set_style_text_font(s_addpick_url, PP_F20, 0);
 
     lv_obj_t *why = lv_label_create(col);
-    lv_label_set_text(why, "Scan the code, or open this address in any browser on the same Wi-Fi. "
-                           "The web page handles API keys and Prusa Connect / Klipper / Bambu sign-in, "
-                           "which a touchscreen can't do well.");
+    lv_label_set_text(why, tr(STR_SCAN_ADDRESS));
     lv_obj_set_style_text_color(why, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(why, PP_F14, 0);
     lv_label_set_long_mode(why, LV_LABEL_LONG_WRAP);
@@ -868,7 +867,7 @@ static void on_wifi_ssid_pick(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx >= 0 && idx < s_wifi_scan_count) {
         strlcpy(s_wifi_selected, s_wifi_ssids[idx], sizeof(s_wifi_selected));
-        lv_label_set_text_fmt(s_wifi_sel_lbl, "Network: %s", s_wifi_selected);
+        lv_label_set_text_fmt(s_wifi_sel_lbl, tr(STR_NETWORK_FMT), s_wifi_selected);
     }
 }
 
@@ -921,7 +920,7 @@ static void wifi_status_label_refresh(void)
 static void wifi_screen_prepare(void)
 {
     s_wifi_selected[0] = '\0';
-    lv_label_set_text(s_wifi_sel_lbl, "Network: (tap Scan)");
+    lv_label_set_text(s_wifi_sel_lbl, tr(STR_NETWORK_SCAN));
     lv_textarea_set_text(s_wifi_ta_pass, "");
     lv_obj_clean(s_wifi_list);
 
@@ -971,7 +970,7 @@ static void build_wifi_screen(void)
     const int  fw = P ? scr_w() - 32 : 380;/* form field width */
 
     s_wifi_sel_lbl = lv_label_create(s_scr_wifi);
-    lv_label_set_text(s_wifi_sel_lbl, "Network: (tap Scan)");
+    lv_label_set_text(s_wifi_sel_lbl, tr(STR_NETWORK_SCAN));
     lv_obj_set_style_text_color(s_wifi_sel_lbl, PP_TEXT, 0);
     lv_obj_align(s_wifi_sel_lbl, LV_ALIGN_TOP_LEFT, fx, 72);
 
@@ -989,7 +988,7 @@ static void build_wifi_screen(void)
     lv_obj_set_style_bg_color(conn, PP_ORANGE, 0);
     lv_obj_add_event_cb(conn, on_wifi_connect_clicked, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cl = lv_label_create(conn);
-    lv_label_set_text(cl, "Connect");
+    lv_label_set_text(cl, tr(STR_CONNECT));
     lv_obj_set_style_text_color(cl, PP_WHITE, 0);
     lv_obj_center(cl);
 
@@ -1396,7 +1395,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
 
     if (s->firmware[0]) {
         lv_obj_t *fwl = lv_label_create(c);
-        lv_label_set_text_fmt(fwl, "Firmware: %s", s->firmware);
+        lv_label_set_text_fmt(fwl, tr(STR_FW_FMT), s->firmware);
         lv_obj_set_style_text_color(fwl, PP_TEXT_MUTED, 0);
         lv_obj_set_style_text_font(fwl, PP_F12, 0);
         lv_label_set_long_mode(fwl, LV_LABEL_LONG_DOT);
@@ -1418,7 +1417,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     if (s->has_job) {
         int pct = (int)(s->progress + 0.5f);
         lv_obj_t *pl = lv_label_create(c);
-        lv_label_set_text(pl, "PROGRESS");
+        lv_label_set_text(pl, tr(STR_PROGRESS));
         lv_obj_set_style_text_color(pl, PP_TEXT_MUTED, 0);
         lv_obj_set_style_text_font(pl, PP_F12, 0);
         lv_obj_align(pl, LV_ALIGN_TOP_LEFT, X2, R2);
@@ -1619,7 +1618,7 @@ static void on_pin_ok(lv_event_t *e)
 {
     (void)e;
     if (strcmp(lv_textarea_get_text(s_lock_ta), prefs_scrpin()) == 0) lock_release();
-    else { lv_label_set_text(s_lock_msg, "Wrong PIN, try again"); lv_textarea_set_text(s_lock_ta, ""); }
+    else { lv_label_set_text(s_lock_msg, tr(STR_WRONG_PIN)); lv_textarea_set_text(s_lock_ta, ""); }
 }
 static void on_pin_cancel(lv_event_t *e)
 {
@@ -1631,7 +1630,7 @@ static void lock_show_prompt(void)
 {
     if (!s_lock_modal) return;
     lv_textarea_set_text(s_lock_ta, "");
-    lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
+    lv_label_set_text(s_lock_msg, tr(STR_ENTER_PIN));
     lv_obj_remove_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_lock_modal);
 }
@@ -1663,7 +1662,7 @@ static void build_lock_overlay(void)
 
     /* small "LOCKED" badge, top-right; hidden until the screen locks */
     s_lock_ind = lv_label_create(top);
-    lv_label_set_text(s_lock_ind, LV_SYMBOL_BELL " LOCKED");
+    lv_label_set_text_fmt(s_lock_ind, LV_SYMBOL_BELL "%s", tr(STR_LOCKED));
     lv_obj_set_style_text_color(s_lock_ind, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_lock_ind, PP_F14, 0);
     lv_obj_set_style_bg_color(s_lock_ind, PP_HEADER, 0);
@@ -1686,7 +1685,7 @@ static void build_lock_overlay(void)
     lv_obj_add_flag(s_lock_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_lock_msg = lv_label_create(s_lock_modal);
-    lv_label_set_text(s_lock_msg, "Enter PIN to unlock");
+    lv_label_set_text(s_lock_msg, tr(STR_ENTER_PIN));
     lv_obj_set_style_text_color(s_lock_msg, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_lock_msg, PP_F20, 0);
 
@@ -1869,8 +1868,7 @@ void ui_apply_dashboard(void *arg)
     }
     if (shown == 0) {
         lv_obj_t *l = lv_label_create(s_dash_grid);
-        lv_label_set_text(l, d->count == 0 ? "No printers yet — add one in Settings."
-                                           : "No printers match the current filter.");
+        lv_label_set_text(l, d->count == 0 ? tr(STR_NO_PRINTERS) : tr(STR_NO_MATCH));
         lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     }
     s_dref_n = shown;
@@ -1913,7 +1911,7 @@ static void on_jog_clicked(lv_event_t *e)
 static void on_snapshot_clicked(lv_event_t *e)
 {
     (void)e;
-    if (s_snap_ph) lv_label_set_text(s_snap_ph, "Loading\xE2\x80\xA6");   /* "Loading…" */
+    if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING));
     app_state_fetch_snapshot();   /* -> prusa_connect_fetch_snapshot -> ui_apply_snapshot */
 }
 
@@ -1930,7 +1928,7 @@ static void build_control_screen(void)
     lv_obj_t *temp_card = make_card(s_scr_control, 380, 180);
     lv_obj_align(temp_card, LV_ALIGN_TOP_LEFT, 16, 72);
     lv_obj_t *tl = lv_label_create(temp_card);
-    lv_label_set_text(tl, "PREHEAT");
+    lv_label_set_text(tl, tr(STR_PREHEAT));
     lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(tl, PP_F14, 0);
 
@@ -1947,7 +1945,7 @@ static void build_control_screen(void)
     else               lv_obj_align(jog_card, LV_ALIGN_TOP_RIGHT, -16, 72);
     lv_obj_set_style_pad_all(jog_card, 0, 0);   /* predictable absolute coords */
     lv_obj_t *jl = lv_label_create(jog_card);
-    lv_label_set_text(jl, "MOVE");
+    lv_label_set_text(jl, tr(STR_MOVE));
     lv_obj_set_style_text_color(jl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(jl, PP_F14, 0);
     lv_obj_align(jl, LV_ALIGN_TOP_LEFT, 12, 8);
@@ -1985,7 +1983,7 @@ static void build_control_screen(void)
         lv_obj_align(cam_card, LV_ALIGN_BOTTOM_MID, 0, -10);
     }
     lv_obj_t *caml = lv_label_create(cam_card);
-    lv_label_set_text(caml, "WEBCAM");
+    lv_label_set_text(caml, tr(STR_WEBCAM));
     lv_obj_set_style_text_color(caml, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(caml, PP_F14, 0);
     lv_obj_align(caml, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -1994,7 +1992,7 @@ static void build_control_screen(void)
     lv_obj_align(cam_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
 
     s_snap_ph = lv_label_create(cam_card);
-    lv_label_set_text(s_snap_ph, "Tap Load for the live camera");
+    lv_label_set_text(s_snap_ph, tr(STR_TAP_LOAD_CAM));
     lv_obj_set_style_text_color(s_snap_ph, PP_TEXT_MUTED, 0);
     lv_obj_align(s_snap_ph, LV_ALIGN_BOTTOM_MID, 0, -8);
 
@@ -2350,7 +2348,7 @@ static void build_about_screen(void)
     else   lv_obj_align(qr, LV_ALIGN_TOP_RIGHT, -70, 110);
 
     lv_obj_t *qcap = lv_label_create(s_scr_about);
-    lv_label_set_text(qcap, "Scan for the project on GitHub");
+    lv_label_set_text(qcap, tr(STR_SCAN_GITHUB));
     lv_obj_set_style_text_color(qcap, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(qcap, PP_F14, 0);
     if (P) lv_obj_align(qcap, LV_ALIGN_TOP_MID, 0, 524);
@@ -2378,7 +2376,7 @@ static void build_farm_screen(void)
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
     s_farm_stat = lv_label_create(s_scr_farm);
-    lv_label_set_text(s_farm_stat, "Loading Prusa Farm...");
+    lv_label_set_text(s_farm_stat, tr(STR_LOADING_FARM));
     lv_obj_set_style_text_color(s_farm_stat, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_farm_stat, PP_F16, 0);
     lv_label_set_long_mode(s_farm_stat, LV_LABEL_LONG_WRAP);
@@ -2400,8 +2398,7 @@ void ui_apply_farm(void *arg)
     pp_farm_t *f = (pp_farm_t *)arg;
     if (!lv_obj_is_valid(s_farm_stat)) { free(f); return; }
     if (!f->valid && f->order_count == 0) {
-        lv_label_set_text(s_farm_stat, "Prusa Farm unavailable. Set your Organization ID "
-                          "in the web UI (Farm tab), then reopen.");
+        lv_label_set_text(s_farm_stat, tr(STR_FARM_UNAVAIL));
     } else {
         lv_label_set_text_fmt(s_farm_stat,
                               "Printers:  %d active   %d online   %d total%s   |   Orders: %d",
@@ -2421,7 +2418,7 @@ void ui_apply_farm(void *arg)
             lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_t *l = lv_label_create(card);
             lv_obj_set_style_text_color(l, PP_TEXT, 0);
-            lv_label_set_text_fmt(l, "%s   -   done %d/%d%s",
+            lv_label_set_text_fmt(l, tr(STR_FARM_ORDER_FMT),
                                   f->orders[i].name[0] ? f->orders[i].name : "(order)",
                                   f->orders[i].done, f->orders[i].total,
                                   f->orders[i].attn ? "   needs attention" : "");
@@ -2433,7 +2430,7 @@ void ui_apply_farm(void *arg)
 static void on_farm_open(lv_event_t *e)
 {
     (void)e;
-    if (lv_obj_is_valid(s_farm_stat)) lv_label_set_text(s_farm_stat, "Loading Prusa Farm...");
+    if (lv_obj_is_valid(s_farm_stat)) lv_label_set_text(s_farm_stat, tr(STR_LOADING_FARM));
     if (lv_obj_is_valid(s_farm_list)) lv_obj_clean(s_farm_list);
     app_state_farm_refresh();
     lv_screen_load(s_scr_farm);
@@ -2601,7 +2598,7 @@ static void build_prefs_screen(void)
     /* Automatic updates (opt-in; off by default). Landscape: top of the RIGHT column so the
      * two columns balance 3-and-2 instead of stranding one lonely control on the right. */
     lv_obj_t *aul = lv_label_create(s_scr_prefs);
-    lv_label_set_text(aul, "Automatic firmware updates");
+    lv_label_set_text(aul, tr(STR_AUTO_FW_UPDATES));
     lv_obj_set_style_text_color(aul, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(aul, PP_F14, 0);
     lv_obj_align(aul, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 392 : 84);
@@ -2612,7 +2609,7 @@ static void build_prefs_screen(void)
 
     /* Screen orientation — landscape: right column under auto-updates; portrait: stacked. */
     lv_obj_t *ol = lv_label_create(s_scr_prefs);
-    lv_label_set_text(ol, "Screen orientation");
+    lv_label_set_text(ol, tr(STR_SCREEN_ORIENTATION));
     lv_obj_set_style_text_color(ol, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(ol, PP_F14, 0);
     lv_obj_align(ol, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 484 : 196);
@@ -2625,7 +2622,7 @@ static void build_prefs_screen(void)
 
     /* Theme / skin — landscape: right column under orientation; portrait: stacked. */
     lv_obj_t *tl = lv_label_create(s_scr_prefs);
-    lv_label_set_text(tl, "Theme");
+    lv_label_set_text(tl, tr(STR_THEME));
     lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(tl, PP_F14, 0);
     lv_obj_align(tl, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 596 : 308);
@@ -2685,7 +2682,7 @@ static void build_boot_screen(void)
     lv_bar_set_value(s_boot_bar, 0, LV_ANIM_OFF);
 
     s_boot_status = lv_label_create(s_scr_boot);
-    lv_label_set_text(s_boot_status, "Starting...");
+    lv_label_set_text(s_boot_status, tr(STR_STARTING));
     lv_obj_set_style_text_font(s_boot_status, PP_F14, 0);
     lv_obj_set_style_text_color(s_boot_status, PP_TEXT_MUTED, 0);
     lv_obj_align(s_boot_status, LV_ALIGN_CENTER, 0, 110);
@@ -2836,7 +2833,7 @@ void ui_apply_status(void *arg)
     }
 
     if (s->has_job) {
-        lv_label_set_text(s_job_lbl, s->job_name[0] ? s->job_name : "(printing)");
+        lv_label_set_text(s_job_lbl, s->job_name[0] ? s->job_name : tr(STR_PRINTING_PAREN));
         lv_bar_set_value(s_bar, (int)(s->progress + 0.5f), LV_ANIM_ON);
         snprintf(buf, sizeof(buf), "%d%%", (int)(s->progress + 0.5f));
         lv_label_set_text(s_pct_lbl, buf);
@@ -2845,7 +2842,7 @@ void ui_apply_status(void *arg)
         snprintf(buf, sizeof(buf), "ETA %s", eta);
         lv_label_set_text(s_eta_lbl, buf);
     } else {
-        lv_label_set_text(s_job_lbl, s->online ? "No active print" : "");
+        lv_label_set_text(s_job_lbl, s->online ? tr(STR_NO_ACTIVE_PRINT) : "");
         lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
         lv_label_set_text(s_pct_lbl, "");
         lv_label_set_text(s_eta_lbl, "");
@@ -2853,7 +2850,7 @@ void ui_apply_status(void *arg)
 
     /* Pause button reflects the paused/printing state. */
     bool paused = (strcmp(s->state, "PAUSED") == 0);
-    lv_label_set_text(s_btn_pause_lbl, paused ? "RESUME" : "PAUSE");
+    lv_label_set_text(s_btn_pause_lbl, paused ? tr(STR_RESUME) : tr(STR_PAUSE));
 
     /* CONTROL button visibility based on capability probe. */
     if (s->has_control) lv_obj_remove_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
@@ -2864,7 +2861,7 @@ void ui_apply_status(void *arg)
     if (s_attn_card) {
         if (s->dialog_id) {
             s_attn_dialog_id = s->dialog_id;
-            lv_label_set_text(s_attn_title, s->dialog_title[0] ? s->dialog_title : "Attention");
+            lv_label_set_text(s_attn_title, s->dialog_title[0] ? s->dialog_title : tr(STR_ATTENTION));
             lv_label_set_text(s_attn_text, s->dialog_text);
             for (int i = 0; i < 3; i++) {
                 if (i < s->dialog_btn_count && s->dialog_btns[i][0]) {
@@ -2897,10 +2894,10 @@ void ui_apply_files(void *arg)
 
     /* Refresh the printer-context banner (these files belong to the active printer). */
     if (s_active_printer[0] && s_active_model[0]) {
-        lv_label_set_text_fmt(s_files_banner, "Files on  %s   -   %s",
+        lv_label_set_text_fmt(s_files_banner, tr(STR_FILES_ON_2_FMT),
                               s_active_printer, s_active_model);
     } else if (s_active_printer[0]) {
-        lv_label_set_text_fmt(s_files_banner, "Files on  %s", s_active_printer);
+        lv_label_set_text_fmt(s_files_banner, tr(STR_FILES_ON_FMT), s_active_printer);
     }
 
     for (int i = 0; i < list->count && i < PP_MAX_FILES; i++) {
@@ -2945,7 +2942,7 @@ void ui_apply_files(void *arg)
     }
     if (s_file_count == 0) {
         lv_obj_t *empty = lv_label_create(s_file_list);
-        lv_label_set_text(empty, "No printable files on this printer");
+        lv_label_set_text(empty, tr(STR_NO_PRINTABLE));
         lv_obj_set_style_text_color(empty, PP_TEXT_MUTED, 0);
     }
     free(list);
@@ -2964,7 +2961,7 @@ void ui_apply_thumb(void *arg)
     if (!im->data || im->len <= 0) {
         free(im->data);
         free(im);
-        lv_label_set_text(s_thumb_ph, "Preview unavailable");
+        lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
         return;
     }
 
@@ -3043,7 +3040,7 @@ void ui_apply_snapshot(void *arg)
 
     if (!im->data || im->len <= 0) {
         free(im->data); free(im);
-        if (s_snap_ph) lv_label_set_text(s_snap_ph, "No camera / no recent frame");
+        if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_NO_CAMERA));
         return;
     }
 
@@ -3054,7 +3051,7 @@ void ui_apply_snapshot(void *arg)
     uint16_t jw = 0, jh = 0;
     if (!jpeg_dims(s_snap_buf, len, &jw, &jh)) {
         snap_clear();
-        if (s_snap_ph) lv_label_set_text(s_snap_ph, "Snapshot unreadable");
+        if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_SNAPSHOT_UNREADABLE));
         return;
     }
 

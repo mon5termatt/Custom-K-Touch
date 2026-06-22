@@ -6,6 +6,7 @@ idf_component_register(
         "moonraker.c"
         "printer_store.c"
         "prefs.c"
+        "i18n.c"
         "skin.c"
         "layout.c"
         "app_state.c"

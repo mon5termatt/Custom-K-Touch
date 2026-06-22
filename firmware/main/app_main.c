@@ -26,6 +26,7 @@
 #include "printer_store.h"
 #include "app_state.h"
 #include "prefs.h"
+#include "i18n.h"
 #include "skin.h"
 #include "layout.h"
 #include "ota_update.h"
@@ -50,6 +51,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs);   /* fail loudly on any other NVS init error */
 
     prefs_load();   /* user prefs (sort/filter/logo) — before the UI is built */
+    i18n_set_lang((pp_lang_t)prefs_lang());   /* select UI language before any screen is built */
     skin_init();    /* load the active skin into g_skin before any screen (incl. boot) is built */
     layout_init();  /* load the custom layout spec (or the default) before the UI is built */
 
