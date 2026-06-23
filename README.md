@@ -227,6 +227,12 @@ cd firmware && idf.py set-target esp32s3 && idf.py build
 and [`firmware/sim/`](firmware/sim/) is a desktop build of the UI that renders the real screens
 to PNG in seconds, handy for layout work without flashing.
 
+## Translations
+
+The on-device UI is localized; English, Čeština, and Italiano ship today. All on-screen
+text lives in one file (`firmware/main/i18n.c`), so adding or completing a language is a
+single-file edit. See [`docs/TRANSLATING.md`](docs/TRANSLATING.md) for the step-by-step guide.
+
 ## Developer API
 
 The device exposes a small HTTP API (status, fleet, printer config, Wi-Fi, OTA, a live screen

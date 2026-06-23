@@ -391,7 +391,7 @@ static void build_status_screen(void)
     lv_obj_set_flex_align(herotop, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     s_title_lbl = lv_label_create(herotop);            /* printer name (was in the bar) */
-    lv_label_set_text(s_title_lbl, "Printer");
+    lv_label_set_text(s_title_lbl, tr(STR_NAV_PRINTER));
     lv_obj_set_style_text_color(s_title_lbl, PP_TEXT, 0);
     lv_obj_set_style_text_font(s_title_lbl, PP_F28, 0);
 
@@ -420,15 +420,15 @@ static void build_status_screen(void)
     /* ---- telemetry cells ---- landscape: 4 across; portrait: 2x2 grid ---- */
     if (P) {
         int cw2 = (CW - 12) / 2, xa = 16, xb = 16 + cw2 + 12, r0 = 160, r1 = 226;
-        s_nozzle_lbl = detail_cell(s_scr_status, xa, r0, cw2, "NOZZLE", &pt_ic_nozzle);
-        s_bed_lbl    = detail_cell(s_scr_status, xb, r0, cw2, "BED",    &pt_ic_bed);
-        s_speed_lbl  = detail_cell(s_scr_status, xa, r1, cw2, "SPEED",  &pt_ic_speed);
-        s_z_lbl      = detail_cell(s_scr_status, xb, r1, cw2, "Z AXIS", NULL);
+        s_nozzle_lbl = detail_cell(s_scr_status, xa, r0, cw2, tr(STR_NOZZLE), &pt_ic_nozzle);
+        s_bed_lbl    = detail_cell(s_scr_status, xb, r0, cw2, tr(STR_BED),    &pt_ic_bed);
+        s_speed_lbl  = detail_cell(s_scr_status, xa, r1, cw2, tr(STR_SPEED),  &pt_ic_speed);
+        s_z_lbl      = detail_cell(s_scr_status, xb, r1, cw2, tr(STR_Z_AXIS), NULL);
     } else {
-        s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, "NOZZLE",  &pt_ic_nozzle);
-        s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, "BED", &pt_ic_bed);
-        s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, "SPEED",   &pt_ic_speed);
-        s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, "Z AXIS",  NULL);
+        s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, tr(STR_NOZZLE),  &pt_ic_nozzle);
+        s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, tr(STR_BED), &pt_ic_bed);
+        s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, tr(STR_SPEED),   &pt_ic_speed);
+        s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, tr(STR_Z_AXIS),  NULL);
     }
 
     /* ---- job / progress card ---- */
@@ -547,7 +547,7 @@ static void build_files_screen(void)
     s_scr_files = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_files, PP_BG, 0);
 
-    lv_obj_t *bar = make_header(s_scr_files, "Files");
+    lv_obj_t *bar = make_header(s_scr_files, tr(STR_FILES));
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_back_clicked, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
@@ -773,7 +773,7 @@ static void build_printers_screen(void)
 {
     s_scr_printers = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_printers, PP_BG, 0);
-    make_header(s_scr_printers, "Settings");
+    make_header(s_scr_printers, tr(STR_SETTINGS));
 
     s_pr_list = lv_list_create(s_scr_printers);
     lv_obj_set_size(s_pr_list, LV_PCT(100), scr_h() - 56 - 60);   /* header + nav */
@@ -1028,7 +1028,7 @@ static void nav_settings(lv_event_t *e) { refresh_printers_list(); lv_screen_loa
 
 static void make_nav(lv_obj_t *scr, int active)
 {
-    static const char *labels[4] = { "Fleet", "Printer", "Files", "Settings" };
+    const char *labels[4] = { tr(STR_FLEET), tr(STR_NAV_PRINTER), tr(STR_FILES), tr(STR_SETTINGS) };
     const lv_event_cb_t cbs[4] = { nav_dash, nav_detail, nav_files, nav_settings };
     lv_obj_t *bar = lv_obj_create(scr);
     lv_obj_set_size(bar, LV_PCT(100), 60);
@@ -1064,6 +1064,7 @@ static void make_nav(lv_obj_t *scr, int active)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, labels[i]);
         lv_obj_set_style_text_color(l, i == active ? PP_TEXT : PP_TEXT_MUTED, 0);
+        lv_obj_set_style_text_font(l, PP_F14, 0);   /* explicit: the LVGL default font is ASCII-only Montserrat */
         lv_obj_center(l);
     }
 }
@@ -1209,10 +1210,11 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
     bool ch = false;
     bool online = s->online;
     const char *st = online ? (s->state[0] ? s->state : "READY") : "OFFLINE";
+    const char *disp = tr_state(st);   /* localized label; tint still keys off raw s->state */
     /* The state text uniquely determines the strip/badge tints ("OFFLINE" covers the online
      * flag), so colors only need refreshing when the badge text changes. */
-    if (r->badge_lbl && strcmp(lv_label_get_text(r->badge_lbl), st) != 0) {
-        lv_label_set_text(r->badge_lbl, st);
+    if (r->badge_lbl && strcmp(lv_label_get_text(r->badge_lbl), disp) != 0) {
+        lv_label_set_text(r->badge_lbl, disp);
         if (r->strip) lv_obj_set_style_bg_color(r->strip, online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
         if (r->badge) lv_obj_set_style_bg_color(r->badge, online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
         ch = true;
@@ -1304,7 +1306,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
     if (r) r->badge = badge;
     lv_obj_t *bl = lv_label_create(badge);
-    lv_label_set_text(bl, st);
+    lv_label_set_text(bl, tr_state(st));
     lv_obj_set_style_text_color(bl, PP_TEXT, 0);
     lv_obj_set_style_text_font(bl, PP_F16, 0);
     lv_obj_center(bl);
@@ -1407,10 +1409,10 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     char nz[24], hb[24], sp[16], zx[16];
     fmt_telemetry(s, nz, hb, sp, zx);
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
-    lv_obj_t *vn = card_cell(c, X1, R1, "NOZZLE", nz);
-    lv_obj_t *vs = card_cell(c, X2, R1, "SPEED",  sp);   /* Connect column order: NOZZLE / SPEED / BED */
-    lv_obj_t *vb = card_cell(c, X3, R1, "BED",    hb);
-    lv_obj_t *vz = card_cell(c, X1, R2, "Z AXIS", zx);
+    lv_obj_t *vn = card_cell(c, X1, R1, tr(STR_NOZZLE), nz);
+    lv_obj_t *vs = card_cell(c, X2, R1, tr(STR_SPEED),  sp);   /* Connect column order: NOZZLE / SPEED / BED */
+    lv_obj_t *vb = card_cell(c, X3, R1, tr(STR_BED),    hb);
+    lv_obj_t *vz = card_cell(c, X1, R2, tr(STR_Z_AXIS), zx);
     if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = vz; }
 
     /* progress (when printing) fills the 2nd/3rd column of row 2 */
@@ -2810,7 +2812,7 @@ void ui_apply_status(void *arg)
     /* hero: state-tinted strip + state badge (muted tint + white text) + model sub-line */
     lv_obj_set_style_bg_color(s_herotop, s->online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
     lv_obj_set_style_bg_color(s_badge, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
-    lv_label_set_text(s_state_lbl, s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE");
+    lv_label_set_text(s_state_lbl, tr_state(s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE"));
     lv_label_set_text(s_model_lbl, s->model[0] ? s->model : "");
 
     /* telemetry cells */
@@ -2839,7 +2841,7 @@ void ui_apply_status(void *arg)
         lv_label_set_text(s_pct_lbl, buf);
         char eta[24];
         fmt_eta(s->time_remaining, eta, sizeof(eta));
-        snprintf(buf, sizeof(buf), "ETA %s", eta);
+        snprintf(buf, sizeof(buf), tr(STR_ETA_FMT), eta);
         lv_label_set_text(s_eta_lbl, buf);
     } else {
         lv_label_set_text(s_job_lbl, s->online ? tr(STR_NO_ACTIVE_PRINT) : "");

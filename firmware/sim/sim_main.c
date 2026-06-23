@@ -7,6 +7,7 @@
 #include "lvgl.h"
 #include "ui.h"
 #include "skin.h"
+#include "i18n.h"
 #include "pandaprusa.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,6 +94,7 @@ int main(int argc, char **argv) {
     s_w = argc>2 ? atoi(argv[2]) : 800;
     s_h = argc>3 ? atoi(argv[3]) : 480;
     const char *out = argc>4 ? argv[4] : "out.bmp";
+    { const char *L = getenv("PT_LANG"); if (L) i18n_set_lang((pp_lang_t)atoi(L)); }  /* before skin: set_fonts() reads the language */
     skin_apply_index(argc>5 ? atoi(argv[5]) : 0);   /* 0=Connect 1=Stargate 2=Nord */
 
     lv_init();
@@ -110,6 +112,28 @@ int main(int argc, char **argv) {
     /* inject mock data */
     pp_dash_t *d = malloc(sizeof(*d)); build_dash(d); ui_apply_dashboard(d);   /* applier frees */
     pp_status_t *st = malloc(sizeof(*st)); build_status(st); ui_apply_status(st);
+
+    /* glyph test: a bare label of accented chars to isolate font rendering */
+    if (!strcmp(screen, "glyphtest")) {
+        extern const lv_font_t inter_12, inter_14, inter_16, inter_20, inter_28, inter_40;
+        const lv_font_t *fonts[] = { &inter_12, &inter_14, &inter_16, &inter_20, &inter_28, &inter_40 };
+        const char *names[] = { "12","14","16","20","28","40" };
+        lv_obj_t *scr = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(0x202020), 0);
+        lv_obj_set_flex_flow(scr, LV_FLEX_FLOW_COLUMN);
+        for (int i=0;i<6;i++){
+            lv_obj_t *l = lv_label_create(scr);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+            lv_obj_set_style_text_font(l, fonts[i], 0);
+            lv_label_set_text_fmt(l, "%s: PODLOZKA PRUBEH Tiskarna -> PODLOŽKA PRŮBĚH Tiskárna", names[i]);
+        }
+        lv_screen_load(scr);
+        for (int i=0;i<10;i++){ s_ms += 30; lv_timer_handler(); }
+        lv_refr_now(disp);
+        write_bmp(out);
+        printf("glyphtest -> %s\n", out);
+        return 0;
+    }
 
     /* "lock" preview: render the PIN-unlock overlay over the dashboard */
     if (!strcmp(screen, "lock")) {

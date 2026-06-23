@@ -84,8 +84,7 @@ static const char INDEX_HTML[] =
 ".pthead small{font-weight:400;text-transform:none;letter-spacing:0}"
 "@media(max-width:560px){.ptgrid{grid-template-columns:1fr}}</style></head><body>"
 "<header>PRUSA CONNECT TOUCH</header>"
-"<nav><a class=on onclick=\"t(0)\">Status</a><a onclick=\"t(1)\">Printers</a>"
-"<a onclick=\"t(2)\">Wi-Fi</a><a onclick=\"t(5)\">Account</a><a onclick=\"t(6)\">Farm</a><a onclick=\"t(3)\">Firmware</a><a onclick=\"t(4)\">Screen</a><a onclick=\"t(7)\">Theme</a><a onclick=\"t(8)\">Layout</a></nav>"
+"<nav><a id=nvst class=on onclick=\"t(0)\">Status</a><a id=nvpr onclick=\"t(1)\">Printers</a><a id=nvse onclick=\"t(9)\">Settings</a></nav>"
 "<div class=\"tab on\" id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1>"
 /* Type-first picker: choose how to add, then only the relevant fields appear. */
@@ -196,14 +195,24 @@ static const char INDEX_HTML[] =
 "<input type=file id=lyimp accept=.json style=display:none onchange=ly_import(event)></div>"
 "<div style='margin-top:14px'><div class=muted>Device preview (rendered on the device, exactly as it appears)</div>"
 "<img id=lyprev alt='Generate a preview to see it as rendered on the device.' style='max-width:100%;width:340px;border:1px solid #4e4e4e;border-radius:6px;background:#111316;margin-top:6px'></div></div></div>"
+"<div class=tab id=t9><div class=card><b>Settings</b>"
+"<div class=ptgrid style='margin-top:12px'>"
+"<div class=ptile onclick=\"t(2)\"><b>&#128246; Wi-Fi</b><small>Network connection.</small></div>"
+"<div class=ptile onclick=\"t(5)\"><b>&#128100; Accounts &amp; Security</b><small>Prusa Connect, Bambu Cloud, web password &amp; screen lock.</small></div>"
+"<div class=ptile onclick=\"t(6)\"><b>&#127981; Prusa Farm</b><small>Org-wide printer &amp; order status.</small></div>"
+"<div class=ptile onclick=\"t(3)\"><b>&#11014; Firmware &amp; Updates</b><small>Auto-update, manual flash, scheduled reboot.</small></div>"
+"<div class=ptile onclick=\"t(4)\"><b>&#128241; Screen &amp; Language</b><small>Live screen view and UI language.</small></div>"
+"<div class=ptile onclick=\"t(7)\"><b>&#127912; Theme</b><small>Colors, fonts, wordmark.</small></div>"
+"<div class=ptile onclick=\"t(8)\"><b>&#9783; Layout</b><small>Arrange the status tiles.</small></div>"
+"</div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
 "<div style='background:#1c1e21;padding:14px;border-radius:10px;max-width:92%'>"
 "<div style='display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px'><b id=snapt>Snapshot</b><span><button onclick=snapr()>Refresh</button><button onclick=snapx()>Close</button></span></div>"
 "<img id=snapi style='max-width:84vw;max-height:70vh;border-radius:6px;background:#000;min-width:200px;min-height:120px' onerror=\"this.alt='No snapshot available for this printer'\"></div></div>"
 "<script>"
 "var FL=[];var SNAPU='';"
-"function t(i){for(let n=0;n<9;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.querySelectorAll('nav a').forEach(function(a){a.className=a.getAttribute('onclick')==('t('+i+')')?'on':''});if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
+"function t(i){for(let n=0;n<10;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
+"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -368,7 +377,7 @@ static const char INDEX_HTML[] =
 "document.getElementById('rben').checked=en;document.getElementById('rbmsg').textContent=r.clock_ok?('Device local time now: '+r.local+' (adjust the UTC offset if that is wrong).'):'Device clock not synced yet (needs internet).'}"
 "async function rbsave(){var en=document.getElementById('rben').checked,hr=en?parseInt(document.getElementById('rbhr').value):255,tz=parseInt(document.getElementById('rbtz').value);"
 "var r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hour:hr,tz:tz})});document.getElementById('rbmsg').textContent=r.ok?'Saved.':'Save failed (HTTP '+r.status+')'}"
-"async function lgload(){var r=await fetch('/api/info').then(x=>x.json()),s=document.getElementById('lgsel');s.innerHTML=(r.langs||['English']).map(function(n,i){return `<option value='${i}'${i==r.lang?' selected':''}>${n}</option>`}).join('')}"
+"async function lgload(){var r=await fetch('/api/info').then(x=>x.json()),s=document.getElementById('lgsel');s.innerHTML=(r.langs||[{id:0,name:'English'}]).map(function(l){return `<option value='${l.id}'${l.id==r.lang?' selected':''}>${l.name}</option>`}).join('')}"
 "async function lgsave(){var l=parseInt(document.getElementById('lgsel').value);var r=await fetch('/api/lang',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:l})});alert(r.ok?'Saved - the device is restarting in the selected language.':'Failed (HTTP '+r.status+')')}"
 "async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);TFPRESETS=r.presets||[];if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfpreset').innerHTML=TFPRESETS.map(function(p){return `<option value='${p.index}'>${p.name}</option>`}).join('');document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
 "function tf_preset_load(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx});if(!p)return;TFS=exS(p.colors);TFV='dark';document.getElementById('tfvar').value='dark';if(p.font!=null)document.getElementById('tffont').value=p.font;if(p.brand)document.getElementById('tfbrand').value=p.brand;if('byline' in p)document.getElementById('tfbyline').value=p.byline;tf_si();tf_render()}"
@@ -738,8 +747,15 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "reboot_hour", prefs_reboot_hour());   /* 0..23 or 255 = off */
     cJSON_AddNumberToObject(o, "tz_offset", prefs_tz_offset());
     cJSON_AddNumberToObject(o, "lang", prefs_lang());
+    /* Only languages that actually have a translation table (id = pp_lang_t value). */
     { cJSON *la = cJSON_CreateArray();
-      for (int i = 0; i < LANG_COUNT; i++) cJSON_AddItemToArray(la, cJSON_CreateString(i18n_lang_label((pp_lang_t)i)));
+      for (int i = 0; i < LANG_COUNT; i++) {
+          if (!i18n_lang_has_table((pp_lang_t)i)) continue;
+          cJSON *e = cJSON_CreateObject();
+          cJSON_AddNumberToObject(e, "id", i);
+          cJSON_AddStringToObject(e, "name", i18n_lang_label((pp_lang_t)i));
+          cJSON_AddItemToArray(la, e);
+      }
       cJSON_AddItemToObject(o, "langs", la); }
     { time_t t = time(NULL); cJSON_AddNumberToObject(o, "clock_ok", t > 1700000000 ? 1 : 0);
       if (t > 1700000000) { time_t l = t + (time_t)prefs_tz_offset() * 3600; struct tm tm; gmtime_r(&l, &tm);

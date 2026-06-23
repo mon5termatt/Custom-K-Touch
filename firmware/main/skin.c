@@ -2,6 +2,7 @@
 #include "skin.h"
 #include "pandaprusa_theme.h"
 #include "inter_fonts.h"   /* Inter (Medium) LVGL fonts — the alternate typeface */
+#include "i18n.h"          /* i18n_lang — non-English needs the full-Latin Inter fonts */
 #include <string.h>
 #ifndef PP_HOST_SIM
 #include "nvs.h"        /* ESP-IDF only; the desktop sim renders skins without persistence */
@@ -17,7 +18,9 @@ const lv_font_t *g_f12 = &lv_font_montserrat_12, *g_f14 = &lv_font_montserrat_14
 
 static void set_fonts(uint8_t fam)   /* 0 = Montserrat (LVGL built-in), 1 = Inter */
 {
-    if (fam == 1) {
+    /* The LVGL built-in Montserrat fonts only carry ASCII; the Inter fonts carry the full
+     * Latin range. For any non-English UI, force Inter so accented glyphs render (not boxes). */
+    if (fam == 1 || i18n_lang() != LANG_EN) {
         g_f12 = &inter_12; g_f14 = &inter_14; g_f16 = &inter_16;
         g_f20 = &inter_20; g_f28 = &inter_28; g_f40 = &inter_40;
     } else {

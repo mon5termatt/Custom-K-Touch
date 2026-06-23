@@ -46,6 +46,10 @@ CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_40=y
 CONFIG_LV_USE_FONT_COMPRESSED=y
+# Wide glyph-index fields: the Inter fonts now carry the full Latin range (0xA0-0x17F),
+# pushing later glyphs' bitmap offsets past the small-format limit. Without this, accented
+# glyphs render as placeholder boxes while ASCII (early in the blob) stays fine.
+CONFIG_LV_FONT_FMT_TXT_LARGE=y
 
 # No on-screen FPS/perf overlay in the shipped UI (set =y to measure render performance)
 CONFIG_LV_USE_PERF_MONITOR=n

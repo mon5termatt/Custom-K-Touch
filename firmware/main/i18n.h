@@ -12,6 +12,7 @@
  * regenerated with a wider range. See the comment at the top of i18n.c.
  */
 #include <stdint.h>
+#include <stdbool.h>
 
 /* String keys. Order here is irrelevant to the tables (designated initializers),
  * so you may regroup freely. STR_COUNT must stay last. */
@@ -37,6 +38,12 @@ typedef enum {
     /* onboarding / messages */
     STR_ADD_MANAGE, STR_SCAN_GITHUB, STR_SCAN_ADDRESS, STR_CONNECT_EXPIRED,
     STR_FARM_UNAVAIL, STR_FARM_ORDER_FMT,
+    /* dashboard / fleet card field labels + sidebar nav + headers */
+    STR_NOZZLE, STR_BED, STR_SPEED, STR_Z_AXIS, STR_ETA_FMT,
+    STR_FLEET, STR_NAV_PRINTER, STR_FILES, STR_SETTINGS,
+    /* printer state words (mapped from the backend's English state by tr_state) */
+    STR_ST_IDLE, STR_ST_PRINTING, STR_ST_PAUSED, STR_ST_FINISHED, STR_ST_STOPPED,
+    STR_ST_ERROR, STR_ST_ATTENTION, STR_ST_BUSY, STR_ST_PREPARING,
 
     STR_COUNT
 } pp_str_t;
@@ -56,9 +63,18 @@ typedef enum {
 /* Translate a key into the active language, falling back to English. Never NULL. */
 const char *tr(pp_str_t id);
 
+/* Translate a backend printer-state word (e.g. "PRINTING") for display. Returns the
+ * localized label, or the original string unchanged if the state isn't recognized.
+ * Display only — callers must keep keying tint/logic on the raw backend state. */
+const char *tr_state(const char *backend_state);
+
 /* Active language (defaults to English until i18n_set_lang). */
 void      i18n_set_lang(pp_lang_t l);
 pp_lang_t i18n_lang(void);
 
-/* Endonyms for the picker (ASCII-safe so they render with the stock font). */
+/* Endonyms for the web picker (browser-rendered, so full UTF-8). */
 const char *i18n_lang_label(pp_lang_t l);
+
+/* True if the language has translations (English always true). Empty stub
+ * languages return false so the picker can hide them. */
+bool i18n_lang_has_table(pp_lang_t l);
