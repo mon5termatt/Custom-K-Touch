@@ -532,11 +532,11 @@ static void on_storage_toggle(lv_event_t *e)
     lv_obj_t *btn = lv_event_get_target(e);
     lv_obj_t *lbl = lv_obj_get_child(btn, 0);
     if (s_files_usb_mode) {
-        lv_label_set_text_fmt(lbl, LV_SYMBOL_USB "%s", tr(STR_USB));
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_USB " %s", tr(STR_USB));
         lv_label_set_text(s_files_banner, tr(STR_LOCAL_FILES_USB));
         app_state_post_cmd(PP_CMD_LIST_USB, NULL);
     } else {
-        lv_label_set_text_fmt(lbl, LV_SYMBOL_IMAGE "%s", tr(STR_PRINTER));
+        lv_label_set_text_fmt(lbl, LV_SYMBOL_IMAGE " %s", tr(STR_PRINTER));
         lv_label_set_text(s_files_banner, tr(STR_FILES_ON_THIS));
         app_state_post_cmd(PP_CMD_LIST, NULL);
     }
@@ -1664,7 +1664,7 @@ static void build_lock_overlay(void)
 
     /* small "LOCKED" badge, top-right; hidden until the screen locks */
     s_lock_ind = lv_label_create(top);
-    lv_label_set_text_fmt(s_lock_ind, LV_SYMBOL_BELL "%s", tr(STR_LOCKED));
+    lv_label_set_text_fmt(s_lock_ind, LV_SYMBOL_BELL " %s", tr(STR_LOCKED));
     lv_obj_set_style_text_color(s_lock_ind, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_lock_ind, PP_F14, 0);
     lv_obj_set_style_bg_color(s_lock_ind, PP_HEADER, 0);

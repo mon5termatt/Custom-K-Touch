@@ -35,8 +35,9 @@ label, and a (possibly empty) table. To fill one in:
 - **Keep printf specifiers exactly:** `%s`, `%d`, `%%`. You may reorder words around
   them, but don't add, remove, or retype them. `"Firmware: %s"` → `"Firmware : %s"` ✅,
   `"Firmware:"` ❌ (dropped the `%s`).
-- **Keep leading spaces / icon spacing.** Some strings start with a space (e.g.
-  `" Printer"`, `" LOCKED"`) — an icon is drawn right before them. Keep the space.
+- **Preserve any leading/trailing spaces** the English entry has — a few strings include
+  intentional spacing where text is concatenated. (Spacing around on-screen icons is handled
+  in the code, not the strings, so most entries have none.)
 - **Partial is fine.** Any entry you leave out (or set to `""`) falls back to English
   automatically. A half-finished language still works.
 - **Case matters for style.** Status/button strings are uppercase by convention
