@@ -109,7 +109,7 @@ static const char INDEX_HTML[] =
 "<button class=p onclick=savp()>Save</button></div>"
 "<div id=plist></div>"
 "<div class=card><b>Backup & Restore</b>"
-"<p class=muted>Export your fleet config to a file, or import a saved config (replaces current fleet).</p>"
+"<p class=muted>Export your printers and device settings to a file, or import a saved backup (replaces the current setup). Passwords are not exported.</p>"
 "<button onclick=expc()>Export Config</button>"
 "<input type=file id=icf accept=.json style=margin-top:12px><button onclick=impc()>Import Config</button></div></div>"
 "<div class=tab id=t2><div class=card><b>Wi-Fi</b>"
@@ -313,9 +313,9 @@ static const char INDEX_HTML[] =
 "async function expc(){let r=await fetch('/api/config/export').then(x=>x.json());"
 "let b=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});"
 "let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch-config.json';a.click()}"
-"async function impc(){let f=icf.files[0];if(!f)return;if(!confirm('Replace ALL printers with config from '+f.name+'?'))return;"
+"async function impc(){let f=icf.files[0];if(!f)return;if(!confirm(tr('Replace the printers and settings on this device with the backup file?')))return;"
 "let r=await fetch('/api/config/import',{method:'POST',body:f});"
-"if(r.status>=400)alert(await r.text());else{lp();alert(tr('Import success!'))}}"
+"if(r.status>=400){alert(await r.text());return}if((await r.text())=='ok-reboot')alert(tr('Restored. The device is restarting.'));else{lp();alert(tr('Import success!'))}}"
 "async function savew(){await fetch('/api/wifi',{method:'POST',body:JSON.stringify({ssid:ws.value,pass:wp.value})});alert('Saved; connecting...')}"
 "async function ota(){let f=document.getElementById('fw').files[0];if(!f)return;"
 "if(f.size>5242880&&!confirm('That file is over 5 MB \\u2014 it looks like the full image, not the OTA app.bin. Upload anyway?'))return;"
@@ -440,7 +440,7 @@ static const char INDEX_HTML[] =
 "var WL='en';"
 "var WD={"
 "cs:{"
-"'Status':`Stav`,'Printers':`Tiskárny`,'Settings':`Nastavení`,'Add a printer':`Přidat tiskárnu`,'Cloud accounts':`Cloudové účty`,'Local printer':`Místní tiskárna`,'Add printer':`Přidat tiskárnu`,'Easiest':`Nejsnazší`,'Alpha':`Alfa`,'Save':`Uložit`,'Export Config':`Exportovat konfiguraci`,'Import Config':`Importovat konfiguraci`,'Backup & Restore':`Záloha a obnova`,"
+"'Status':`Stav`,'Printers':`Tiskárny`,'Settings':`Nastavení`,'Add a printer':`Přidat tiskárnu`,'Cloud accounts':`Cloudové účty`,'Local printer':`Místní tiskárna`,'Add printer':`Přidat tiskárnu`,'Easiest':`Nejsnazší`,'Alpha':`Alfa`,'Save':`Uložit`,'Export Config':`Exportovat konfiguraci`,'Import Config':`Importovat konfiguraci`,'Backup & Restore':`Záloha a obnova`,'Export your printers and device settings to a file, or import a saved backup (replaces the current setup). Passwords are not exported.':`Exportujte tiskárny a nastavení zařízení do souboru, nebo importujte zálohu (nahradí aktuální konfiguraci). Hesla se neexportují.`,'Replace the printers and settings on this device with the backup file?':`Nahradit tiskárny a nastavení tohoto zařízení záložním souborem?`,'Restored. The device is restarting.':`Obnoveno. Zařízení se restartuje.`,"
 "'Save & connect':`Uložit a připojit`,'Not linked.':`Nepřipojeno.`,'Log out':`Odhlásit`,'Link Account':`Připojit účet`,'Verify':`Ověřit`,'Sign in':`Přihlásit`,'Verify code':`Ověřit kód`,'Use token':`Použít token`,'Add my printers':`Přidat mé tiskárny`,'Sign out':`Odhlásit`,'Security':`Zabezpečení`,'Save security settings':`Uložit nastavení zabezpečení`,"
 "'Load Farm':`Načíst Farm`,'Auto-update from GitHub':`Automatická aktualizace z GitHubu`,'Tap Check.':`Klepněte na Zkontrolovat.`,'Check for updates':`Zkontrolovat aktualizace`,'Update now':`Aktualizovat`,'Manual firmware upload':`Ruční nahrání firmwaru`,'Flash':`Nahrát`,'Scheduled reboot':`Plánovaný restart`,'Daily reboot at':`Denní restart v`,'Live screen':`Živá obrazovka`,'Refresh':`Obnovit`,'Language':`Jazyk`,'Save & reboot':`Uložit a restartovat`,"
 "'Theme':`Motiv`,'Pre-baked themes':`Předpřipravené motivy`,'Apply this theme':`Použít tento motiv`,'Reset to default':`Obnovit výchozí`,'Or design your own:':`Nebo si navrhněte vlastní:`,'Variant':`Varianta`,'Dark':`Tmavá`,'Light':`Světlá`,'Font':`Písmo`,'Wordmark':`Logo`,'Byline':`Podtitulek`,'Preview':`Náhled`,'Export':`Exportovat`,'Import':`Importovat`,'Save & apply':`Uložit a použít`,"
@@ -449,7 +449,7 @@ static const char INDEX_HTML[] =
 "'Name':`Název`,'Password':`Heslo`,'Email':`E-mail`,'Organization ID':`ID organizace`,'Device serial':`Sériové číslo`,'Saved.':`Uloženo.`,'Logging in...':`Přihlašování...`,'Login failed':`Přihlášení selhalo`,'Verification failed':`Ověření selhalo`,'Added!':`Přidáno!`,'Import success!':`Import úspěšný!`,'Checking...':`Kontrola...`,'Enter your Organization ID':`Zadejte ID organizace`,'Invalid skin file':`Neplatný soubor motivu`,'Invalid layout file':`Neplatný soubor rozložení`,'NOZZLE':`TRYSKA`,'HEATBED':`PODLOŽKA`,'SPEED':`RYCHLOST`,'Z AXIS':`OSA Z`,'PROGRESS':`PRŮBĚH`,'Webcam':`Kamera`,'JOB':`ÚLOHA`,'Pause':`Pozastavit`,'Stop':`Zastavit`,'PREHEAT':`PŘEDEHŘEV`,'Cooldown':`Zchladit`,'MOVE':`POHYB`,'Home':`Domů`,'ETA':`Zbývá`,'No printers yet.':`Zatím žádné tiskárny.`,'PRINTING':`TISK`,'IDLE':`NEČINNÝ`,'PAUSED':`POZASTAVENO`,'FINISHED':`DOKONČENO`,'READY':`PŘIPRAVENO`,'ERROR':`CHYBA`,'STOPPED':`ZASTAVENO`,'BUSY':`ZANEPRÁZDNĚNO`,'PREPARING':`PŘÍPRAVA`,'ATTENTION':`POZOR`,'OFFLINE':`OFFLINE`"
 "},"
 "it:{"
-"'Status':`Stato`,'Printers':`Stampanti`,'Settings':`Impostazioni`,'Add a printer':`Aggiungi una stampante`,'Cloud accounts':`Account cloud`,'Local printer':`Stampante locale`,'Add printer':`Aggiungi stampante`,'Easiest':`Più facile`,'Alpha':`Alpha`,'Save':`Salva`,'Export Config':`Esporta config`,'Import Config':`Importa config`,'Backup & Restore':`Backup e ripristino`,"
+"'Status':`Stato`,'Printers':`Stampanti`,'Settings':`Impostazioni`,'Add a printer':`Aggiungi una stampante`,'Cloud accounts':`Account cloud`,'Local printer':`Stampante locale`,'Add printer':`Aggiungi stampante`,'Easiest':`Più facile`,'Alpha':`Alpha`,'Save':`Salva`,'Export Config':`Esporta config`,'Import Config':`Importa config`,'Backup & Restore':`Backup e ripristino`,'Export your printers and device settings to a file, or import a saved backup (replaces the current setup). Passwords are not exported.':`Esporta le stampanti e le impostazioni del dispositivo in un file, o importa un backup salvato (sostituisce la configurazione attuale). Le password non vengono esportate.`,'Replace the printers and settings on this device with the backup file?':`Sostituire le stampanti e le impostazioni di questo dispositivo con il file di backup?`,'Restored. The device is restarting.':`Ripristinato. Il dispositivo si riavvia.`,"
 "'Save & connect':`Salva e connetti`,'Not linked.':`Non collegato.`,'Log out':`Esci`,'Link Account':`Collega account`,'Verify':`Verifica`,'Sign in':`Accedi`,'Verify code':`Verifica codice`,'Use token':`Usa token`,'Add my printers':`Aggiungi le mie stampanti`,'Sign out':`Disconnetti`,'Security':`Sicurezza`,'Save security settings':`Salva impostazioni sicurezza`,"
 "'Load Farm':`Carica Farm`,'Auto-update from GitHub':`Aggiornamento automatico da GitHub`,'Tap Check.':`Tocca Controlla.`,'Check for updates':`Controlla aggiornamenti`,'Update now':`Aggiorna ora`,'Manual firmware upload':`Caricamento firmware manuale`,'Flash':`Flash`,'Scheduled reboot':`Riavvio programmato`,'Daily reboot at':`Riavvio giornaliero alle`,'Live screen':`Schermo dal vivo`,'Refresh':`Aggiorna`,'Language':`Lingua`,'Save & reboot':`Salva e riavvia`,"
 "'Theme':`Tema`,'Pre-baked themes':`Temi predefiniti`,'Apply this theme':`Applica questo tema`,'Reset to default':`Ripristina predefinito`,'Or design your own:':`Oppure crea il tuo:`,'Variant':`Variante`,'Dark':`Scuro`,'Light':`Chiaro`,'Font':`Carattere`,'Wordmark':`Logo`,'Byline':`Sottotitolo`,'Preview':`Anteprima`,'Export':`Esporta`,'Import':`Importa`,'Save & apply':`Salva e applica`,"
@@ -840,6 +840,7 @@ static esp_err_t fleet_get(httpd_req_t *req)
 
 static esp_err_t config_export_get(httpd_req_t *req)
 {
+    cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < printer_store_count(); i++) {
         pp_printer_t p; if (!printer_store_get(i, &p)) continue;
@@ -850,10 +851,25 @@ static esp_err_t config_export_get(httpd_req_t *req)
         cJSON_AddStringToObject(e, "key", p.api_key);
         cJSON_AddItemToArray(arr, e);
     }
-    char *js = cJSON_PrintUnformatted(arr);
+    cJSON_AddItemToObject(root, "printers", arr);
+    /* Device settings (preferences). Secrets — the web password and screen PIN — are deliberately
+     * NOT exported (a backup file shouldn't carry access credentials). Theme and layout have their
+     * own Export/Import in the Theme/Layout tabs. */
+    cJSON *s = cJSON_CreateObject();
+    cJSON_AddNumberToObject(s, "sort", prefs_sort());
+    cJSON_AddBoolToObject(s, "hideoff", prefs_hide_offline());
+    cJSON_AddNumberToObject(s, "logo", prefs_logo());
+    cJSON_AddBoolToObject(s, "autoupd", prefs_auto_update());
+    cJSON_AddNumberToObject(s, "orient", prefs_orient());
+    cJSON_AddNumberToObject(s, "lockmin", prefs_lock_min());
+    cJSON_AddNumberToObject(s, "reboot_hour", prefs_reboot_hour());
+    cJSON_AddNumberToObject(s, "tz_offset", prefs_tz_offset());
+    cJSON_AddNumberToObject(s, "lang", prefs_lang());
+    cJSON_AddItemToObject(root, "settings", s);
+    char *js = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, js);
-    free(js); cJSON_Delete(arr);
+    free(js); cJSON_Delete(root);
     return ESP_OK;
 }
 
@@ -862,23 +878,52 @@ static esp_err_t config_import_post(httpd_req_t *req)
     char *body = recv_body(req);
     if (!body) return ESP_FAIL;
     cJSON *j = cJSON_Parse(body);
-    if (!cJSON_IsArray(j)) { if (j) cJSON_Delete(j); free(body); return ESP_FAIL; }
-    printer_store_clear();
-    const cJSON *e = NULL;
-    cJSON_ArrayForEach(e, j) {
-        pp_printer_t p = {0};
-        const cJSON *n = cJSON_GetObjectItem(e, "name");
-        const cJSON *h = cJSON_GetObjectItem(e, "host");
-        const cJSON *po = cJSON_GetObjectItem(e, "port");
-        const cJSON *k = cJSON_GetObjectItem(e, "key");
-        if (cJSON_IsString(h)) strlcpy(p.host, h->valuestring, sizeof(p.host));
-        strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
-        p.port = cJSON_IsNumber(po) ? (int)po->valuedouble : 80;
-        if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
-        if (p.host[0]) printer_store_add(&p);
+    if (!j) { free(body); return ESP_FAIL; }
+    /* Accept the legacy bare printers array AND the new {printers:[...], settings:{...}} object. */
+    cJSON *printers = cJSON_IsArray(j) ? j : cJSON_GetObjectItem(j, "printers");
+    cJSON *settings = cJSON_IsArray(j) ? NULL : cJSON_GetObjectItem(j, "settings");
+    if (!cJSON_IsArray(printers) && !cJSON_IsObject(settings)) { cJSON_Delete(j); free(body); return ESP_FAIL; }
+
+    if (cJSON_IsArray(printers)) {
+        printer_store_clear();
+        const cJSON *e = NULL;
+        cJSON_ArrayForEach(e, printers) {
+            pp_printer_t p = {0};
+            const cJSON *n = cJSON_GetObjectItem(e, "name");
+            const cJSON *h = cJSON_GetObjectItem(e, "host");
+            const cJSON *po = cJSON_GetObjectItem(e, "port");
+            const cJSON *k = cJSON_GetObjectItem(e, "key");
+            if (cJSON_IsString(h)) strlcpy(p.host, h->valuestring, sizeof(p.host));
+            strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
+            p.port = cJSON_IsNumber(po) ? (int)po->valuedouble : 80;
+            if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
+            if (p.host[0]) printer_store_add(&p);
+        }
+        app_state_printers_changed();
     }
-    app_state_printers_changed();
+
+    bool had_settings = cJSON_IsObject(settings);
+    if (had_settings) {
+        const cJSON *v;
+        if ((v = cJSON_GetObjectItem(settings, "sort"))        && cJSON_IsNumber(v)) prefs_set_sort((pp_sort_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "hideoff")))    prefs_set_hide_offline(cJSON_IsTrue(v));
+        if ((v = cJSON_GetObjectItem(settings, "logo"))        && cJSON_IsNumber(v)) prefs_set_logo((pp_logo_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "autoupd")))    prefs_set_auto_update(cJSON_IsTrue(v));
+        if ((v = cJSON_GetObjectItem(settings, "orient"))      && cJSON_IsNumber(v)) prefs_set_orient((pp_orient_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "lockmin"))     && cJSON_IsNumber(v)) prefs_set_lock_min((uint8_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "reboot_hour")) && cJSON_IsNumber(v)) prefs_set_reboot_hour((uint8_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "tz_offset"))   && cJSON_IsNumber(v)) prefs_set_tz_offset((int8_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "lang"))        && cJSON_IsNumber(v)) prefs_set_lang((uint8_t)v->valueint);
+    }
     cJSON_Delete(j); free(body);
+
+    if (had_settings) {
+        /* orientation / language / logo are baked at boot, so restart to apply the restore fully. */
+        httpd_resp_sendstr(req, "ok-reboot");
+        vTaskDelay(pdMS_TO_TICKS(400));
+        esp_restart();
+        return ESP_OK;
+    }
     httpd_resp_sendstr(req, "ok");
     return ESP_OK;
 }

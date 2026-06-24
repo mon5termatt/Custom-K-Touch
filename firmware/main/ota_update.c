@@ -126,8 +126,13 @@ bool ota_update_check(ota_check_t *out)
 
 #define OTA_IDLE (-1)   /* not running */
 #define OTA_ERR  (-2)   /* last attempt failed (distinct from idle so the UI can say so) */
-static int  s_progress = OTA_IDLE;
+static volatile int s_progress = OTA_IDLE;   /* volatile: read on other tasks (web poll, UI guard) */
 static char s_msg[80] = "";   /* last failure reason, surfaced on the web UI */
+
+/* Single-OTA guard: serialize ota_update_apply() so the background auto-updater and a manual
+ * on-device "Update now" can never both enter the (non-reentrant) esp_https_ota machine. */
+static portMUX_TYPE  s_ota_mux  = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool s_ota_busy = false;
 
 int ota_update_get_progress(void) { return s_progress; }
 const char *ota_update_get_msg(void) { return s_msg; }
@@ -136,11 +141,20 @@ static void ota_fail(esp_err_t e)
 {
     s_progress = OTA_ERR;
     strlcpy(s_msg, esp_err_to_name(e), sizeof(s_msg));
+    s_ota_busy = false;   /* release the single-OTA guard on every failure path */
 }
 
 void ota_update_apply(const char *bin_url)
 {
     if (!bin_url || !bin_url[0]) return;
+    /* Refuse a second concurrent OTA (auto-updater vs manual). Atomic test-and-set. */
+    bool busy;
+    taskENTER_CRITICAL(&s_ota_mux);
+    busy = s_ota_busy;
+    if (!busy) s_ota_busy = true;
+    taskEXIT_CRITICAL(&s_ota_mux);
+    if (busy) { ESP_LOGW(TAG, "OTA already in progress — ignoring duplicate apply"); return; }
+
     ESP_LOGI(TAG, "OTA from %s", bin_url);
     s_progress = 0; s_msg[0] = '\0';
 

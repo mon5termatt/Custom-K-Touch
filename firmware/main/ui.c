@@ -671,54 +671,146 @@ void ui_apply_printers(void *unused)
 }
 
 
+/* Force a text font on an object and ALL its descendants. lv_list buttons nest their label a level
+ * down and the LVGL theme pins it to the ASCII-only default font, so a top-level/per-item set won't
+ * reach it — recurse to the actual labels (non-text widgets just ignore text_font). */
+static void set_text_font_deep(lv_obj_t *o, const lv_font_t *f)
+{
+    lv_obj_set_style_text_font(o, f, 0);
+    uint32_t n = lv_obj_get_child_count(o);
+    for (uint32_t i = 0; i < n; i++) set_text_font_deep(lv_obj_get_child(o, i), f);
+}
+
+/* ---------- on-device firmware update check ---------- */
+static lv_obj_t *s_upd_mbox;   /* transient "checking…" / "updating…" modal (LVGL thread only) */
+
+/* lv_msgbox parts (incl. footer-button labels nested a level down) take the LVGL default ASCII-only
+ * font; deep-set the language font so accented dialog text renders. Returns o for chaining. */
+static lv_obj_t *uf(lv_obj_t *o) { if (o) set_text_font_deep(o, PP_F16); return o; }
+
+static void upd_close_cb(lv_event_t *e) { lv_msgbox_close((lv_obj_t *)lv_event_get_user_data(e)); }
+
+static void upd_apply_cb(lv_event_t *e)   /* "Update now" -> flash the checked release */
+{
+    lv_msgbox_close((lv_obj_t *)lv_event_get_user_data(e));
+    s_upd_mbox = lv_msgbox_create(NULL);
+    uf(lv_msgbox_add_title(s_upd_mbox, tr(STR_UPDATE_NOW)));
+    uf(lv_msgbox_add_text(s_upd_mbox, tr(STR_UPDATING)));   /* no buttons: applies then reboots */
+    app_state_apply_update();
+}
+
+/* Result of app_state_check_update(), scheduled on the LVGL thread. Owns arg. */
+void ui_apply_update_check(void *arg)
+{
+    pp_upd_check_t *u = (pp_upd_check_t *)arg;
+    if (s_upd_mbox) { lv_msgbox_close(s_upd_mbox); s_upd_mbox = NULL; }   /* drop the "checking…" modal */
+    lv_obj_t *m = lv_msgbox_create(NULL);
+    char buf[160];
+    if (!u || !u->ok) {
+        uf(lv_msgbox_add_title(m, tr(STR_UPDATE_FAILED)));
+        uf(lv_msgbox_add_text(m, tr(STR_UPDFAIL_MSG)));
+        lv_obj_add_event_cb(uf(lv_msgbox_add_footer_button(m, tr(STR_OK))), upd_close_cb, LV_EVENT_CLICKED, m);
+    } else if (u->available) {
+        uf(lv_msgbox_add_title(m, tr(STR_UPDATE_AVAILABLE)));
+        snprintf(buf, sizeof(buf), tr(STR_NEWVER_FMT), u->latest, u->current);
+        uf(lv_msgbox_add_text(m, buf));
+        lv_obj_t *go = uf(lv_msgbox_add_footer_button(m, tr(STR_UPDATE_NOW)));
+        lv_obj_set_style_bg_color(go, PP_ORANGE, 0);
+        lv_obj_add_event_cb(go, upd_apply_cb, LV_EVENT_CLICKED, m);
+        lv_obj_add_event_cb(uf(lv_msgbox_add_footer_button(m, tr(STR_LATER))), upd_close_cb, LV_EVENT_CLICKED, m);
+    } else {
+        uf(lv_msgbox_add_title(m, tr(STR_UP_TO_DATE)));
+        snprintf(buf, sizeof(buf), tr(STR_UPTODATE_FMT), u->current);
+        uf(lv_msgbox_add_text(m, buf));
+        lv_obj_add_event_cb(uf(lv_msgbox_add_footer_button(m, tr(STR_OK))), upd_close_cb, LV_EVENT_CLICKED, m);
+    }
+    free(u);
+}
+
+/* OTA apply failed (success reboots). Owns arg (a strdup'd message). */
+void ui_apply_update_fail(void *arg)
+{
+    char *msg = (char *)arg;
+    if (s_upd_mbox) { lv_msgbox_close(s_upd_mbox); s_upd_mbox = NULL; }
+    lv_obj_t *m = lv_msgbox_create(NULL);
+    uf(lv_msgbox_add_title(m, tr(STR_UPDATE_FAILED)));
+    uf(lv_msgbox_add_text(m, (msg && msg[0]) ? msg : tr(STR_UPDFAIL_MSG)));
+    lv_obj_add_event_cb(uf(lv_msgbox_add_footer_button(m, tr(STR_OK))), upd_close_cb, LV_EVENT_CLICKED, m);
+    free(msg);
+}
+
+static void on_check_update_clicked(lv_event_t *e)
+{
+    (void)e;
+    if (s_upd_mbox) return;   /* a check/apply is already in flight */
+    s_upd_mbox = lv_msgbox_create(NULL);
+    uf(lv_msgbox_add_title(s_upd_mbox, tr(STR_CHECK_UPDATES)));
+    uf(lv_msgbox_add_text(s_upd_mbox, tr(STR_CHECKING)));
+    app_state_check_update();
+}
+
 static void refresh_printers_list(void)
 {
     lv_obj_clean(s_pr_list);
     int n = printer_store_count();
     /* --- Device settings (top) --- */
-    lv_obj_t *hd = lv_list_add_text(s_pr_list, "DEVICE");
+    lv_obj_t *hd = lv_list_add_text(s_pr_list, tr(STR_DEVICE));
     lv_obj_set_style_text_color(hd, PP_TEXT_MUTED, 0);
 
-    lv_obj_t *pf = lv_list_add_button(s_pr_list, LV_SYMBOL_SETTINGS, "Preferences");
+    lv_obj_t *pf = lv_list_add_button(s_pr_list, LV_SYMBOL_SETTINGS, tr(STR_PREFERENCES));
     lv_obj_set_style_bg_color(pf, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(pf, PP_TEXT, 0);
     lv_obj_add_event_cb(pf, on_prefs_open, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *wf = lv_list_add_button(s_pr_list, LV_SYMBOL_WIFI, "Wi-Fi setup");
+    lv_obj_t *wf = lv_list_add_button(s_pr_list, LV_SYMBOL_WIFI, tr(STR_WIFI_SETUP));
     lv_obj_set_style_bg_color(wf, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(wf, PP_TEXT, 0);
     lv_obj_add_event_cb(wf, on_wifi_open, LV_EVENT_CLICKED, NULL);
 
+    /* Installed firmware version + manual update check (the auto-updater is silent). */
+    char fwline[64];
+    snprintf(fwline, sizeof(fwline), tr(STR_FW_FMT), PP_FW_VERSION);
+    lv_obj_t *fwi = lv_list_add_text(s_pr_list, fwline);
+    lv_obj_set_style_text_color(fwi, PP_TEXT_MUTED, 0);
+    lv_obj_t *cu = lv_list_add_button(s_pr_list, LV_SYMBOL_REFRESH, tr(STR_CHECK_UPDATES));
+    lv_obj_set_style_bg_color(cu, PP_SURFACE_HI, 0);
+    lv_obj_set_style_text_color(cu, PP_TEXT, 0);
+    lv_obj_add_event_cb(cu, on_check_update_clicked, LV_EVENT_CLICKED, NULL);
+
     /* --- Printers: add/manage from the web, not the touchscreen (issue #5). Entering API keys,
      * the Klipper host:port, or the Prusa Connect sign-in is impractical on a touch keyboard, so we
      * point users at the device's web page (QR + IP) which handles every printer type properly. --- */
-    lv_obj_t *hp = lv_list_add_text(s_pr_list, "PRINTERS");
+    lv_obj_t *hp = lv_list_add_text(s_pr_list, tr(STR_PRINTERS_HDR));
     lv_obj_set_style_text_color(hp, PP_TEXT_MUTED, 0);
 
-    lv_obj_t *mg = lv_list_add_button(s_pr_list, LV_SYMBOL_PLUS, "Add or manage printers");
+    lv_obj_t *mg = lv_list_add_button(s_pr_list, LV_SYMBOL_PLUS, tr(STR_ADD_MANAGE_PRINTERS));
     lv_obj_set_style_bg_color(mg, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(mg, PP_ORANGE, 0);
     lv_obj_add_event_cb(mg, on_add_open, LV_EVENT_CLICKED, NULL);
 
     const char *ip = wifi_ip_str();
     char info[88];
-    snprintf(info, sizeof(info), "%d configured  -  in a browser: http://%s/",
+    snprintf(info, sizeof(info), tr(STR_CONFIGURED_FMT),
              n, (ip && ip[0]) ? ip : "192.168.4.1");
     lv_obj_t *ipi = lv_list_add_text(s_pr_list, info);
     lv_obj_set_style_text_color(ipi, PP_TEXT_MUTED, 0);
 
     /* --- More --- */
-    lv_obj_t *hm = lv_list_add_text(s_pr_list, "MORE");
+    lv_obj_t *hm = lv_list_add_text(s_pr_list, tr(STR_MORE));
     lv_obj_set_style_text_color(hm, PP_TEXT_MUTED, 0);
     lv_obj_t *fm = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "Prusa Farm");
     lv_obj_set_style_bg_color(fm, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(fm, PP_TEXT, 0);
     lv_obj_add_event_cb(fm, on_farm_open, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *ab = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, "About / License");
+    lv_obj_t *ab = lv_list_add_button(s_pr_list, LV_SYMBOL_LIST, tr(STR_ABOUT));
     lv_obj_set_style_bg_color(ab, PP_SURFACE_HI, 0);
     lv_obj_set_style_text_color(ab, PP_TEXT, 0);
     lv_obj_add_event_cb(ab, on_about_open, LV_EVENT_CLICKED, NULL);
+
+    /* The list labels nest inside the item buttons and the theme pins them to the ASCII-only default
+     * font; recurse so accented text renders instead of boxes. */
+    set_text_font_deep(s_pr_list, PP_F16);
 }
 
 /* Black top bar carrying the persistent [ PRUSA | TOUCH ] wordmark (left) plus an
@@ -779,6 +871,7 @@ static void build_printers_screen(void)
     lv_obj_set_size(s_pr_list, LV_PCT(100), scr_h() - 56 - 60);   /* header + nav */
     lv_obj_align(s_pr_list, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(s_pr_list, PP_BG, 0);
+    lv_obj_set_style_text_font(s_pr_list, PP_F16, 0);   /* list items inherit: the LVGL default is ASCII-only Montserrat */
     lv_obj_set_style_border_width(s_pr_list, 0, 0);
 }
 
@@ -1002,6 +1095,7 @@ static void build_wifi_screen(void)
 
     /* Scan list: left half in landscape, full width below the form in portrait. */
     s_wifi_list = lv_list_create(s_scr_wifi);
+    lv_obj_set_style_text_font(s_wifi_list, PP_F16, 0);   /* items inherit non-ASCII-capable font */
     if (P) {
         lv_obj_set_size(s_wifi_list, scr_w(), scr_h() - 300);
         lv_obj_align(s_wifi_list, LV_ALIGN_TOP_LEFT, 0, 290);
@@ -2709,6 +2803,19 @@ static void webcam_refresh_timer_cb(lv_timer_t *t)
 void ui_init(void)
 {
     card_thumbs_clear();
+    /* The LVGL default theme pins every widget (lists, msgboxes, buttons…) to the ASCII-only
+     * Montserrat font, which overrides per-widget styles — so non-English text shows boxes. Point
+     * the theme's fonts at the language-appropriate set (Inter for non-English) BEFORE any screen is
+     * built, so the whole UI renders accents. */
+    if (i18n_lang() != LANG_EN) {
+        /* Re-init the default theme with an Inter base font so every widget (lists, msgboxes, …)
+         * renders accented text. Colors are placeholders — the skin restyles widgets per-part after
+         * this — and dark=true matches the UI. English keeps the stock theme (Montserrat). */
+        lv_display_t *disp = lv_display_get_default();
+        lv_theme_t *th = lv_theme_default_init(disp, lv_color_hex(0xFA6831), lv_color_hex(0x4E4E4E),
+                                               true, PP_F16);
+        if (th) lv_display_set_theme(disp, th);
+    }
     /* Apply the saved orientation BEFORE building screens so resolution-aware sizing
      * (scr_w()/scr_h(), LV_PCT containers) lays out for portrait (480x800) when selected. */
     ui_apply_orient(NULL);

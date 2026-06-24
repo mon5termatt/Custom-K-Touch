@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.7.7"
+#define PP_FW_VERSION "0.7.8"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU } pp_backend_t;
@@ -66,6 +66,16 @@ typedef struct {
 
 /* PNG bytes handed from the net task to the LVGL thread for decode/display. */
 typedef struct { uint8_t *data; int len; } pp_image_t;
+
+/* Result of an on-device firmware update check, handed from the net task to the LVGL
+ * thread (ui_apply_update_check). The download URL stays on the net task; the UI only
+ * needs to show versions + offer to apply. */
+typedef struct {
+    bool ok;             /* the check reached GitHub and parsed a result */
+    bool available;      /* a newer release exists                       */
+    char current[24];    /* this firmware's version                      */
+    char latest[40];     /* latest release tag                           */
+} pp_upd_check_t;
 
 /* Prusa Farm snapshot (org-scoped) handed from the net task to the LVGL thread. */
 typedef struct {

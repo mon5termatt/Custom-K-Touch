@@ -71,6 +71,7 @@ static esp_err_t be_gcode(pp_backend_t bk, const pp_printer_t *pr, const char *g
 static int              s_poll_idx;                 /* round-robin cursor             */
 static SemaphoreHandle_t s_lock;
 static QueueHandle_t    s_cmds;
+static char             s_upd_url[300];   /* download URL from the last update check (net task only) */
 
 void app_state_get(pp_status_t *out)
 {
@@ -136,6 +137,18 @@ void app_state_farm_refresh(void)
 void app_state_fetch_snapshot(void)
 {
     pp_cmd_t cmd = { .kind = PP_CMD_SNAPSHOT };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_check_update(void)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_CHECK_UPDATE };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_apply_update(void)
+{
+    pp_cmd_t cmd = { .kind = PP_CMD_APPLY_UPDATE };
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -711,6 +724,31 @@ static void run_command(const pp_cmd_t *cmd)
             vTaskDelay(pdMS_TO_TICKS(400));   /* let the NVS commit + HTTP response flush */
             esp_restart();
         }
+        return;
+    }
+    case PP_CMD_CHECK_UPDATE: {
+        ota_check_t c = {0};
+        bool ok = ota_update_check(&c);
+        /* Keep the URL only while a real update is pending, so a later "Update now" can never
+         * act on a stale URL (a failed or up-to-date check clears it). */
+        strlcpy(s_upd_url, (ok && c.available) ? c.url : "", sizeof(s_upd_url));
+        pp_upd_check_t *u = malloc(sizeof(*u));
+        if (u) {
+            u->ok = ok; u->available = c.available;
+            strlcpy(u->current, c.current, sizeof(u->current));
+            strlcpy(u->latest,  c.latest,  sizeof(u->latest));
+        }
+        /* Always notify the UI so the "checking…" modal is dismissed; a NULL arg (malloc failed)
+         * is treated by the applier as a failed check. */
+        if (pt_display_schedule_ui(ui_apply_update_check, u) != LV_RESULT_OK) free(u);
+        return;
+    }
+    case PP_CMD_APPLY_UPDATE: {
+        if (!s_upd_url[0]) return;       /* nothing checked yet */
+        ota_update_apply(s_upd_url);     /* reboots on success; its internal guard blocks a double-OTA */
+        /* Only reached on failure (or if another OTA was already running): dismiss the modal + show why. */
+        char *msg = strdup(ota_update_get_msg());
+        if (pt_display_schedule_ui(ui_apply_update_fail, msg) != LV_RESULT_OK) free(msg);
         return;
     }
     }

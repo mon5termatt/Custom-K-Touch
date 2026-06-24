@@ -65,6 +65,13 @@ void ui_apply_orient(void *unused);
 /* Apply a fetched webcam snapshot (JPEG) to the Control screen. arg: pp_image_t* (owned). */
 void ui_apply_snapshot(void *arg);
 
+/* Firmware update check result (arg: pp_upd_check_t*, owned -> freed here). Shows a dialog:
+ * update available / up to date / check failed. */
+void ui_apply_update_check(void *arg);
+/* OTA apply failed (arg: char* message, owned -> freed here). Shown only on failure;
+ * a successful apply reboots. */
+void ui_apply_update_fail(void *arg);
+
 #ifndef PP_HOST_SIM
 /* Off-screen layout preview (web "Generate preview"). The httpd handler fills spec/w/h + a binary
  * sem, schedules ui_layout_preview_render on the LVGL task, and blocks on sem; the applier renders

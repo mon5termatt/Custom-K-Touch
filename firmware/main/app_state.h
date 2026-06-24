@@ -27,6 +27,8 @@ typedef enum {
     PP_CMD_STORE_ADD,     /* add a printer (cmd.printer); routes the NVS write off the LVGL task */
     PP_CMD_STORE_UPDATE,  /* update printer at cmd.index with cmd.printer                        */
     PP_CMD_STORE_REMOVE,  /* remove printer at cmd.index                                         */
+    PP_CMD_CHECK_UPDATE,  /* query GitHub for a newer firmware -> ui_apply_update_check          */
+    PP_CMD_APPLY_UPDATE,  /* download+flash the update found by the last check (reboots)         */
 } pp_cmd_kind_t;
 
 /* Preference writes are routed through the net task because the LVGL task's stack
@@ -86,3 +88,8 @@ void app_state_wifi_connect(const char *ssid, const char *pass);
 /* Fetch a gcode thumbnail (PNG) by its ref -> ui_apply_thumb. */
 void app_state_fetch_thumb(const char *ref);
 void app_state_fetch_thumb_dash(const char *ref, int idx);
+
+/* On-device firmware update (runs off the LVGL task). check -> ui_apply_update_check;
+ * apply downloads+flashes the URL from the last successful check and reboots. */
+void app_state_check_update(void);
+void app_state_apply_update(void);
