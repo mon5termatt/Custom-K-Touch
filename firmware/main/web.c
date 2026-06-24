@@ -162,7 +162,7 @@ static const char INDEX_HTML[] =
 "<div class=muted>What the touchscreen is showing right now.</div>"
 "<img id=shot style='max-width:100%;border:1px solid #4e4e4e;margin-top:8px'></div>"
 "<div class=card><b>Language</b>"
-"<div class=muted>On-screen UI language. Saving reboots the device. Only English ships translated today; other languages also need fonts with the matching glyphs.</div>"
+"<div class=muted>UI language for the device screen and this web page. Saving reboots the device.</div>"
 "<div style='margin-top:8px'><select id=lgsel></select> <button class=p onclick=lgsave()>Save &amp; reboot</button></div></div></div>"
 "<div class=tab id=t7><div class=card><b>Theme</b>"
 "<div class=muted>Pick a pre-baked theme, or design your own from six colors. The full palette derives automatically and is contrast-checked; applying reboots the device into the theme.</div>"
@@ -228,7 +228,7 @@ static const char INDEX_HTML[] =
 "'</div>'+"
 "(r.printing?('<p class=muted style=margin:12px 0 4px 0>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'):'')+"
 "(r.ctl?cp(r,i):'')+"
-"'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';"
+"'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';wapply();"
 "try{let d=await fetch('/api/info').then(x=>x.json());document.getElementById('dev').innerHTML="
 "'<span class=muted>'+d.name+' '+d.fw+' &middot; heap '+Math.round(d.heap_free/1024)+'KB &middot; up '+d.uptime_s+'s</span>'}catch(e){}}"
 /* Per-printer control panel on each fleet card — mirrors the touchscreen Control screen.
@@ -283,12 +283,12 @@ static const char INDEX_HTML[] =
 "async function addAll(tid){if(!confirm('Add all printers from this team?'))return;"
 "let L=await fetch('/api/connect/team_printers?id='+tid).then(x=>x.json());"
 "for(let p of L)await addc(p.uuid,p.name);lp()}"
-"async function connl(){acstat.textContent='Logging in...';"
+"async function connl(){acstat.textContent=tr('Logging in...');"
 "let r=await fetch('/api/connect/login',{method:'POST',body:JSON.stringify({e:ae.value,p:ap.value,rem:arem.checked})});"
-"let j=await r.json();if(j.res=='totp'){loginform.style.display='none';totpform.style.display='block';acstat.textContent='2FA Required'}else if(j.res=='ok'){la()}else alert('Login failed')}"
+"let j=await r.json();if(j.res=='totp'){loginform.style.display='none';totpform.style.display='block';acstat.textContent='2FA Required'}else if(j.res=='ok'){la()}else alert(tr('Login failed'))}"
 "async function connt(){let r=await fetch('/api/connect/totp',{method:'POST',body:JSON.stringify({c:tc.value})});"
-"if((await r.json()).res=='ok')la();else alert('Verification failed')}"
-"async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert('Added!')}"
+"if((await r.json()).res=='ok')la();else alert(tr('Verification failed'))}"
+"async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert(tr('Added!'))}"
 "let PL=[],EI=-1;"
 "var CT='link';"  /* current add type */
 "function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
@@ -315,7 +315,7 @@ static const char INDEX_HTML[] =
 "let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch-config.json';a.click()}"
 "async function impc(){let f=icf.files[0];if(!f)return;if(!confirm('Replace ALL printers with config from '+f.name+'?'))return;"
 "let r=await fetch('/api/config/import',{method:'POST',body:f});"
-"if(r.status>=400)alert(await r.text());else{lp();alert('Import success!')}}"
+"if(r.status>=400)alert(await r.text());else{lp();alert(tr('Import success!'))}}"
 "async function savew(){await fetch('/api/wifi',{method:'POST',body:JSON.stringify({ssid:ws.value,pass:wp.value})});alert('Saved; connecting...')}"
 "async function ota(){let f=document.getElementById('fw').files[0];if(!f)return;"
 "if(f.size>5242880&&!confirm('That file is over 5 MB \\u2014 it looks like the full image, not the OTA app.bin. Upload anyway?'))return;"
@@ -323,7 +323,7 @@ static const char INDEX_HTML[] =
 "try{let r=await fetch('/update',{method:'POST',body:f});document.getElementById('otalog').textContent=await r.text()}"
 "catch(e){document.getElementById('otalog').textContent='Upload failed (the device may have rejected an oversized file).'}}"
 "let GU='';"
-"async function chk(){document.getElementById('gh').textContent='Checking...';let n=0;"
+"async function chk(){document.getElementById('gh').textContent=tr('Checking...');let n=0;"
 "const poll=async()=>{let r=await fetch('/api/update/check').then(x=>x.json());"
 "if(r.checking&&n++<6){setTimeout(poll,2000);return;}"
 "document.getElementById('gh').textContent='Current '+r.current+' / latest '+(r.latest||'?')+(r.available?' \\u2014 update available!':' \\u2014 up to date');"
@@ -335,7 +335,7 @@ static const char INDEX_HTML[] =
 "if(r.progress>=0)document.getElementById('upb').firstChild.style.width=r.progress+'%';"
 "setTimeout(p,1000)}catch(e){}};p()}"
 "function lf_init(){let o=localStorage.getItem('farmorg');if(o){forg.value=o;lf()}}"
-"async function lf(){let o=forg.value.trim();if(!o){alert('Enter your Organization ID');return}localStorage.setItem('farmorg',o);fetch('/api/connect/setorg',{method:'POST',body:o});"
+"async function lf(){let o=forg.value.trim();if(!o){alert(tr('Enter your Organization ID'));return}localStorage.setItem('farmorg',o);fetch('/api/connect/setorg',{method:'POST',body:o});"
 "fstat.innerHTML='<div class=card style=padding:12px>Loading...</div>';forders.innerHTML='';"
 "try{let s=await fetch('/api/connect/farm?org='+o).then(x=>x.json());let p=s.data.stats.printers;"
 "fstat.innerHTML='<div class=card><div class=c-head>Printers</div><div class=c-body><div class=c-grid>'+"
@@ -392,7 +392,7 @@ static const char INDEX_HTML[] =
 "async function tf_save(){var b={colors:TFC,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value};var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
 "function tf_export(){var o={name:document.getElementById('tfbrand').value||'Custom',variant:TFV,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
 "function tf_pick(){document.getElementById('tfimp').click()}"
-"function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;if(o.font!=null)document.getElementById('tffont').value=o.font;if(o.brand)document.getElementById('tfbrand').value=o.brand;if('byline' in o)document.getElementById('tfbyline').value=o.byline;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert('Invalid skin file')}};rd.readAsText(f)}"
+"function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;if(o.font!=null)document.getElementById('tffont').value=o.font;if(o.brand)document.getElementById('tfbrand').value=o.brand;if('byline' in o)document.getElementById('tfbyline').value=o.byline;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert(tr('Invalid skin file'))}};rd.readAsText(f)}"
 /* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
  * + data-attributes only, so it embeds with no escaping. ---- */
 "var LAY={cols:8,tiles:[]},LYTYPES=[],LYSEL=-1;"
@@ -432,8 +432,46 @@ static const char INDEX_HTML[] =
 "if(!r.ok){img.removeAttribute('src');img.alt='Preview failed (HTTP '+r.status+')';return}var b=await r.blob();img._u=URL.createObjectURL(b);img.src=img._u;img.alt=''}"
 "function ly_export(){var b=new Blob([JSON.stringify(LAY,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.layout.json';a.click()}"
 "function ly_pick(){document.getElementById('lyimp').click()}"
-"function ly_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);if(o.tiles){LAY={cols:o.cols||8,tiles:o.tiles};LYSEL=-1;ly_render()}}catch(x){alert('Invalid layout file')}};rd.readAsText(f)}"
-"st();la();setInterval(st,3000);"
+"function ly_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);if(o.tiles){LAY={cols:o.cols||8,tiles:o.tiles};LYSEL=-1;ly_render()}}catch(x){alert(tr('Invalid layout file'))}};rd.readAsText(f)}"
+/* ---- Web UI localization. One dictionary keyed by the English source string; a load-time
+ * DOM walk translates static text + placeholders, and t() handles dynamic JS strings. The
+ * active language follows the device setting (/api/info langcode). Missing entries fall back
+ * to English. Values use backtick template literals so apostrophes/accents need no escaping. */
+"var WL='en';"
+"var WD={"
+"cs:{"
+"'Status':`Stav`,'Printers':`Tiskárny`,'Settings':`Nastavení`,'Add a printer':`Přidat tiskárnu`,'Cloud accounts':`Cloudové účty`,'Local printer':`Místní tiskárna`,'Add printer':`Přidat tiskárnu`,'Easiest':`Nejsnazší`,'Alpha':`Alfa`,'Save':`Uložit`,'Export Config':`Exportovat konfiguraci`,'Import Config':`Importovat konfiguraci`,'Backup & Restore':`Záloha a obnova`,"
+"'Save & connect':`Uložit a připojit`,'Not linked.':`Nepřipojeno.`,'Log out':`Odhlásit`,'Link Account':`Připojit účet`,'Verify':`Ověřit`,'Sign in':`Přihlásit`,'Verify code':`Ověřit kód`,'Use token':`Použít token`,'Add my printers':`Přidat mé tiskárny`,'Sign out':`Odhlásit`,'Security':`Zabezpečení`,'Save security settings':`Uložit nastavení zabezpečení`,"
+"'Load Farm':`Načíst Farm`,'Auto-update from GitHub':`Automatická aktualizace z GitHubu`,'Tap Check.':`Klepněte na Zkontrolovat.`,'Check for updates':`Zkontrolovat aktualizace`,'Update now':`Aktualizovat`,'Manual firmware upload':`Ruční nahrání firmwaru`,'Flash':`Nahrát`,'Scheduled reboot':`Plánovaný restart`,'Daily reboot at':`Denní restart v`,'Live screen':`Živá obrazovka`,'Refresh':`Obnovit`,'Language':`Jazyk`,'Save & reboot':`Uložit a restartovat`,"
+"'Theme':`Motiv`,'Pre-baked themes':`Předpřipravené motivy`,'Apply this theme':`Použít tento motiv`,'Reset to default':`Obnovit výchozí`,'Or design your own:':`Nebo si navrhněte vlastní:`,'Variant':`Varianta`,'Dark':`Tmavá`,'Light':`Světlá`,'Font':`Písmo`,'Wordmark':`Logo`,'Byline':`Podtitulek`,'Preview':`Náhled`,'Export':`Exportovat`,'Import':`Importovat`,'Save & apply':`Uložit a použít`,"
+"'Layout':`Rozložení`,'Add tile:':`Přidat dlaždici:`,'Generate preview':`Vytvořit náhled`,'Accounts & Security':`Účty a zabezpečení`,'Firmware & Updates':`Firmware a aktualizace`,'Screen & Language':`Obrazovka a jazyk`,'Off':`Vypnuto`,"
+"'Network connection.':`Připojení k síti.`,'Org-wide printer & order status.':`Stav tiskáren a objednávek organizace.`,'Auto-update, manual flash, scheduled reboot.':`Automatická aktualizace, ruční nahrání, plánovaný restart.`,'Live screen view and UI language.':`Náhled obrazovky a jazyk rozhraní.`,'Colors, fonts, wordmark.':`Barvy, písma, logo.`,'Arrange the status tiles.':`Uspořádejte dlaždice stavu.`,'Both optional, off by default.':`Obojí volitelné, výchozí stav vypnuto.`,'What the touchscreen is showing right now.':`Co dotyková obrazovka právě zobrazuje.`,"
+"'Name':`Název`,'Password':`Heslo`,'Email':`E-mail`,'Organization ID':`ID organizace`,'Device serial':`Sériové číslo`,'Saved.':`Uloženo.`,'Logging in...':`Přihlašování...`,'Login failed':`Přihlášení selhalo`,'Verification failed':`Ověření selhalo`,'Added!':`Přidáno!`,'Import success!':`Import úspěšný!`,'Checking...':`Kontrola...`,'Enter your Organization ID':`Zadejte ID organizace`,'Invalid skin file':`Neplatný soubor motivu`,'Invalid layout file':`Neplatný soubor rozložení`,'NOZZLE':`TRYSKA`,'HEATBED':`PODLOŽKA`,'SPEED':`RYCHLOST`,'Z AXIS':`OSA Z`,'PROGRESS':`PRŮBĚH`,'Webcam':`Kamera`,'JOB':`ÚLOHA`,'Pause':`Pozastavit`,'Stop':`Zastavit`,'PREHEAT':`PŘEDEHŘEV`,'Cooldown':`Zchladit`,'MOVE':`POHYB`,'Home':`Domů`,'ETA':`Zbývá`,'No printers yet.':`Zatím žádné tiskárny.`,'PRINTING':`TISK`,'IDLE':`NEČINNÝ`,'PAUSED':`POZASTAVENO`,'FINISHED':`DOKONČENO`,'READY':`PŘIPRAVENO`,'ERROR':`CHYBA`,'STOPPED':`ZASTAVENO`,'BUSY':`ZANEPRÁZDNĚNO`,'PREPARING':`PŘÍPRAVA`,'ATTENTION':`POZOR`,'OFFLINE':`OFFLINE`"
+"},"
+"it:{"
+"'Status':`Stato`,'Printers':`Stampanti`,'Settings':`Impostazioni`,'Add a printer':`Aggiungi una stampante`,'Cloud accounts':`Account cloud`,'Local printer':`Stampante locale`,'Add printer':`Aggiungi stampante`,'Easiest':`Più facile`,'Alpha':`Alpha`,'Save':`Salva`,'Export Config':`Esporta config`,'Import Config':`Importa config`,'Backup & Restore':`Backup e ripristino`,"
+"'Save & connect':`Salva e connetti`,'Not linked.':`Non collegato.`,'Log out':`Esci`,'Link Account':`Collega account`,'Verify':`Verifica`,'Sign in':`Accedi`,'Verify code':`Verifica codice`,'Use token':`Usa token`,'Add my printers':`Aggiungi le mie stampanti`,'Sign out':`Disconnetti`,'Security':`Sicurezza`,'Save security settings':`Salva impostazioni sicurezza`,"
+"'Load Farm':`Carica Farm`,'Auto-update from GitHub':`Aggiornamento automatico da GitHub`,'Tap Check.':`Tocca Controlla.`,'Check for updates':`Controlla aggiornamenti`,'Update now':`Aggiorna ora`,'Manual firmware upload':`Caricamento firmware manuale`,'Flash':`Flash`,'Scheduled reboot':`Riavvio programmato`,'Daily reboot at':`Riavvio giornaliero alle`,'Live screen':`Schermo dal vivo`,'Refresh':`Aggiorna`,'Language':`Lingua`,'Save & reboot':`Salva e riavvia`,"
+"'Theme':`Tema`,'Pre-baked themes':`Temi predefiniti`,'Apply this theme':`Applica questo tema`,'Reset to default':`Ripristina predefinito`,'Or design your own:':`Oppure crea il tuo:`,'Variant':`Variante`,'Dark':`Scuro`,'Light':`Chiaro`,'Font':`Carattere`,'Wordmark':`Logo`,'Byline':`Sottotitolo`,'Preview':`Anteprima`,'Export':`Esporta`,'Import':`Importa`,'Save & apply':`Salva e applica`,"
+"'Layout':`Layout`,'Add tile:':`Aggiungi riquadro:`,'Generate preview':`Genera anteprima`,'Accounts & Security':`Account e sicurezza`,'Firmware & Updates':`Firmware e aggiornamenti`,'Screen & Language':`Schermo e lingua`,'Off':`Spento`,"
+"'Network connection.':`Connessione di rete.`,'Org-wide printer & order status.':`Stato stampanti e ordini dell'organizzazione.`,'Auto-update, manual flash, scheduled reboot.':`Aggiornamento automatico, flash manuale, riavvio programmato.`,'Live screen view and UI language.':`Vista schermo e lingua dell'interfaccia.`,'Colors, fonts, wordmark.':`Colori, caratteri, logo.`,'Arrange the status tiles.':`Disponi i riquadri di stato.`,'Both optional, off by default.':`Entrambi opzionali, disattivati di default.`,'What the touchscreen is showing right now.':`Cosa mostra ora il touchscreen.`,"
+"'Name':`Nome`,'Password':`Password`,'Email':`Email`,'Organization ID':`ID organizzazione`,'Device serial':`Seriale dispositivo`,'Saved.':`Salvato.`,'Logging in...':`Accesso in corso...`,'Login failed':`Accesso fallito`,'Verification failed':`Verifica fallita`,'Added!':`Aggiunto!`,'Import success!':`Importazione riuscita!`,'Checking...':`Controllo...`,'Enter your Organization ID':`Inserisci l'ID organizzazione`,'Invalid skin file':`File tema non valido`,'Invalid layout file':`File layout non valido`,'NOZZLE':`UGELLO`,'HEATBED':`PIANO`,'SPEED':`VELOCITÀ`,'Z AXIS':`ASSE Z`,'PROGRESS':`AVANZAMENTO`,'Webcam':`Webcam`,'JOB':`LAVORO`,'Pause':`Pausa`,'Stop':`Ferma`,'PREHEAT':`PRERISCALDA`,'Cooldown':`Raffredda`,'MOVE':`MUOVI`,'Home':`Home`,'ETA':`Stima`,'No printers yet.':`Nessuna stampante.`,'PRINTING':`IN STAMPA`,'IDLE':`INATTIVO`,'PAUSED':`IN PAUSA`,'FINISHED':`COMPLETATO`,'READY':`PRONTO`,'ERROR':`ERRORE`,'STOPPED':`ARRESTATO`,'BUSY':`OCCUPATO`,'PREPARING':`PREPARAZIONE`,'ATTENTION':`ATTENZIONE`,'OFFLINE':`OFFLINE`"
+"},"
+"tlh:{"
+"'Status':`Dotlh`,'Printers':`ghItlhwI'mey`,'Settings':`wIvmey`,'Wi-Fi':`Wi-Fi`,'Theme':`rItlh`,'Language':`Hol`,'Layout':`mIllogh`,'Security':`Hub`,'Save':`yIchoq`,'Refresh':`yIchu'qa'`,'Sign in':`yI'el`,'Sign out':`yImej`,'Add a printer':`ghItlhwI' yIchel`,'Network connection.':`QInHom.`,'Accounts & Security':`pongmey Hub je`,'Firmware & Updates':`mIw'a' chu'`,'Screen & Language':`HaSta Hol je`,'Live screen':`HaSta`,'Colors, fonts, wordmark.':`rItlhmey, ghItlh, degh.`,'Arrange the status tiles.':`Dotlh nav yIchenmoH.`,'Off':`chu'Ha'`,'NOZZLE':`tujwI'`,'HEATBED':`QongDaq`,'SPEED':`Do`,'Z AXIS':`Z tlhegh`,'PROGRESS':`QaptaH`,'Webcam':`mIllogh`,'JOB':`Qu'`,'Pause':`yev`,'Stop':`yImev`,'PREHEAT':`tujmoH`,'Cooldown':`bIrmoH`,'MOVE':`vIH`,'Home':`juH`,'No printers yet.':`ghItlhwI' tu'lu'be'.`,'PRINTING':`ghItlhtaH`,'IDLE':`Qong`,'PAUSED':`yevtaH`,'FINISHED':`rIntaH`,'READY':`ghuS`,'ERROR':`Qagh`,'STOPPED':`mevta'`,'BUSY':`vumtaH`,'PREPARING':`ghuStaH`,'ATTENTION':`yIqIm`,'OFFLINE':`QumHa'`"
+"},"
+"qya:{"
+"'Status':`Talma`,'Printers':`tecindor`,'Settings':`panyalë`,'Wi-Fi':`Wi-Fi`,'Theme':`canta`,'Language':`lambë`,'Layout':`panta`,'Security':`varnë`,'Save':`hepa`,'Refresh':`envinyata`,'Sign in':`mina`,'Sign out':`et`,'Add a printer':`tecindo napana`,'Network connection.':`yanwë.`,'Accounts & Security':`esselli ar varnë`,'Firmware & Updates':`carmë ar envinyar`,'Screen & Language':`henet ar lambë`,'Live screen':`henet`,'Colors, fonts, wordmark.':`quildi, tengwë, esselas.`,'Arrange the status tiles.':`panya talma parmar.`,'Off':`úsië`,'NOZZLE':`anto`,'HEATBED':`caima`,'SPEED':`lintië`,'Z AXIS':`Z tië`,'PROGRESS':`túlë`,'Webcam':`cenda`,'JOB':`carë`,'Pause':`hauta`,'Stop':`pusta`,'PREHEAT':`urya`,'Cooldown':`ringa`,'MOVE':`leva`,'Home':`mar`,'No printers yet.':`úmë tecindo.`,'PRINTING':`técala`,'IDLE':`sérëa`,'PAUSED':`hautaina`,'FINISHED':`telyaina`,'READY':`manwa`,'ERROR':`úcarë`,'STOPPED':`pustaina`,'BUSY':`mótala`,'PREPARING':`manwëa`,'ATTENTION':`tira`,'OFFLINE':`vanwa`"
+"}"
+"};"
+"function tr(s){var d=WD[WL];return d&&d[s]||s;}"
+"function wapply(){var d=WD[WL];if(!d)return;"
+"var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){var p=n.parentNode&&n.parentNode.nodeName;return(p=='SCRIPT'||p=='STYLE')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});"
+"var ns=[],n;while(n=w.nextNode())ns.push(n);"
+"ns.forEach(function(x){var raw=x.nodeValue,k=raw.trim();if(!k)return;if(d[k]){x.nodeValue=raw.replace(k,d[k]);return;}var m=k.match(/^[^A-Za-z0-9]+(.+)$/);if(m&&d[m[1]])x.nodeValue=raw.replace(m[1],d[m[1]]);});"
+"document.querySelectorAll('[placeholder]').forEach(function(e){var k=e.getAttribute('placeholder');if(d[k])e.setAttribute('placeholder',d[k]);});}"
+"async function winit(){try{var r=await fetch('/api/info').then(x=>x.json());if(r.langcode)WL=r.langcode;}catch(e){}wapply();}"
+"winit();st();la();setInterval(st,3000);"
 "</script></body></html>";
 
 static esp_err_t root_get(httpd_req_t *req)
@@ -747,6 +785,7 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "reboot_hour", prefs_reboot_hour());   /* 0..23 or 255 = off */
     cJSON_AddNumberToObject(o, "tz_offset", prefs_tz_offset());
     cJSON_AddNumberToObject(o, "lang", prefs_lang());
+    cJSON_AddStringToObject(o, "langcode", i18n_lang_code((pp_lang_t)prefs_lang()));
     /* Only languages that actually have a translation table (id = pp_lang_t value). */
     { cJSON *la = cJSON_CreateArray();
       for (int i = 0; i < LANG_COUNT; i++) {

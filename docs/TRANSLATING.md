@@ -124,6 +124,35 @@ that switch lives in `set_fonts()` in `firmware/main/skin.c`.
 
 ---
 
+## The web UI
+
+The on-device touchscreen and the browser settings page are translated by **separate**
+mechanisms. The device screen uses the C string table above; the web page uses a JavaScript
+dictionary embedded in `INDEX_HTML[]` in `firmware/main/web.c`.
+
+That dictionary (`WD`) is keyed by **the English source string** (not an enum), one block per
+language code (`cs`, `it`, `tlh`, `qya`, …). Values are backtick template literals, so
+apostrophes and accents need no escaping:
+
+```js
+WD={ cs:{ 'Settings':`Nastavení`, 'Save':`Uložit`, 'NOZZLE':`TRYSKA`, … }, it:{…} }
+```
+
+How it applies:
+- A load-time DOM walk (`wapply()`) translates every static text node + input placeholder,
+  skipping `<script>`/`<style>`. It also strips a leading icon/emoji and retries, so
+  `📶 Wi-Fi` matches the key `Wi-Fi`.
+- Dynamically-built content (the fleet/status cards) re-runs `wapply()` after rendering, and
+  one-off JS messages use `tr('English string')`.
+- The active language follows the device setting — `/api/info` returns `langcode`. There is no
+  separate web language switcher.
+
+To add/extend a web translation: edit the matching language block in `WD`. Missing keys fall
+back to English, exactly like the device table. Brand names (Prusa, Bambu), printer names, and
+material codes (PLA/PETG/ASA) are intentionally left untranslated.
+
+---
+
 ## Test your translation without a device
 
 The desktop simulator renders the real screens to a BMP (in `sim/out/`) in seconds. Set

@@ -383,6 +383,22 @@ const char *i18n_lang_label(pp_lang_t l)
     }
 }
 
+const char *i18n_lang_code(pp_lang_t l)
+{
+    switch (l) {
+        case LANG_EN: return "en";
+        case LANG_CS: return "cs";
+        case LANG_DE: return "de";
+        case LANG_FR: return "fr";
+        case LANG_ES: return "es";
+        case LANG_IT: return "it";
+        case LANG_PL: return "pl";
+        case LANG_TLH:return "tlh";
+        case LANG_QYA:return "qya";
+        default:      return "en";
+    }
+}
+
 #ifdef PP_I18N_SELFTEST
 /* ponytail: build-time-ish self check — compile this TU with -DPP_I18N_SELFTEST
  * and call i18n_selftest() once to assert every key has an English string and

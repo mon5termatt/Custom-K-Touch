@@ -77,6 +77,9 @@ pp_lang_t i18n_lang(void);
 /* Endonyms for the web picker (browser-rendered, so full UTF-8). */
 const char *i18n_lang_label(pp_lang_t l);
 
+/* Short code (en, cs, it, tlh, qya, …) — used by the web UI to pick its JS dictionary. */
+const char *i18n_lang_code(pp_lang_t l);
+
 /* True if the language has translations (English always true). Empty stub
  * languages return false so the picker can hide them. */
 bool i18n_lang_has_table(pp_lang_t l);
