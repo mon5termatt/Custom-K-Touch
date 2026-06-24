@@ -246,6 +246,86 @@ static const char *const STR[LANG_COUNT][STR_COUNT] = {
         [STR_ST_PREPARING]     = "PREPARAZIONE",
     },
     [LANG_PL] = { 0 },
+
+    /* ---- Joke languages. Best-effort fun, not certified by the KLI or the Tolkien
+     * Estate. Both use Latin transliteration (the native pIqaD/Tengwar scripts aren't
+     * in the font). Untranslated entries fall back to English. ---- */
+    [LANG_TLH] = {   /* tlhIngan Hol — Klingon. Mind the case: D H I Q S are capitals. */
+        [STR_READY]            = "ghuS",
+        [STR_OFFLINE]          = "QumHa'",
+        [STR_ATTENTION]        = "qIm",
+        [STR_PAUSE]            = "yev",
+        [STR_RESUME]           = "ruch",
+        [STR_PREHEAT]          = "tujmoH",
+        [STR_MOVE]             = "vIH",
+        [STR_PROGRESS]         = "QaptaH",
+        [STR_WEBCAM]           = "mIllogh",
+        [STR_FILE]             = "ghItlh",
+        [STR_CONNECT]          = "rar",
+        [STR_THEME]            = "rItlh",
+        [STR_LANGUAGE]         = "Hol",
+        [STR_SCREEN_ORIENTATION] = "HaSta jIH",
+        [STR_NO_ACTIVE_PRINT]  = "ghItlhtaH pagh",
+        [STR_NO_PRINTERS]      = "ghItlhwI' tu'lu'be'.",
+        [STR_STARTING]         = "taghtaH\xE2\x80\xA6",
+        [STR_LOADING]          = "Suq\xE2\x80\xA6",
+        [STR_LOADING_PREVIEW]  = "Suq\xE2\x80\xA6",
+        [STR_NOZZLE]           = "tujwI'",
+        [STR_BED]              = "QongDaq",
+        [STR_SPEED]            = "Do",
+        [STR_Z_AXIS]           = "Z tlhegh",
+        [STR_FLEET]            = "Dujmey",
+        [STR_NAV_PRINTER]      = "ghItlhwI'",
+        [STR_FILES]            = "ghItlhmey",
+        [STR_SETTINGS]         = "wIvmey",
+        [STR_ST_IDLE]          = "Qong",
+        [STR_ST_PRINTING]      = "ghItlhtaH",
+        [STR_ST_PAUSED]        = "yevtaH",
+        [STR_ST_FINISHED]      = "rIntaH",
+        [STR_ST_STOPPED]       = "mevta'",
+        [STR_ST_ERROR]         = "Qagh",
+        [STR_ST_ATTENTION]     = "yIqIm",
+        [STR_ST_BUSY]          = "vumtaH",
+        [STR_ST_PREPARING]     = "ghuStaH",
+    },
+    [LANG_QYA] = {   /* Quenya — Tolkien's High-Elven, romanized. */
+        [STR_READY]            = "manwa",
+        [STR_OFFLINE]          = "vanwa",
+        [STR_ATTENTION]        = "tira",
+        [STR_PAUSE]            = "hauta",
+        [STR_RESUME]           = "lelya",
+        [STR_PREHEAT]          = "urya",
+        [STR_MOVE]             = "leva",
+        [STR_PROGRESS]         = "túlë",
+        [STR_WEBCAM]           = "cenda",
+        [STR_FILE]             = "parma",
+        [STR_CONNECT]          = "nuta",
+        [STR_THEME]            = "canta",
+        [STR_LANGUAGE]         = "lambë",
+        [STR_SCREEN_ORIENTATION] = "henet tië",
+        [STR_NO_ACTIVE_PRINT]  = "úmë tecië",
+        [STR_NO_PRINTERS]      = "úmë tecindo.",
+        [STR_STARTING]         = "yesta\xE2\x80\xA6",
+        [STR_LOADING]          = "túla\xE2\x80\xA6",
+        [STR_LOADING_PREVIEW]  = "túla\xE2\x80\xA6",
+        [STR_NOZZLE]           = "anto",
+        [STR_BED]              = "caima",
+        [STR_SPEED]            = "lintië",
+        [STR_Z_AXIS]           = "Z tië",
+        [STR_FLEET]            = "ciryali",
+        [STR_NAV_PRINTER]      = "tecindo",
+        [STR_FILES]            = "parmar",
+        [STR_SETTINGS]         = "panyalë",
+        [STR_ST_IDLE]          = "sérëa",
+        [STR_ST_PRINTING]      = "técala",
+        [STR_ST_PAUSED]        = "hautaina",
+        [STR_ST_FINISHED]      = "telyaina",
+        [STR_ST_STOPPED]       = "pustaina",
+        [STR_ST_ERROR]         = "úcarë",
+        [STR_ST_ATTENTION]     = "tira!",
+        [STR_ST_BUSY]          = "mótala",
+        [STR_ST_PREPARING]     = "manwëa",
+    },
 };
 
 static pp_lang_t s_lang = LANG_EN;
@@ -297,6 +377,8 @@ const char *i18n_lang_label(pp_lang_t l)
         case LANG_ES: return "Español";
         case LANG_IT: return "Italiano";
         case LANG_PL: return "Polski";
+        case LANG_TLH:return "tlhIngan Hol (Klingon)";
+        case LANG_QYA:return "Quenya (Elvish)";
         default:      return "?";
     }
 }

@@ -57,6 +57,8 @@ typedef enum {
     LANG_ES,       /* Español  */
     LANG_IT,       /* Italiano */
     LANG_PL,       /* Polski   */
+    LANG_TLH,      /* tlhIngan Hol (Klingon) — for fun */
+    LANG_QYA,      /* Quenya (Elvish) — for fun       */
     LANG_COUNT
 } pp_lang_t;
 

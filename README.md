@@ -229,9 +229,10 @@ to PNG in seconds, handy for layout work without flashing.
 
 ## Translations
 
-The on-device UI is localized; English, Čeština, and Italiano ship today. All on-screen
-text lives in one file (`firmware/main/i18n.c`), so adding or completing a language is a
-single-file edit. See [`docs/TRANSLATING.md`](docs/TRANSLATING.md) for the step-by-step guide.
+The on-device UI is localized; English, Čeština, and Italiano ship today — plus
+tlhIngan Hol (Klingon) and Quenya (Elvish) for fun. All on-screen text lives in one file
+(`firmware/main/i18n.c`), so adding or completing a language is a single-file edit. See
+[`docs/TRANSLATING.md`](docs/TRANSLATING.md) for the step-by-step guide.
 
 ## Developer API
 
