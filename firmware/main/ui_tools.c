@@ -1,5 +1,6 @@
 /* Klipper Touch — Tools hub and child screens (menu-first Control replacement). */
 #include "ui.h"
+#include "usb_hid_kb.h"
 #include "app_state.h"
 #include "moonraker.h"
 #include "prefs.h"
@@ -89,6 +90,7 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text, lv_event_cb_t c
     lv_obj_set_style_radius(b, 4, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
+    ui_kb_focus_add(b);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, PP_TEXT, 0);
@@ -385,11 +387,7 @@ static void open_console(lv_event_t *e)
     app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
     lv_screen_load(s_console);
     /* HID keypad indev is created after ui_init — (re)attach entry field when opening. */
-    lv_group_t *g = lv_group_get_default();
-    if (g && s_console_ta) {
-        if (!lv_obj_get_group(s_console_ta)) lv_group_add_obj(g, s_console_ta);
-        lv_group_focus_obj(s_console_ta);
-    }
+    ui_kb_focus_set(s_console_ta);
 }
 
 static void open_macros(lv_event_t *e)
@@ -449,6 +447,7 @@ static lv_obj_t *add_hub_tile(lv_obj_t *grid, const char *label, lv_event_cb_t c
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(l);
 
+    ui_kb_focus_add(b);
     if (store) *store = b;
     return b;
 }
@@ -1119,12 +1118,7 @@ static void build_console(void)
     lv_textarea_set_placeholder_text(s_console_ta, "gcode (USB keyboard)…");
     style_console_ta(s_console_ta, true);
     lv_obj_add_event_cb(s_console_ta, on_console_ta_key, LV_EVENT_KEY, NULL);
-    /* Focus target for usb_hid_kb keypad indev (default LVGL group). */
-    lv_group_t *g = lv_group_get_default();
-    if (g) {
-        lv_group_add_obj(g, s_console_ta);
-        lv_group_focus_obj(s_console_ta);
-    }
+    ui_kb_focus_add(s_console_ta);
 
     lv_obj_t *send = make_button(s_console, "Send", on_console_send, NULL, NULL);
     lv_obj_set_size(send, 70, 40);

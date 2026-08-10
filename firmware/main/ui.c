@@ -1,5 +1,6 @@
 /* Prusa-Touch — LVGL UI implementation (Prusa-themed). */
 #include "ui.h"
+#include "usb_hid_kb.h"
 #include "app_state.h"
 #include "printer_store.h"
 #include "pandaprusa_theme.h"
@@ -326,6 +327,7 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text, lv_event_cb_t c
     lv_obj_set_style_radius(b, 4, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
+    ui_kb_focus_add(b);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, PP_TEXT, 0);
@@ -1433,6 +1435,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(c, on_card_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+    ui_kb_focus_add(c);
     if (!online) lv_obj_set_style_opa(c, LV_OPA_70, 0);   /* dim offline cards */
 
     /* ---- header strip: name (white) + flush state badge (muted tint, white text) ---- */
