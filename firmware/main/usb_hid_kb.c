@@ -34,6 +34,7 @@ typedef enum {
     NAV_NEXT,
     NAV_PREV,
     NAV_ENTER,
+    NAV_SLOT, /* arg packed: high bits unused, low byte = 1..9 */
 } nav_op_t;
 
 typedef struct {
@@ -190,12 +191,15 @@ static void nav_home(void)
 
 static void apply_nav(void *arg)
 {
-    nav_op_t op = (nav_op_t)(intptr_t)arg;
+    intptr_t v = (intptr_t)arg;
+    nav_op_t op = (nav_op_t)(v & 0xff);
+    int slot = (int)((v >> 8) & 0xff);
     switch (op) {
     case NAV_HOME:  nav_home(); break;
     case NAV_NEXT:  nav_step(+1); break;
     case NAV_PREV:  nav_step(-1); break;
     case NAV_ENTER: nav_enter(); break;
+    case NAV_SLOT:  ui_kb_dash_select(slot); break;
     default: break;
     }
 }
@@ -203,6 +207,31 @@ static void apply_nav(void *arg)
 static void schedule_nav(nav_op_t op)
 {
     (void)pt_display_schedule_ui(apply_nav, (void *)(intptr_t)op);
+}
+
+static void schedule_slot(int one_based)
+{
+    intptr_t v = (intptr_t)NAV_SLOT | ((intptr_t)one_based << 8);
+    (void)pt_display_schedule_ui(apply_nav, (void *)v);
+}
+
+static void apply_digit(void *arg)
+{
+    int d = (int)(intptr_t)arg;
+    if (d < 1 || d > 9) return;
+    /* Fleet: jump to printer N. Elsewhere: type the digit (console, etc.). */
+    if (!strcmp(ui_current_screen(), "dash")) {
+        ui_kb_dash_select(d);
+        return;
+    }
+    uint32_t ch = (uint32_t)('0' + d);
+    push_key(ch, true);
+    push_key(ch, false);
+}
+
+static void schedule_digit(int one_based)
+{
+    (void)pt_display_schedule_ui(apply_digit, (void *)(intptr_t)one_based);
 }
 
 static void handle_special_press(uint8_t key_code)
@@ -221,6 +250,14 @@ static void handle_special_press(uint8_t key_code)
     }
     if (key_code == HID_KEY_LEFT || key_code == HID_KEY_UP) {
         schedule_nav(NAV_PREV);
+        return;
+    }
+    if (key_code >= HID_KEY_1 && key_code <= HID_KEY_9) {
+        schedule_digit((int)(key_code - HID_KEY_1 + 1));
+        return;
+    }
+    if (key_code >= HID_KEY_KEYPAD_1 && key_code <= HID_KEY_KEYPAD_9) {
+        schedule_digit((int)(key_code - HID_KEY_KEYPAD_1 + 1));
         return;
     }
 }
@@ -261,7 +298,9 @@ static bool is_nav_keycode(uint8_t k)
     return k == HID_KEY_ESC || k == HID_KEY_HOME || k == HID_KEY_ENTER ||
            k == HID_KEY_KEYPAD_ENTER || k == HID_KEY_TAB ||
            k == HID_KEY_RIGHT || k == HID_KEY_LEFT ||
-           k == HID_KEY_DOWN || k == HID_KEY_UP;
+           k == HID_KEY_DOWN || k == HID_KEY_UP ||
+           (k >= HID_KEY_1 && k <= HID_KEY_9) ||
+           (k >= HID_KEY_KEYPAD_1 && k <= HID_KEY_KEYPAD_9);
 }
 
 static void keyboard_report(const uint8_t *data, int length)

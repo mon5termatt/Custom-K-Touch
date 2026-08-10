@@ -1223,20 +1223,23 @@ static void nav_settings(lv_event_t *e)
 }
 
 /* ---------- fleet dashboard ---------- */
+static int s_dash_slot_idx[PP_MAX_PRINTERS]; /* store index per on-screen slot (for 1-9 keys) */
+
+static void open_printer_at(int idx)
+{
+    if (idx < 0 || idx >= s_dash_count) return;   /* index may be stale after a remove */
+    app_state_select_printer(idx);
+    /* Render cached status immediately so detail isn't stale until the next poll. */
+    if (s_dash_items) {
+        pp_status_t *copy = malloc(sizeof(*copy));
+        if (copy) { *copy = s_dash_items[idx]; ui_apply_status(copy); }
+    }
+    lv_screen_load(s_scr_status);
+}
+
 static void on_card_clicked(lv_event_t *e)
 {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx >= 0 && idx < s_dash_count) {   /* index may be stale after a remove */
-        app_state_select_printer(idx);
-        /* Render the clicked printer's cached status immediately so the detail screen
-         * doesn't show the previously-selected printer for the seconds it takes the next
-         * cloud poll to land. ui_apply_status runs on this (LVGL) thread and frees copy. */
-        if (s_dash_items) {
-            pp_status_t *copy = malloc(sizeof(*copy));
-            if (copy) { *copy = s_dash_items[idx]; ui_apply_status(copy); }
-        }
-    }
-    lv_screen_load(s_scr_status);   /* open this printer's detail */
+    open_printer_at((int)(intptr_t)lv_event_get_user_data(e));
 }
 
 /* Printer-model renders (rasterized from Prusa Connect's SVG icons → LVGL images). */
@@ -1419,7 +1422,8 @@ static uint32_t dash_sig(const pp_dash_t *d, const int *order, int n, bool hide_
 
 /* Prusa Connect dark-card anatomy: state-tinted header strip (name + badge),
  * then a 3-column labeled telemetry grid; progress bar slot when printing. */
-static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, dash_refs_t *r)
+static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, dash_refs_t *r,
+                              int hotkey)
 {
     if (r) memset(r, 0, sizeof(*r));
     const bool online = s->online;
@@ -1466,13 +1470,23 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     lv_obj_center(bl);
     if (r) r->badge_lbl = bl;
 
+    int name_x = 12;
+    if (hotkey >= 1 && hotkey <= 9) {
+        lv_obj_t *hk = lv_label_create(head);
+        lv_label_set_text_fmt(hk, "%d", hotkey);
+        lv_obj_set_style_text_color(hk, PP_ORANGE, 0);
+        lv_obj_set_style_text_font(hk, PP_F20, 0);
+        lv_obj_align(hk, LV_ALIGN_LEFT_MID, 10, 0);
+        name_x = 28;
+    }
+
     lv_obj_t *nm = lv_label_create(head);
     lv_label_set_text(nm, s->printer_name[0] ? s->printer_name : "Printer");
     lv_obj_set_style_text_color(nm, PP_TEXT, 0);
     lv_obj_set_style_text_font(nm, PP_F20, 0);
     lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(nm, 226);
-    lv_obj_align(nm, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_set_width(nm, hotkey >= 1 && hotkey <= 9 ? 210 : 226);
+    lv_obj_align(nm, LV_ALIGN_LEFT_MID, name_x, 0);
     if (r) r->name_lbl = nm;
 
     /* ---- identity row: thumbnail slot + model + firmware ---- */
@@ -1601,10 +1615,12 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
  * against, matching the grid background exactly. */
 static void dash_build_slot(int slot, const pp_status_t *s, int idx)
 {
+    int hotkey = (slot < 9) ? (slot + 1) : 0;
+    s_dash_slot_idx[slot] = idx;
     if (!s_card_snap[slot])
         s_card_snap[slot] = lv_draw_buf_create(DASH_CARD_W, DASH_CARD_H, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
     if (!s_card_host || !s_card_snap[slot]) {
-        make_printer_card(s_dash_grid, s, idx, &s_dref[slot]);   /* fallback: live card */
+        make_printer_card(s_dash_grid, s, idx, &s_dref[slot], hotkey);   /* fallback: live card */
         return;
     }
     lv_obj_t *wrap = lv_obj_create(s_card_host);
@@ -1614,13 +1630,15 @@ static void dash_build_slot(int slot, const pp_status_t *s, int idx)
     lv_obj_set_style_border_width(wrap, 0, 0);
     lv_obj_set_style_pad_all(wrap, 0, 0);
     lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-    make_printer_card(wrap, s, idx, &s_dref[slot]);
+    make_printer_card(wrap, s, idx, &s_dref[slot], hotkey);
     s_card_wrap[slot] = wrap;
 
     lv_obj_t *img = lv_image_create(s_dash_grid);
     lv_obj_set_size(img, DASH_CARD_W, DASH_CARD_H);
     lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(img, on_card_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+    /* Visible hit target is the snapshot image, not the off-screen live card. */
+    ui_kb_focus_add(img);
     s_card_img[slot] = img;
     dash_snapshot_slot(slot);
 }
@@ -2029,7 +2047,7 @@ void ui_apply_dashboard(void *arg)
         int idx = order[k];                              /* original store index */
         if (hide_off && !d->items[idx].online) continue;
         if (shown < PP_MAX_PRINTERS) dash_build_slot(shown, &d->items[idx], idx);
-        else make_printer_card(s_dash_grid, &d->items[idx], idx, NULL);
+        else make_printer_card(s_dash_grid, &d->items[idx], idx, NULL, 0);
         shown++;
     }
     if (shown == 0) {
@@ -2847,6 +2865,15 @@ void ui_request_screen(const char *name)
     if (!copy) return;
     strlcpy(copy, name, 24);
     if (pt_display_schedule_ui(ui_apply_nav, copy) != LV_RESULT_OK) free(copy);
+}
+
+/* USB keyboard: open fleet printer by on-screen hotkey 1..9. LVGL thread only. */
+void ui_kb_dash_select(int one_based)
+{
+    if (lv_screen_active() != s_scr_dash) return;
+    int slot = one_based - 1;
+    if (slot < 0 || slot >= s_dref_n || slot >= 9) return;
+    open_printer_at(s_dash_slot_idx[slot]);
 }
 
 const char *ui_current_screen(void)

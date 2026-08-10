@@ -53,6 +53,8 @@ void ui_apply_thumb_dash(void *arg);          /* arg: pp_thumb_dash_t* */
  * LVGL thread); names: dash, status, control, files, printers, wifi, about. */
 void ui_request_screen(const char *name);
 const char *ui_current_screen(void);          /* active screen name (test verify) */
+/* Fleet hotkey 1..9 — call on LVGL thread (or via usb_hid_kb). */
+void ui_kb_dash_select(int one_based);
 
 /* Apply the logo preference (show/hide wordmark bylines). Scheduled on the LVGL
  * thread by app_state after the NVS write. arg unused. */
