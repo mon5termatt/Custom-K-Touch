@@ -289,9 +289,16 @@ static void on_file_clicked(lv_event_t *e)
     lv_label_set_text(s_fd_name, s_files[idx].display[0] ? s_files[idx].display
                                                          : s_files[idx].path);
     thumb_clear();
-    if (s_files[idx].thumb[0]) {
+    /* Moonraker stashes the gcode path in thumb (may truncate); PrusaLink uses a URL.
+     * If thumb is a prefix of path, use the full path for the fetch. */
+    const char *tref = s_files[idx].thumb;
+    if (tref[0] && s_files[idx].path[0] &&
+        strncmp(s_files[idx].path, tref, strlen(tref)) == 0) {
+        tref = s_files[idx].path;
+    }
+    if (tref[0]) {
         thumb_show_loading(true);
-        app_state_fetch_thumb(s_files[idx].thumb);   /* -> ui_apply_thumb */
+        app_state_fetch_thumb(tref);   /* -> ui_apply_thumb */
     } else {
         lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
         thumb_show_loading(false);
@@ -3103,8 +3110,14 @@ void ui_apply_thumb(void *arg)
     /* Uniform downscale-to-fit (never upscale) within the 340x280 viewport. */
     lv_image_header_t hdr;
     uint32_t scale = LV_SCALE_NONE;   /* 256 = 1x */
-    if (lv_image_decoder_get_info(&s_thumb_dsc, &hdr) == LV_RESULT_OK
-        && hdr.w > 0 && hdr.h > 0) {
+    if (lv_image_decoder_get_info(&s_thumb_dsc, &hdr) != LV_RESULT_OK
+        || hdr.w < 1 || hdr.h < 1) {
+        thumb_clear();
+        lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
+        return;
+    }
+    {
         uint32_t sx = (340u * LV_SCALE_NONE) / hdr.w;
         uint32_t sy = (280u * LV_SCALE_NONE) / hdr.h;
         scale = sx < sy ? sx : sy;

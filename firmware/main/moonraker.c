@@ -90,6 +90,24 @@ static void q_encode(const char *in, char *out, size_t n)
     out[o] = '\0';
 }
 
+/* Percent-encode a URL path, keeping '/' as a separator (spaces, unicode, etc.). */
+static void path_encode(const char *in, char *out, size_t n)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 4 < n; p++) {
+        unsigned char c = *p;
+        if (c == '/' ||
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+            out[o++] = (char)c;
+        } else {
+            out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 0xF];
+        }
+    }
+    out[o] = '\0';
+}
+
 bool moonraker_probe(const pp_printer_t *pr)
 {
     resp_t r = {0};
@@ -336,39 +354,89 @@ esp_err_t moonraker_fetch_thumb(const pp_printer_t *pr, const char *gcode_path,
     char enc[220], meta_path[280];
     const char *rel = (gcode_path[0] == '/') ? gcode_path + 1 : gcode_path;
     q_encode(rel, enc, sizeof(enc));
-    snprintf(meta_path, sizeof(meta_path), "/server/files/metadata?filename=%s", enc);
+
+    /* Prefer /server/files/thumbnails — thumbnail_path is relative to gcodes root
+     * (correct for nested folders). Fall back to metadata.relative_path + dirname. */
+    char best_rel[200] = {0};   /* path under gcodes/, e.g. sub/.thumbs/x.png */
+    snprintf(meta_path, sizeof(meta_path), "/server/files/thumbnails?filename=%s", enc);
 
     resp_t r = {0};
     int sc = 0;
-    if (do_request(pr, HTTP_METHOD_GET, meta_path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
+    if (do_request(pr, HTTP_METHOD_GET, meta_path, &r, &sc) == ESP_OK && sc == 200 && r.buf) {
+        cJSON *root = cJSON_Parse(r.buf);
+        free(r.buf); r.buf = NULL;
+        if (root) {
+            /* Result is a bare array of {width,height,size,thumbnail_path}. */
+            cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "result");
+            if (!cJSON_IsArray(arr)) arr = root;
+            int best_area = -1;
+            cJSON *it = NULL;
+            cJSON_ArrayForEach(it, arr) {
+                cJSON *tp = cJSON_GetObjectItemCaseSensitive(it, "thumbnail_path");
+                int w = (int)jnum(it, "width", 0);
+                int h = (int)jnum(it, "height", 0);
+                if (!cJSON_IsString(tp) || !tp->valuestring) continue;
+                int area = w * h;
+                if (area >= best_area) {
+                    best_area = area;
+                    strlcpy(best_rel, tp->valuestring, sizeof(best_rel));
+                }
+            }
+            cJSON_Delete(root);
+        }
+    } else {
+        free(r.buf); r.buf = NULL;
+    }
+
+    if (!best_rel[0]) {
+        snprintf(meta_path, sizeof(meta_path), "/server/files/metadata?filename=%s", enc);
+        r = (resp_t){0};
+        sc = 0;
+        if (do_request(pr, HTTP_METHOD_GET, meta_path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
+            ESP_LOGW(TAG, "thumb meta fail %s sc=%d", rel, sc);
+            free(r.buf);
+            return ESP_FAIL;
+        }
+        cJSON *root = cJSON_Parse(r.buf);
         free(r.buf);
-        return ESP_FAIL;
+        if (!root) return ESP_FAIL;
+
+        cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+        cJSON *thumbs = res ? cJSON_GetObjectItemCaseSensitive(res, "thumbnails") : NULL;
+        const char *best = NULL;
+        int best_area = -1;
+        cJSON *it = NULL;
+        cJSON_ArrayForEach(it, thumbs) {
+            cJSON *rp = cJSON_GetObjectItemCaseSensitive(it, "relative_path");
+            int w = (int)jnum(it, "width", 0);
+            int h = (int)jnum(it, "height", 0);
+            if (!cJSON_IsString(rp) || !rp->valuestring) continue;
+            int area = w * h;
+            if (area >= best_area) { best_area = area; best = rp->valuestring; }
+        }
+        if (!best) {
+            ESP_LOGW(TAG, "thumb none for %s", rel);
+            cJSON_Delete(root);
+            return ESP_FAIL;
+        }
+        /* relative_path is relative to the gcode's parent directory, not gcodes/. */
+        const char *slash = strrchr(rel, '/');
+        if (slash) {
+            snprintf(best_rel, sizeof(best_rel), "%.*s/%s",
+                     (int)(slash - rel), rel, best);
+        } else {
+            strlcpy(best_rel, best, sizeof(best_rel));
+        }
+        cJSON_Delete(root);
     }
-    cJSON *root = cJSON_Parse(r.buf);
-    free(r.buf);
-    if (!root) return ESP_FAIL;
 
-    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
-    cJSON *thumbs = res ? cJSON_GetObjectItemCaseSensitive(res, "thumbnails") : NULL;
-    const char *best = NULL;
-    int best_area = -1;
-    cJSON *it = NULL;
-    cJSON_ArrayForEach(it, thumbs) {
-        cJSON *rp = cJSON_GetObjectItemCaseSensitive(it, "relative_path");
-        int w = (int)jnum(it, "width", 0);
-        int h = (int)jnum(it, "height", 0);
-        if (!cJSON_IsString(rp) || !rp->valuestring) continue;
-        int area = w * h;
-        if (area >= best_area) { best_area = area; best = rp->valuestring; }
-    }
-    if (!best) { cJSON_Delete(root); return ESP_FAIL; }
-
-    /* relative_path is under the gcodes root (often .thumbs/...). */
-    char thumb_url[300];
-    snprintf(thumb_url, sizeof(thumb_url), "/server/files/gcodes/%s", best);
-    cJSON_Delete(root);
-
-    return get_bytes(pr, thumb_url, out, out_len);
+    char thumb_url[360], thumb_enc[400];
+    snprintf(thumb_url, sizeof(thumb_url), "/server/files/gcodes/%s", best_rel);
+    path_encode(thumb_url, thumb_enc, sizeof(thumb_enc));
+    ESP_LOGI(TAG, "thumb get %s", thumb_enc);
+    esp_err_t ge = get_bytes(pr, thumb_enc, out, out_len);
+    if (ge != ESP_OK) ESP_LOGW(TAG, "thumb download fail %s", thumb_enc);
+    return ge;
 }
 
 esp_err_t moonraker_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *out_len)

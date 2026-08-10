@@ -607,19 +607,26 @@ static void run_command(const pp_cmd_t *cmd)
         wifi_save_and_connect(cmd->path, cmd->arg2);
         return;
     case PP_CMD_THUMB: {
+        /* Always notify UI — otherwise "Loading preview…" sticks forever on failure. */
+        uint8_t *buf = NULL; int len = 0;
+        esp_err_t tr = ESP_FAIL;
         if (cmd->path[0]) {
-            uint8_t *buf = NULL; int len = 0;
-            esp_err_t tr = moon ? moonraker_fetch_thumb(&apr, cmd->path, &buf, &len)
-                                : prusalink_get_blob(cmd->path, &buf, &len);
-            if (tr == ESP_OK) {
-                pp_image_t *im = malloc(sizeof(*im));
-                if (im) {
-                    im->data = buf; im->len = len;
-                    if (pt_display_schedule_ui(ui_apply_thumb, im) != LV_RESULT_OK) { free(buf); free(im); }
-                } else {
-                    free(buf);
-                }
+            tr = moon ? moonraker_fetch_thumb(&apr, cmd->path, &buf, &len)
+                      : prusalink_get_blob(cmd->path, &buf, &len);
+        }
+        pp_image_t *im = malloc(sizeof(*im));
+        if (im) {
+            if (tr == ESP_OK && buf && len > 0) {
+                im->data = buf; im->len = len;
+            } else {
+                free(buf);
+                im->data = NULL; im->len = 0;
             }
+            if (pt_display_schedule_ui(ui_apply_thumb, im) != LV_RESULT_OK) {
+                free(im->data); free(im);
+            }
+        } else {
+            free(buf);
         }
         return;
     }

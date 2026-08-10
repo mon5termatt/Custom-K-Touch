@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.8.2"
+#define PP_FW_VERSION "0.8.3"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU } pp_backend_t;
@@ -57,7 +57,7 @@ typedef struct {
 typedef struct {
     char path[160];           /* path usable in print/start (display or name)*/
     char display[96];         /* human-friendly name                         */
-    char thumb[128];          /* refs.thumbnail URL (PNG; auth'd) or empty   */
+    char thumb[160];          /* Moonraker: gcode path; PrusaLink: thumb URL */
     char meta[40];            /* Connect-style row metadata (date + material)*/
     uint32_t mtime;           /* m_timestamp (epoch) — newest-first sort key  */
     bool is_folder;
