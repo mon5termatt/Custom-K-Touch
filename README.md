@@ -1,13 +1,12 @@
 # Klipper Touch
 
 A community touchscreen for your 3D printers, built on the **BigTreeTech K-Touch** (5")
-and **Panda Touch**. **Klipper / Moonraker first** — add Fluidd/Mainsail hosts over your
-LAN (no companion app). Optional backends for PrusaLink, Prusa Connect, and Bambu stay
-available but are secondary in the UI.
+and **Panda Touch**. Point it at Moonraker (Fluidd / Mainsail / OpenCentauri, etc.) over
+your LAN — no companion app. Optional Bambu (and legacy Prusa) backends remain in the
+add-printer list if you need them.
 
-> Fork of the Prusa Touch / Prusa-Connect-Touch community firmware.
-> **Not affiliated with or endorsed by Prusa Research.** "Prusa" and "Prusa Connect" are
-> trademarks of Prusa Research.
+> Community fork of earlier Prusa-oriented touchscreen firmware.
+> **Not affiliated with BigTreeTech or Prusa Research.**
 
 <img src="docs/img/fleet-dashboard.png" alt="Fleet dashboard" width="640">
 
@@ -27,20 +26,16 @@ with the desktop simulator.)
   thumbnails and start a print with a tap. Plugged a USB stick into the printer? Switch the
   Files header between the printer's storage and the USB drive, the way the stock K-Touch
   screen does.
-- **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Macros, Console, Tune,
-  Calibration (endstops / PID / Z-offset / bed mesh), and AFC when BoxTurtle lanes are
-  detected. Underscore macros (`_NAME`) stay hidden. Commands run on a dedicated worker so
-  jog / temps don’t wait behind fleet polls.
+- **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Macros, Console
+  (read-only gcode log for now), Tune, Calibration (endstops / PID / Z-offset / bed mesh),
+  and AFC when BoxTurtle lanes are detected. Underscore macros (`_NAME`) stay hidden.
+  Commands run on a dedicated worker so jog / temps don’t wait behind fleet polls.
 - **Klipper / Moonraker (primary).** Add `host`, `host:7125`, or Moonraker on port 80
   (e.g. OpenCentauri); optional API key. Status, files, print control, thumbnails, webcam,
   and console when Moonraker exposes them.
-- **Needs-attention dialogs.** When a Prusa Connect printer wants attention, its dialog shows
-  up on the detail screen with the same buttons you'd see in Connect.
-- **Prusa Connect (optional).** Sign in once and pull a Prusa fleet; demoted in the add-printer
-  picker but fully kept.
 - **Bambu Lab (optional).** LAN or cloud Bambu printers alongside Klipper.
-- **Guided "Add a printer".** Klipper first, then PrusaLink / Bambu LAN, then optional cloud
-  accounts. Works the same on the touchscreen and the web UI.
+- **Guided "Add a printer".** Klipper first, then Bambu LAN / optional cloud accounts.
+  Works the same on the touchscreen and the web UI.
 - **Optional security.** Off by default: set a **web password** to put the web interface behind
   a login, and/or a **screen lock** that asks for a PIN before actions after a few idle minutes
   (you can still browse the fleet while locked).
@@ -53,16 +48,14 @@ with the desktop simulator.)
   default) to have it pull releases from GitHub on its own.
 
 ## Supported printers
-- **Klipper** over **Moonraker** (recommended) — anything you'd reach with Fluidd or Mainsail.
+- **Klipper** over **Moonraker** — anything you'd reach with Fluidd or Mainsail.
   Add the host (port **7125** by default, `host:7125`, or Moonraker on **:80** such as
   OpenCentauri).
-- **Prusa** over **PrusaLink** — MK4 / MK4S / MK3.5 / MK3.9 / MINI / CORE One / XL
-  (Buddy-embedded PrusaLink), and Pi-hosted PrusaLink. Add the printer's IP + API key.
-- **Prusa Connect** (optional) — any printer on your Prusa account, added by signing in (see
-  [Connecting to Prusa Connect](#connecting-to-prusa-connect)).
 - **Bambu Lab** — X1 / P1 / A1 series over the LAN (add the IP, LAN Access Code, and serial),
   or via your Bambu account (see [Connecting to Bambu Lab](#connecting-to-bambu-lab)). LAN
   control needs the printer in **LAN Mode** with **Developer Mode** enabled.
+- **Prusa** (legacy) — PrusaLink / Connect still work if you have one; they aren’t the focus
+  of this fork.
 
 ## Hardware
 
@@ -115,49 +108,7 @@ Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/othe
 1. First boot shows a Wi-Fi setup page.
 2. Pick your network on-screen, or join the `KlipperTouch-XXXX` hotspot from your phone and open `http://192.168.4.1`.
 3. Once connected, open the web UI or use Add printer and pick **Klipper (Moonraker)** —
-   enter the host (`7125` by default, or `:80` for hosts like OpenCentauri). Prusa / Bambu
-   remain available further down.
-
-## Connecting to Prusa Connect
-
-Signing in adds **every printer on your Prusa account in one step**: no hunting for IP
-addresses or API keys, and it reaches the Buddy-embedded printers (MK4, MINI, CORE One, XL)
-you'd otherwise only see in the cloud.
-
-1. Find the touchscreen's address. It's on the device's **Settings → About** screen, e.g.
-   `http://192.168.0.42/`. Open that in a browser on the same network.
-2. Click the **Account** tab, then **Link Account**.
-3. Enter your Prusa account email and password. With two-factor on, you'll be asked for your
-   6-digit code next.
-4. Done. Your printers show up on the dashboard within a few seconds. Tap one for live
-   status, files, and control.
-
-> By default the password is only used to sign in and isn't kept, just the resulting session
-> token, same as the Prusa Connect website. Tick **"Stay signed in"** and the device also
-> saves your password (in flash) so it can re-link on its own if the session ever fully
-> expires. Fine for a device you control; leave it off if someone else could read the flash.
-> Either way the session token already lives in flash, so treat the device as holding account
-> access.
-
-### Staying connected when your sign-in expires
-
-Connect sessions don't last forever. The device **learns each printer's LAN address and
-PrusaLink key** the first time it sees the printer after you link your account. If the Connect
-sign-in later lapses, it falls back to talking to each printer **directly over your LAN**, and
-status / files / control keep working.
-
-If you ticked **"Stay signed in"**, it goes further and **re-links automatically** with your
-saved login, no action needed. (Not possible with two-factor accounts, which need a fresh code
-each time.)
-
-Otherwise you'll see a one-line banner on the dashboard:
-
-> ⚠ *Prusa Connect sign-in expired. Reconnect from http://&lt;device-ip&gt;/ → Account.
-> Local printers stay reachable.*
-
-To restore the cloud link, open the device's web page, go to the **Account** tab, and
-**Link Account** again. You never type credentials on the touchscreen; re-auth happens on a
-real keyboard.
+   enter the host (`7125` by default, or `:80` for hosts like OpenCentauri).
 
 ## Connecting to Bambu Lab
 
@@ -215,7 +166,7 @@ Bambu account.
 
 > [!NOTE]
 > The full `klipper-touch-full.bin` writes from `0x0` and **resets stored settings** (Wi-Fi,
-> linked account, configured printers). Great for a first install, but re-flashing it later
+> accounts, configured printers). Great for a first install, but re-flashing it later
 > wipes your config. To update an existing device, use the in-app **OTA** (Firmware tab /
 > automatic updates), which keeps your settings.
 
