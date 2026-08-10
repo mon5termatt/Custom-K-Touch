@@ -582,24 +582,31 @@ static void build_status_screen(void)
         lv_obj_add_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* ---- action buttons ---- landscape: 4 in a row near the bottom;
-     * portrait: 2x2 grid under the job/attention card ---- */
+    /* ---- action buttons ---- landscape: 4 centered near the bottom;
+     * portrait: centered 2x2 under the job/attention card ---- */
     lv_obj_t *pause_btn = make_button(s_scr_status, tr(STR_PAUSE), on_pause_clicked, NULL, &s_btn_pause_lbl);
     lv_obj_t *stop_btn  = make_button(s_scr_status, "Stop", on_stop_clicked, NULL, NULL);
     lv_obj_t *files_btn = make_button(s_scr_status, tr(STR_FILES), on_files_clicked, NULL, NULL);
     s_btn_control = make_button(s_scr_status, tr(STR_TOOLS), on_control_clicked, NULL, NULL);
-    if (P) {
-        /* Portrait: sit the 2x2 buttons directly under the job/attention card (which ends ~y430)
-         * instead of pinning them to the bottom — bottom-pinning left a ~160px dead band mid-screen. */
-        lv_obj_align(pause_btn,     LV_ALIGN_TOP_LEFT,  16, 452);
-        lv_obj_align(stop_btn,      LV_ALIGN_TOP_RIGHT, -16, 452);
-        lv_obj_align(files_btn,     LV_ALIGN_TOP_LEFT,  16, 524);
-        lv_obj_align(s_btn_control, LV_ALIGN_TOP_RIGHT, -16, 524);
-    } else {
-        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, 16,  -16);
-        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, 180, -16);
-        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, 344, -16);
-        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -16);
+    {
+        const int bw = 150, gap = 16;
+        if (P) {
+            int row_w = 2 * bw + gap;
+            int x0 = (scr_w() - row_w) / 2;
+            if (x0 < 8) x0 = 8;
+            lv_obj_align(pause_btn,     LV_ALIGN_TOP_LEFT, x0, 452);
+            lv_obj_align(stop_btn,      LV_ALIGN_TOP_LEFT, x0 + bw + gap, 452);
+            lv_obj_align(files_btn,     LV_ALIGN_TOP_LEFT, x0, 524);
+            lv_obj_align(s_btn_control, LV_ALIGN_TOP_LEFT, x0 + bw + gap, 524);
+        } else {
+            int total = 4 * bw + 3 * gap;
+            int x0 = (scr_w() - total) / 2;
+            if (x0 < 8) x0 = 8;
+            lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, x0, -16);
+            lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, x0 + (bw + gap), -16);
+            lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, x0 + 2 * (bw + gap), -16);
+            lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, x0 + 3 * (bw + gap), -16);
+        }
     }
     lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
 }
