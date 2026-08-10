@@ -28,6 +28,7 @@ static lv_obj_t *s_hub_afc_btn;
 static lv_obj_t *s_hub_moon_btns[6]; /* macros, console, tune, calib — hide for non-Moonraker */
 
 static lv_obj_t *s_console_log;
+static lv_obj_t *s_console_ta;
 static lv_obj_t *s_macros_grid;
 static lv_obj_t *s_endstop_grid;
 static lv_obj_t *s_endstop_status;
@@ -383,6 +384,12 @@ static void open_console(lv_event_t *e)
     (void)e;
     app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
     lv_screen_load(s_console);
+    /* HID keypad indev is created after ui_init — (re)attach entry field when opening. */
+    lv_group_t *g = lv_group_get_default();
+    if (g && s_console_ta) {
+        if (!lv_obj_get_group(s_console_ta)) lv_group_add_obj(g, s_console_ta);
+        lv_group_focus_obj(s_console_ta);
+    }
 }
 
 static void open_macros(lv_event_t *e)
@@ -1046,13 +1053,31 @@ void ui_apply_afc(void *arg)
     free(a);
 }
 
-/* ---- Console (read-only log for now; gcode entry not wired to a keyboard) ---- */
+/* ---- Console (USB-A HID keyboard for gcode entry when plugged in) ---- */
+static void on_console_send(lv_event_t *e)
+{
+    (void)e;
+    if (ui_locked_block_public()) return;
+    if (!s_console_ta) return;
+    const char *t = lv_textarea_get_text(s_console_ta);
+    if (t && t[0]) {
+        app_state_post_cmd(PP_CMD_GCODE, t);
+        lv_textarea_set_text(s_console_ta, "");
+        app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
+    }
+}
+
 static void on_console_refresh(lv_event_t *e)
 {
     (void)e; app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
 }
 
-static void style_console_ta(lv_obj_t *ta)
+static void on_console_ta_key(lv_event_t *e)
+{
+    if (lv_event_get_key(e) == LV_KEY_ENTER) on_console_send(e);
+}
+
+static void style_console_ta(lv_obj_t *ta, bool editable)
 {
     /* Near-black field — default LVGL textarea is white and blinding on this UI. */
     lv_obj_set_style_bg_color(ta, PP_HEADER, LV_PART_MAIN);
@@ -1062,7 +1087,12 @@ static void style_console_ta(lv_obj_t *ta)
     lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
     lv_obj_set_style_radius(ta, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_all(ta, 8, LV_PART_MAIN);
-    lv_obj_set_style_opa(ta, LV_OPA_TRANSPARENT, LV_PART_CURSOR);
+    if (editable) {
+        lv_obj_set_style_bg_color(ta, PP_ORANGE, LV_PART_CURSOR);
+        lv_obj_set_style_text_color(ta, PP_TEXT_MUTED, LV_PART_TEXTAREA_PLACEHOLDER);
+    } else {
+        lv_obj_set_style_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR);
+    }
     lv_obj_set_style_bg_color(ta, PP_SURFACE_HI, LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_SCROLLBAR);
 }
@@ -1074,14 +1104,31 @@ static void build_console(void)
     make_hdr(s_console, tr(STR_CONSOLE), go_hub);
 
     s_console_log = lv_textarea_create(s_console);
-    lv_obj_set_size(s_console_log, tw() - 32, th() - 130);
+    lv_obj_set_size(s_console_log, tw() - 32, th() - 180);
     lv_obj_align(s_console_log, LV_ALIGN_TOP_MID, 0, 64);
     lv_textarea_set_text(s_console_log, "");
     lv_obj_set_style_text_font(s_console_log, PP_F12, 0);
     lv_obj_clear_flag(s_console_log, LV_OBJ_FLAG_CLICK_FOCUSABLE);
     lv_textarea_set_cursor_click_pos(s_console_log, false);
-    style_console_ta(s_console_log);
+    style_console_ta(s_console_log, false);
 
+    s_console_ta = lv_textarea_create(s_console);
+    lv_obj_set_size(s_console_ta, tw() - 200, 40);
+    lv_obj_align(s_console_ta, LV_ALIGN_BOTTOM_LEFT, 16, -16);
+    lv_textarea_set_one_line(s_console_ta, true);
+    lv_textarea_set_placeholder_text(s_console_ta, "gcode (USB keyboard)…");
+    style_console_ta(s_console_ta, true);
+    lv_obj_add_event_cb(s_console_ta, on_console_ta_key, LV_EVENT_KEY, NULL);
+    /* Focus target for usb_hid_kb keypad indev (default LVGL group). */
+    lv_group_t *g = lv_group_get_default();
+    if (g) {
+        lv_group_add_obj(g, s_console_ta);
+        lv_group_focus_obj(s_console_ta);
+    }
+
+    lv_obj_t *send = make_button(s_console, "Send", on_console_send, NULL, NULL);
+    lv_obj_set_size(send, 70, 40);
+    lv_obj_align(send, LV_ALIGN_BOTTOM_RIGHT, -90, -16);
     lv_obj_t *ref = make_button(s_console, LV_SYMBOL_REFRESH, on_console_refresh, NULL, NULL);
     lv_obj_set_size(ref, 50, 40);
     lv_obj_align(ref, LV_ALIGN_BOTTOM_RIGHT, -16, -16);

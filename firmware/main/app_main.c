@@ -35,6 +35,7 @@
 #include "pandatouch_msc.h"
 #include "pandatouch_lvgl_msc.h"
 #include "netlog.h"
+#include "usb_hid_kb.h"
 
 static const char *TAG = "prusa-touch";
 
@@ -76,6 +77,7 @@ void app_main(void)
      * free — whichever installs first wins, and WiFi adapts if USB took it (not the
      * other way round). Non-fatal inside pt_usb_start(), so a failure won't brick. */
     pt_usb_start();            /* USB MSC host (Print-from-USB) */
+    usb_hid_kb_start();        /* USB-A HID keyboard (experimental; shares host w/ MSC) */
     vTaskDelay(pdMS_TO_TICKS(100));
 
     ui_boot_update(30, "Connecting WiFi...");

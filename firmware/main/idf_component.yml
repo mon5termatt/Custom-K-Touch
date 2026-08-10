@@ -4,3 +4,4 @@
 dependencies:
   idf: ">=5.1"
   lvgl/lvgl: "~9.2"
+  espressif/usb_host_hid: "^1.0.3"

@@ -27,9 +27,10 @@ with the desktop simulator.)
   Files header between the printer's storage and the USB drive, the way the stock K-Touch
   screen does.
 - **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Macros, Console
-  (read-only gcode log for now), Tune, Calibration (endstops / PID / Z-offset / bed mesh),
-  and AFC when BoxTurtle lanes are detected. Underscore macros (`_NAME`) stay hidden.
-  Commands run on a dedicated worker so jog / temps don’t wait behind fleet polls.
+  (gcode log + entry via USB-A keyboard on the experimental HID path), Tune, Calibration
+  (endstops / PID / Z-offset / bed mesh), and AFC when BoxTurtle lanes are detected.
+  Underscore macros (`_NAME`) stay hidden. Commands run on a dedicated worker so jog /
+  temps don’t wait behind fleet polls.
 - **Klipper / Moonraker (primary).** Add `host`, `host:7125`, or Moonraker on port 80
   (e.g. OpenCentauri); optional API key. Status, files, print control, thumbnails, webcam,
   and console when Moonraker exposes them.

@@ -18,6 +18,7 @@ idf_component_register(
         "bambu.c"
         "bambu_cloud.c"
         "netlog.c"
+        "usb_hid_kb.c"
         "pt_core_one.c"
         "pt_core_one_l.c"
         "pt_mini.c"
@@ -50,4 +51,6 @@ idf_component_register(
         esp_lcd             # read panel framebuffer for /api/screen.bmp
         esp_timer           # uptime for /api/info
         json                # cJSON parsing
+        usb                 # USB host core (shared with PandaTouch MSC)
+        usb_host_hid        # experimental USB-A keyboard
 )
