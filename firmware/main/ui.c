@@ -123,6 +123,7 @@ static lv_obj_t      *s_scr_filedetail;
 static lv_obj_t      *s_fd_name;        /* header: file name        */
 static lv_obj_t      *s_thumb_img;      /* lv_image (PNG preview)   */
 static lv_obj_t      *s_thumb_ph;       /* placeholder label        */
+static lv_obj_t      *s_thumb_load;     /* indeterminate load bar   */
 static lv_image_dsc_t s_thumb_dsc;      /* descriptor over s_thumb_buf */
 static uint8_t       *s_thumb_buf;      /* owned PNG bytes on display  */
 static char           s_sel_path[160];  /* file selected for printing  */
@@ -154,10 +155,44 @@ static void on_about_open(lv_event_t *e);
 static void on_farm_open(lv_event_t *e);
 static void on_prefs_open(lv_event_t *e);
 static void thumb_clear(void);
+static void thumb_show_loading(bool on);
+static void nav_dash(lv_event_t *e);
 static lv_obj_t *make_header(lv_obj_t *parent, const char *text);
+static lv_obj_t *make_header_ex(lv_obj_t *parent, const char *text, bool brand);
 static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_coord_t w);
 static void make_wordmark(lv_obj_t *parent);
+
+static void thumb_load_anim_cb(void *bar, int32_t v)
+{
+    lv_bar_set_value((lv_obj_t *)bar, (int32_t)v, LV_ANIM_OFF);
+}
+
+/* Show/hide the indeterminate preview load bar + keep the placeholder label in sync. */
+static void thumb_show_loading(bool on)
+{
+    if (!s_thumb_load || !s_thumb_ph) return;
+    lv_anim_delete(s_thumb_load, thumb_load_anim_cb);
+    if (on) {
+        lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_thumb_ph, tr(STR_LOADING_PREVIEW));
+        lv_bar_set_value(s_thumb_load, 15, LV_ANIM_OFF);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_thumb_load);
+        lv_anim_set_values(&a, 15, 85);
+        lv_anim_set_duration(&a, 750);
+        lv_anim_set_playback_duration(&a, 750);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_set_exec_cb(&a, thumb_load_anim_cb);
+        lv_anim_start(&a);
+    } else {
+        lv_obj_add_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
+        lv_bar_set_value(s_thumb_load, 0, LV_ANIM_OFF);
+    }
+}
 
 /* Detach the preview image, drop its cached bitmap, free the PNG bytes, and show
  * the placeholder. Safe to call repeatedly (LVGL thread only). */
@@ -169,6 +204,7 @@ static void thumb_clear(void)
     lv_memzero(&s_thumb_dsc, sizeof(s_thumb_dsc));
     lv_obj_add_flag(s_thumb_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
+    thumb_show_loading(false);
 }
 
 /* Clear the dashboard per-card thumbnail cache. */
@@ -253,10 +289,11 @@ static void on_file_clicked(lv_event_t *e)
                                                          : s_files[idx].path);
     thumb_clear();
     if (s_files[idx].thumb[0]) {
-        lv_label_set_text(s_thumb_ph, tr(STR_LOADING_PREVIEW));
+        thumb_show_loading(true);
         app_state_fetch_thumb(s_files[idx].thumb);   /* -> ui_apply_thumb */
     } else {
         lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
+        thumb_show_loading(false);
     }
     lv_screen_load(s_scr_filedetail);
 }
@@ -350,22 +387,38 @@ static void build_status_screen(void)
     lv_obj_set_style_bg_color(s_scr_status, PP_BG, 0);
     lv_obj_clear_flag(s_scr_status, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Black top bar: [ PRUSA | TOUCH ] wordmark + connection dot + picker */
+    /* Black top bar: wordmark + e-stop + settings + home (fleet) + connection dot */
     lv_obj_t *bar = make_header(s_scr_status, NULL);   /* identical wordmark placement */
 
-    lv_obj_t *pick = make_barbtn(bar, LV_SYMBOL_LIST, on_printers_clicked, NULL, 48);
-    lv_obj_align(pick, LV_ALIGN_RIGHT_MID, -44, 0);
+    lv_obj_t *home = make_barbtn(bar, LV_SYMBOL_HOME, nav_dash, NULL, 44);
+    lv_obj_align(home, LV_ALIGN_RIGHT_MID, -4, 0);
 
     s_conn_dot = lv_obj_create(bar);
     lv_obj_set_size(s_conn_dot, 18, 18);
     lv_obj_set_style_radius(s_conn_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(s_conn_dot, 0, 0);
     lv_obj_set_style_bg_color(s_conn_dot, PP_ERROR, 0);
-    lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -12, 0);
+    lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -52, 0);
 
-    /* E-stop — Moonraker only; handler no-ops / confirms inside ui_tools. */
-    lv_obj_t *estop = make_barbtn(bar, tr(STR_ESTOP), on_estop_clicked, NULL, 72);
-    lv_obj_align(estop, LV_ALIGN_RIGHT_MID, -100, 0);
+    lv_obj_t *gear = make_barbtn(bar, LV_SYMBOL_SETTINGS, on_printers_clicked, NULL, 44);
+    lv_obj_align(gear, LV_ALIGN_RIGHT_MID, -78, 0);
+
+    /* Centered red E-STOP — wide hit target; confirm dialog still required. */
+    lv_obj_t *estop = lv_button_create(bar);
+    lv_obj_set_size(estop, 160, 44);
+    lv_obj_align(estop, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(estop, PP_ERROR, 0);
+    lv_obj_set_style_bg_opa(estop, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(estop, lv_color_darken(PP_ERROR, 30), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(estop, 0, 0);
+    lv_obj_set_style_radius(estop, 6, 0);
+    lv_obj_set_style_shadow_width(estop, 0, 0);
+    lv_obj_add_event_cb(estop, on_estop_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *estop_lbl = lv_label_create(estop);
+    lv_label_set_text(estop_lbl, tr(STR_ESTOP));
+    lv_obj_set_style_text_color(estop_lbl, PP_WHITE, 0);
+    lv_obj_set_style_text_font(estop_lbl, PP_F16, 0);
+    lv_obj_center(estop_lbl);
 
     /* Portrait (480x800) lays the detail screen out single-column: hero across the top,
      * 2x2 telemetry, full-width job/attention card, 2x2 action buttons. Landscape keeps the
@@ -527,11 +580,11 @@ static void build_status_screen(void)
         lv_obj_add_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* ---- action buttons (above the 60px bottom nav) ---- landscape: 4 in a row;
-     * portrait: 2x2 grid (left column 16, right column flush to the right margin) ---- */
+    /* ---- action buttons ---- landscape: 4 in a row near the bottom;
+     * portrait: 2x2 grid under the job/attention card ---- */
     lv_obj_t *pause_btn = make_button(s_scr_status, tr(STR_PAUSE), on_pause_clicked, NULL, &s_btn_pause_lbl);
-    lv_obj_t *stop_btn  = make_button(s_scr_status, "STOP", on_stop_clicked, NULL, NULL);
-    lv_obj_t *files_btn = make_button(s_scr_status, "FILES", on_files_clicked, NULL, NULL);
+    lv_obj_t *stop_btn  = make_button(s_scr_status, "Stop", on_stop_clicked, NULL, NULL);
+    lv_obj_t *files_btn = make_button(s_scr_status, tr(STR_FILES), on_files_clicked, NULL, NULL);
     s_btn_control = make_button(s_scr_status, tr(STR_TOOLS), on_control_clicked, NULL, NULL);
     if (P) {
         /* Portrait: sit the 2x2 buttons directly under the job/attention card (which ends ~y430)
@@ -541,10 +594,10 @@ static void build_status_screen(void)
         lv_obj_align(files_btn,     LV_ALIGN_TOP_LEFT,  16, 524);
         lv_obj_align(s_btn_control, LV_ALIGN_TOP_RIGHT, -16, 524);
     } else {
-        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, 16,  -72);
-        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, 180, -72);
-        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, 344, -72);
-        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -72);
+        lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, 16,  -16);
+        lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, 180, -16);
+        lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, 344, -16);
+        lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, 508, -16);
     }
     lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
 }
@@ -595,7 +648,7 @@ static void build_files_screen(void)
 
     /* Scrollable column of Connect-style file rows. */
     s_file_list = lv_obj_create(s_scr_files);
-    lv_obj_set_size(s_file_list, LV_PCT(100), scr_h() - 56 - 34 - 60);   /* header+banner+nav */
+    lv_obj_set_size(s_file_list, LV_PCT(100), scr_h() - 56 - 34);   /* header + banner */
     lv_obj_align(s_file_list, LV_ALIGN_TOP_MID, 0, 90);
     lv_obj_set_style_bg_color(s_file_list, PP_BG, 0);
     lv_obj_set_style_border_width(s_file_list, 0, 0);
@@ -631,12 +684,12 @@ static void build_filedetail_screen(void)
     lv_obj_set_style_bg_color(s_scr_filedetail, PP_BG, 0);
     lv_obj_clear_flag(s_scr_filedetail, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* black header with file name + Back */
-    lv_obj_t *bar = make_header(s_scr_filedetail, "");
+    /* Title-only header (no KLIPPER|TOUCH wordmark — it collided with long filenames). */
+    lv_obj_t *bar = make_header_ex(s_scr_filedetail, NULL, false);
     s_fd_name = lv_label_create(bar);
     lv_label_set_text(s_fd_name, tr(STR_FILE));
     lv_label_set_long_mode(s_fd_name, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_fd_name, 560);
+    lv_obj_set_width(s_fd_name, scr_w() - 16 - 108 - 8);   /* left pad + Back + gap */
     lv_obj_set_style_text_color(s_fd_name, PP_WHITE, 0);
     lv_obj_set_style_text_font(s_fd_name, PP_F20, 0);
     lv_obj_align(s_fd_name, LV_ALIGN_LEFT_MID, 16, 0);
@@ -644,14 +697,27 @@ static void build_filedetail_screen(void)
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_fd_back, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
-    /* preview card holds either the thumbnail or a placeholder label */
+    /* preview card holds thumbnail, loading bar, or a placeholder label */
     lv_obj_t *card = make_card(s_scr_filedetail, 360, 300);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 70);
 
     s_thumb_ph = lv_label_create(card);
     lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
     lv_obj_set_style_text_color(s_thumb_ph, PP_TEXT_MUTED, 0);
-    lv_obj_center(s_thumb_ph);
+    lv_obj_set_style_text_font(s_thumb_ph, PP_F16, 0);
+    lv_obj_align(s_thumb_ph, LV_ALIGN_CENTER, 0, -12);
+
+    s_thumb_load = lv_bar_create(card);
+    lv_obj_set_size(s_thumb_load, 180, 8);
+    lv_obj_align(s_thumb_load, LV_ALIGN_CENTER, 0, 18);
+    lv_bar_set_range(s_thumb_load, 0, 100);
+    lv_bar_set_value(s_thumb_load, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_thumb_load, PP_SURFACE_HI, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_thumb_load, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_thumb_load, 4, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_thumb_load, PP_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_thumb_load, 4, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
 
     s_thumb_img = lv_image_create(card);
     lv_obj_set_size(s_thumb_img, 340, 280);   /* fixed viewport; image centered + scaled to fit */
@@ -659,7 +725,7 @@ static void build_filedetail_screen(void)
     lv_obj_add_flag(s_thumb_img, LV_OBJ_FLAG_HIDDEN);
 
     /* PRINT action */
-    lv_obj_t *print_btn = make_button(s_scr_filedetail, "PRINT", on_fd_print, NULL, NULL);
+    lv_obj_t *print_btn = make_button(s_scr_filedetail, "Print", on_fd_print, NULL, NULL);
     lv_obj_set_size(print_btn, 220, 64);
     lv_obj_set_style_bg_color(print_btn, PP_ORANGE, 0);        /* orange = primary CTA */
     lv_obj_set_style_bg_opa(print_btn, LV_OPA_COVER, 0);
@@ -835,9 +901,10 @@ static void refresh_printers_list(void)
     set_text_font_deep(s_pr_list, PP_F16);
 }
 
-/* Black top bar carrying the persistent [ PRUSA | TOUCH ] wordmark (left) plus an
- * optional page title to its right — used on every screen for a consistent header. */
-static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
+/* Black top bar carrying the persistent [ KLIPPER | TOUCH ] wordmark (left) plus an
+ * optional page title — used on every screen for a consistent header.
+ * Pass brand=false for title-only bars (file detail) where the wordmark collides. */
+static lv_obj_t *make_header_ex(lv_obj_t *parent, const char *text, bool brand)
 {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_set_size(bar, LV_PCT(100), 56);
@@ -848,7 +915,7 @@ static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_wordmark(bar);                                /* persistent brand, left */
+    if (brand) make_wordmark(bar);
 
     if (text && text[0]) {
         lv_obj_t *t = lv_label_create(bar);
@@ -857,10 +924,16 @@ static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
         lv_obj_set_style_text_font(t, PP_F20, 0);
         /* A centered title collides with the left wordmark at 480px wide — in portrait, left-align
          * it clear of the wordmark; in landscape there's room to center it. */
-        if (ui_portrait()) lv_obj_align(t, LV_ALIGN_LEFT_MID, 184, 0);
-        else               lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);
+        if (!brand)                lv_obj_align(t, LV_ALIGN_LEFT_MID, 16, 0);
+        else if (ui_portrait())    lv_obj_align(t, LV_ALIGN_LEFT_MID, 184, 0);
+        else                       lv_obj_align(t, LV_ALIGN_CENTER, 0, 0);
     }
     return bar;
+}
+
+static lv_obj_t *make_header(lv_obj_t *parent, const char *text)
+{
+    return make_header_ex(parent, text, true);
 }
 
 /* A borderless white icon/text button for placement on the black top bar
@@ -887,10 +960,12 @@ static void build_printers_screen(void)
 {
     s_scr_printers = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_printers, PP_BG, 0);
-    make_header(s_scr_printers, tr(STR_SETTINGS));
+    lv_obj_t *bar = make_header(s_scr_printers, tr(STR_SETTINGS));
+    lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", nav_dash, NULL, 100);
+    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
     s_pr_list = lv_list_create(s_scr_printers);
-    lv_obj_set_size(s_pr_list, LV_PCT(100), scr_h() - 56 - 60);   /* header + nav */
+    lv_obj_set_size(s_pr_list, LV_PCT(100), scr_h() - 56);   /* header only — no bottom nav */
     lv_obj_align(s_pr_list, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(s_pr_list, PP_BG, 0);
     lv_obj_set_style_text_font(s_pr_list, PP_F16, 0);   /* list items inherit: the LVGL default is ASCII-only Montserrat */
@@ -1136,53 +1211,13 @@ static void build_wifi_screen(void)
     lv_obj_add_flag(s_wifi_kb, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* ---------- bottom navigation (persistent, Panda-Touch style) ---------- */
-static void nav_dash(lv_event_t *e)     { lv_screen_load(s_scr_dash); }
-static void nav_detail(lv_event_t *e)   { lv_screen_load(s_scr_status); }
-static void nav_files(lv_event_t *e)    { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
-static void nav_settings(lv_event_t *e) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
-
-static void make_nav(lv_obj_t *scr, int active)
+/* ---------- fleet home (wordmark tap) + settings ---------- */
+static void nav_dash(lv_event_t *e)     { (void)e; lv_screen_load(s_scr_dash); }
+static void nav_settings(lv_event_t *e)
 {
-    const char *labels[4] = { tr(STR_FLEET), tr(STR_NAV_PRINTER), tr(STR_FILES), tr(STR_SETTINGS) };
-    const lv_event_cb_t cbs[4] = { nav_dash, nav_detail, nav_files, nav_settings };
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, LV_PCT(100), 60);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(bar, PP_SURFACE, 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 4, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_column(bar, 0, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *b = lv_button_create(bar);
-        /* Each tab takes an equal share of the bar width — even in both orientations (fixed-
-         * width tabs overflowed and looked uneven in 480px portrait). */
-        lv_obj_set_height(b, 52);
-        lv_obj_set_width(b, 0);
-        lv_obj_set_flex_grow(b, 1);
-        /* Connect-style minimalist nav: transparent items, the active one marked by an
-         * orange underline (not a filled pill), inactive labels muted. */
-        lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_radius(b, 0, 0);
-        lv_obj_set_style_shadow_width(b, 0, 0);
-        if (i == active) {
-            lv_obj_set_style_border_side(b, LV_BORDER_SIDE_BOTTOM, 0);
-            lv_obj_set_style_border_color(b, PP_ORANGE, 0);
-            lv_obj_set_style_border_width(b, 3, 0);
-        } else {
-            lv_obj_set_style_border_width(b, 0, 0);
-        }
-        lv_obj_add_event_cb(b, cbs[i], LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, labels[i]);
-        lv_obj_set_style_text_color(l, i == active ? PP_TEXT : PP_TEXT_MUTED, 0);
-        lv_obj_set_style_text_font(l, PP_F14, 0);   /* explicit: the LVGL default font is ASCII-only Montserrat */
-        lv_obj_center(l);
-    }
+    (void)e;
+    refresh_printers_list();
+    lv_screen_load(s_scr_printers);
 }
 
 /* ---------- fleet dashboard ---------- */
@@ -1844,15 +1879,17 @@ static void build_dashboard_screen(void)
 {
     s_scr_dash = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_dash, PP_BG, 0);
-    make_header(s_scr_dash, NULL);   /* same builder as every screen → wordmark never shifts */
+    lv_obj_t *bar = make_header(s_scr_dash, NULL);   /* wordmark = home */
+    lv_obj_t *gear = make_barbtn(bar, LV_SYMBOL_SETTINGS, nav_settings, NULL, 48);
+    lv_obj_align(gear, LV_ALIGN_RIGHT_MID, -8, 0);
 
     s_dash_grid = lv_obj_create(s_scr_dash);
-    lv_obj_set_size(s_dash_grid, LV_PCT(100), scr_h() - 56 - 60);   /* fill between header + nav */
+    lv_obj_set_size(s_dash_grid, LV_PCT(100), scr_h() - 56);   /* fill under header (no bottom nav) */
     lv_obj_align(s_dash_grid, LV_ALIGN_TOP_MID, 0, 56);
     lv_obj_set_style_bg_color(s_dash_grid, PP_BG, 0);
     lv_obj_set_style_border_width(s_dash_grid, 0, 0);
     lv_obj_set_style_pad_all(s_dash_grid, 8, 0);
-    lv_obj_set_style_pad_bottom(s_dash_grid, 20, 0);   /* last card scrolls fully clear of the nav bar */
+    lv_obj_set_style_pad_bottom(s_dash_grid, 16, 0);
     lv_obj_set_flex_flow(s_dash_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(s_dash_grid, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
@@ -2016,7 +2053,11 @@ static void on_about_open(lv_event_t *e) { lv_screen_load(s_scr_about); }
 void ui_status_set_afc_chip(const pp_afc_t *a)
 {
     if (!s_afc_chip || !a) return;
-    if (a->present && a->current[0]) {
+    if (!a->present || a->n <= 0) {
+        lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (a->current[0]) {
         char buf[48];
         const char *mat = "";
         for (int i = 0; i < a->n; i++) {
@@ -2026,11 +2067,9 @@ void ui_status_set_afc_chip(const pp_afc_t *a)
         else snprintf(buf, sizeof(buf), tr(STR_AFC_LANE_FMT), a->current);
         lv_label_set_text(s_afc_chip, buf);
         lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
-    } else if (a->present) {
+    } else {
         lv_label_set_text_fmt(s_afc_chip, tr(STR_AFC_LANE_FMT), a->state[0] ? a->state : "-");
         lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -2769,11 +2808,7 @@ void ui_init(void)
     build_prefs_screen();
     build_farm_screen();
     ui_apply_orient(NULL);   /* apply the saved screen orientation */
-    /* persistent bottom nav on the primary screens */
-    make_nav(s_scr_dash, 0);
-    make_nav(s_scr_status, 1);
-    make_nav(s_scr_files, 2);
-    make_nav(s_scr_printers, 3);
+    /* No bottom nav — fleet is home; Settings via header gear; Files from printer detail. */
 
     build_lock_overlay();    /* PIN-entry overlay on the top layer (hidden until locked) */
     ui_apply_lock_cfg(NULL); /* arm the idle-lock timer if the opt-in is configured */
@@ -3008,6 +3043,8 @@ void ui_apply_thumb(void *arg)
     if (!im->data || im->len <= 0) {
         free(im->data);
         free(im);
+        thumb_show_loading(false);
+        lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
         return;
     }
@@ -3035,6 +3072,7 @@ void ui_apply_thumb(void *arg)
         if (scale > LV_SCALE_NONE) scale = LV_SCALE_NONE;
     }
 
+    thumb_show_loading(false);
     lv_obj_clear_flag(s_thumb_img, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
     lv_image_set_src(s_thumb_img, &s_thumb_dsc);

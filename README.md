@@ -17,18 +17,23 @@ with the desktop simulator.)
 
 ## What it does
 
-- **Fleet dashboard.** Every printer at a glance: state, temperatures, progress, the model
-  render, and the live gcode thumbnail while a job runs.
-- **Printer view.** Tap a printer for the detail screen: status badge, nozzle / heatbed /
-  speed / Z, and the current job with progress and ETA.
+- **Fleet home.** The dashboard is the default screen: every printer at a glance (state,
+  temperatures, progress, model render, live gcode thumbnail). Tap a printer to open it;
+  Settings lives behind a header gear — no bottom nav bar.
+- **Printer view.** Status badge, nozzle / heatbed / speed / Z, current job with progress and
+  ETA, plus **Files**, **Tools**, and a centered red **E-STOP** (Moonraker) with a
+  large-button confirm so it’s fast when you mean it and hard to hit by accident.
 - **Files, including print-from-USB.** Browse the printer's gcode newest-first with
   thumbnails and start a print with a tap. Plugged a USB stick into the printer? Switch the
   Files header between the printer's storage and the USB drive, the way the stock K-Touch
   screen does.
-- **Control.** Preheat presets, set temperatures, jog and home. Controls that a backend
-  doesn't expose hide themselves.
-- **Klipper / Moonraker (primary).** Add `host` or `host:7125`, optional API key; status,
-  files, print control, thumbnails, and webcam when Moonraker exposes them.
+- **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Macros, Console, Tune,
+  Calibration (endstops / PID / Z-offset / bed mesh), and AFC when BoxTurtle lanes are
+  detected. Underscore macros (`_NAME`) stay hidden. Commands run on a dedicated worker so
+  jog / temps don’t wait behind fleet polls.
+- **Klipper / Moonraker (primary).** Add `host`, `host:7125`, or Moonraker on port 80
+  (e.g. OpenCentauri); optional API key. Status, files, print control, thumbnails, webcam,
+  and console when Moonraker exposes them.
 - **Needs-attention dialogs.** When a Prusa Connect printer wants attention, its dialog shows
   up on the detail screen with the same buttons you'd see in Connect.
 - **Prusa Connect (optional).** Sign in once and pull a Prusa fleet; demoted in the add-printer
@@ -49,7 +54,8 @@ with the desktop simulator.)
 
 ## Supported printers
 - **Klipper** over **Moonraker** (recommended) — anything you'd reach with Fluidd or Mainsail.
-  Add the host (port **7125** by default, or `192.168.1.50:7125`).
+  Add the host (port **7125** by default, `host:7125`, or Moonraker on **:80** such as
+  OpenCentauri).
 - **Prusa** over **PrusaLink** — MK4 / MK4S / MK3.5 / MK3.9 / MINI / CORE One / XL
   (Buddy-embedded PrusaLink), and Pi-hosted PrusaLink. Add the printer's IP + API key.
 - **Prusa Connect** (optional) — any printer on your Prusa account, added by signing in (see
@@ -109,7 +115,8 @@ Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/othe
 1. First boot shows a Wi-Fi setup page.
 2. Pick your network on-screen, or join the `KlipperTouch-XXXX` hotspot from your phone and open `http://192.168.4.1`.
 3. Once connected, open the web UI or use Add printer and pick **Klipper (Moonraker)** —
-   enter the host (port 7125 by default). Prusa / Bambu remain available further down.
+   enter the host (`7125` by default, or `:80` for hosts like OpenCentauri). Prusa / Bambu
+   remain available further down.
 
 ## Connecting to Prusa Connect
 

@@ -45,9 +45,10 @@ static EXT_RAM_BSS_ATTR pp_afc_t         s_afc;                               /*
 static int              s_cache_count;
 
 /* Detect (and cache) whether a printer speaks PrusaLink or Moonraker. Probe runs
- * on the net task. Port 7125 (or an explicit Moonraker success) prefers Klipper;
- * a failed probe on a Moonraker-likely host is NOT sticky-cached as PrusaLink so
- * we retry next poll once the host comes up. */
+ * on the net task. Port 7125 (or an explicit Moonraker success) prefers Klipper.
+ * Never sticky-cache PrusaLink on a failed/missed Moonraker probe — OpenCentauri
+ * and other Mainsail boxes often expose Moonraker on :80 and were getting locked
+ * to PrusaLink forever after one bad first poll. */
 static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
 {
     if (i < 0 || i >= PP_MAX_PRINTERS) return PP_BK_PRUSALINK;
@@ -61,7 +62,8 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
             /* Likely Moonraker but unreachable — retry next poll, don't lock PrusaLink. */
             return PP_BK_MOONRAKER;
         } else {
-            s_backend[i] = PP_BK_PRUSALINK;
+            /* Provisional only — poll_printer confirms + caches on success. */
+            return PP_BK_PRUSALINK;
         }
     }
     return (pp_backend_t)s_backend[i];
@@ -82,6 +84,20 @@ static SemaphoreHandle_t s_lock;
 static QueueHandle_t    s_cmds;
 static char             s_upd_url[300];   /* download URL from the last update check (net task only) */
 
+/* Clear a fleet slot to offline (keep the friendly name). Returns whether it was online. */
+static bool mark_printer_offline(int i, const pp_printer_t *pr, int active)
+{
+    bool was_online = false;
+    if (i < 0 || i >= PP_MAX_PRINTERS) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    was_online = s_cache[i].online;
+    memset(&s_cache[i], 0, sizeof(s_cache[i]));
+    if (pr) strlcpy(s_cache[i].printer_name, pr->name, sizeof(s_cache[i].printer_name));
+    if (i == active) s_status.online = false;
+    xSemaphoreGive(s_lock);
+    return was_online;
+}
+
 void app_state_get(pp_status_t *out)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -92,6 +108,7 @@ void app_state_get(pp_status_t *out)
 void app_state_get_afc(pp_afc_t *out)
 {
     if (!out) return;
+    if (!s_lock) { memset(out, 0, sizeof(*out)); return; }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_afc;
     xSemaphoreGive(s_lock);
@@ -398,16 +415,7 @@ static bool poll_printer(int i)
     if (bk == PP_BK_BAMBU) {
         if (bambu_get_status_of(&pr, &fresh) != ESP_OK) {
             /* Unreachable (off, wrong access code, or Developer Mode disabled): show offline. */
-            bool was_online = false;
-            if (i >= 0 && i < PP_MAX_PRINTERS) {
-                xSemaphoreTake(s_lock, portMAX_DELAY);
-                was_online = s_cache[i].online;
-                memset(&s_cache[i], 0, sizeof(s_cache[i]));
-                strlcpy(s_cache[i].printer_name, pr.name, sizeof(s_cache[i].printer_name));
-                if (i == active) s_status.online = false;
-                xSemaphoreGive(s_lock);
-            }
-            return was_online;
+            return mark_printer_offline(i, &pr, active);
         }
         /* The report carries identity inline; cache the model once for the detail screen. */
         if (i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
@@ -417,9 +425,22 @@ static bool poll_printer(int i)
             xSemaphoreGive(s_lock);
         }
     } else if (bk == PP_BK_MOONRAKER) {
-        if (moonraker_get_status_of(&pr, &fresh) != ESP_OK) return false;
+        if (moonraker_get_status_of(&pr, &fresh) != ESP_OK)
+            return mark_printer_offline(i, &pr, active);
+        if (i >= 0 && i < PP_MAX_PRINTERS) s_backend[i] = PP_BK_MOONRAKER;
     } else {
-        if (prusalink_get_status_of(&pr, &fresh) != ESP_OK) return false;
+        /* PrusaLink provisional or cached. If it fails, try Moonraker — common for
+         * Mainsail/OpenCentauri on :80 saved without type=klipper. */
+        if (prusalink_get_status_of(&pr, &fresh) != ESP_OK) {
+            if (moonraker_get_status_of(&pr, &fresh) == ESP_OK) {
+                if (i >= 0 && i < PP_MAX_PRINTERS) s_backend[i] = PP_BK_MOONRAKER;
+                bk = PP_BK_MOONRAKER;
+            } else {
+                return mark_printer_offline(i, &pr, active);
+            }
+        } else if (i >= 0 && i < PP_MAX_PRINTERS) {
+            s_backend[i] = PP_BK_PRUSALINK;
+        }
     }
     strlcpy(fresh.printer_name, pr.name, sizeof(fresh.printer_name));
 
@@ -947,16 +968,21 @@ static void run_command(const pp_cmd_t *cmd)
     poll_active_and_publish();
 }
 
-/* Run every queued UI command now, without blocking. Called at several points across the poll
- * cycle so a button press (home/jog/preheat/pause) is serviced promptly instead of waiting for
- * the whole cloud poll sequence to finish. Runs on the net task, same as the polling, so no new
- * locking is required. */
-static void drain_commands(void)
+/* Dedicated command worker — UI control taps must not wait behind cloud/fleet polls.
+ * Same core as net_task; higher priority so a queued jog/gcode runs as soon as the
+ * current HTTP of this task finishes (cmd_task doesn't share the poll's blocking calls). */
+static void cmd_task(void *arg)
 {
-    pp_cmd_t cmd;
-    while (s_cmds && xQueueReceive(s_cmds, &cmd, 0) == pdTRUE) {
+    (void)arg;
+    for (;;) {
+        pp_cmd_t cmd;
+        if (!s_cmds || xQueueReceive(s_cmds, &cmd, portMAX_DELAY) != pdTRUE) continue;
         ESP_LOGI(TAG, "command %d", cmd.kind);
         run_command(&cmd);
+        while (xQueueReceive(s_cmds, &cmd, 0) == pdTRUE) {
+            ESP_LOGI(TAG, "command %d", cmd.kind);
+            run_command(&cmd);
+        }
     }
 }
 
@@ -997,7 +1023,6 @@ static void net_task(void *arg)
     publish_dashboard();
     publish_status();
     for (;;) {
-        drain_commands();   /* service pending button presses before the (slow) poll cycle */
         maybe_scheduled_reboot();
         int n = printer_store_count();
         if (n > 0) {
@@ -1074,7 +1099,6 @@ static void net_task(void *arg)
                 }
                 if (fleet) heap_caps_free(fleet);
             }
-            drain_commands();   /* the fleet GET is the longest blocker — service commands now */
 
             /* The bulk fleet list omits network_info/prusalink_api_key, so learn each cloud
              * printer's LAN IP + PrusaLink key from the per-printer endpoint (one printer per
@@ -1123,7 +1147,6 @@ static void net_task(void *arg)
                 }
             }
 
-            drain_commands();   /* one more checkpoint before the per-printer poll */
             int i = s_poll_idx % n;
             s_poll_idx++;
             bool changed = poll_printer(i);
@@ -1152,11 +1175,7 @@ static void net_task(void *arg)
             publish_status();
             publish_dashboard();
         }
-        pp_cmd_t cmd;
-        if (xQueueReceive(s_cmds, &cmd, period) == pdTRUE) {
-            ESP_LOGI(TAG, "command %d", cmd.kind);
-            run_command(&cmd);
-        }
+        vTaskDelay(period);
     }
 }
 
@@ -1165,7 +1184,7 @@ void app_state_start(void)
     prusa_connect_init();
     bambu_cloud_init();
     s_lock = xSemaphoreCreateMutex();
-    s_cmds = xQueueCreate(8, sizeof(pp_cmd_t));
+    s_cmds = xQueueCreate(16, sizeof(pp_cmd_t));
     memset(&s_status, 0, sizeof(s_status));
     memset(s_cache, 0, sizeof(s_cache));
     s_status.time_remaining = -1;
@@ -1187,4 +1206,6 @@ void app_state_start(void)
      * and command path never contends with the LVGL render task (pinned to core 1) — this keeps
      * dashboard scroll/tap smooth during the ~6 s cloud polls. */
     xTaskCreatePinnedToCore(net_task, "pp_net", 16384, NULL, 5, NULL, 0);
+    /* Commands at higher priority so jog/gcode/estop aren't stuck behind Connect polls. */
+    xTaskCreatePinnedToCore(cmd_task, "pp_cmd", 12288, NULL, 6, NULL, 0);
 }

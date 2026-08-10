@@ -38,21 +38,20 @@ static esp_err_t http_event(esp_http_client_event_t *e)
     return ESP_OK;
 }
 
-static esp_err_t do_request(const pp_printer_t *pr, esp_http_client_method_t method,
-                            const char *path, resp_t *resp, int *status_code)
+static esp_err_t do_request_to(const pp_printer_t *pr, esp_http_client_method_t method,
+                               const char *path, resp_t *resp, int *status_code, int timeout_ms)
 {
     esp_http_client_config_t cfg = {
         .host = pr->host,
         .port = pr->port ? pr->port : MOONRAKER_PORT_DEFAULT,
         .path = path,
         .method = method,
-        .timeout_ms = 6000,
+        .timeout_ms = timeout_ms > 0 ? timeout_ms : 6000,
         .event_handler = http_event,
         .user_data = resp,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return ESP_FAIL;
-    /* Moonraker may run open (trusted clients) or behind an API key. */
     if (pr->api_key[0]) esp_http_client_set_header(c, "X-Api-Key", pr->api_key);
     esp_err_t err = esp_http_client_perform(c);
     int sc = esp_http_client_get_status_code(c);
@@ -60,6 +59,12 @@ static esp_err_t do_request(const pp_printer_t *pr, esp_http_client_method_t met
     if (err != ESP_OK) ESP_LOGW(TAG, "%s -> %s", path, esp_err_to_name(err));
     esp_http_client_cleanup(c);
     return err;
+}
+
+static esp_err_t do_request(const pp_printer_t *pr, esp_http_client_method_t method,
+                            const char *path, resp_t *resp, int *status_code)
+{
+    return do_request_to(pr, method, path, resp, status_code, 6000);
 }
 
 static float jnum(const cJSON *o, const char *k, float def)
@@ -432,11 +437,12 @@ esp_err_t moonraker_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *o
     return ESP_FAIL;
 }
 
-/* POST helpers (Moonraker actions are simple POSTs, no body needed). */
+/* POST helpers (Moonraker actions are simple POSTs, no body needed).
+ * 3s timeout — control taps should fail fast rather than wait for a dead host. */
 static esp_err_t post(const pp_printer_t *pr, const char *path)
 {
     int sc = 0;
-    esp_err_t err = do_request(pr, HTTP_METHOD_POST, path, NULL, &sc);
+    esp_err_t err = do_request_to(pr, HTTP_METHOD_POST, path, NULL, &sc, 3000);
     return (err == ESP_OK && (sc == 200 || sc == 204)) ? ESP_OK : ESP_FAIL;
 }
 
@@ -570,13 +576,6 @@ esp_err_t moonraker_get_afc(const pp_printer_t *pr, pp_afc_t *out)
     cJSON *afc = st ? cJSON_GetObjectItemCaseSensitive(st, "AFC") : NULL;
     if (!cJSON_IsObject(afc)) { cJSON_Delete(root); return ESP_OK; }
 
-    out->present = true;
-    out->error = jbool(afc, "error_state");
-    jstr(afc, "current_state", out->state, sizeof(out->state));
-    if (!out->state[0]) strlcpy(out->state, "Idle", sizeof(out->state));
-    jstr(afc, "current_lane", out->current, sizeof(out->current));
-    if (!out->current[0]) jstr(afc, "current_load", out->current, sizeof(out->current));
-
     char lane_names[PP_AFC_MAX_LANES][12];
     int nnames = 0;
     cJSON *lanes = cJSON_GetObjectItemCaseSensitive(afc, "lanes");
@@ -588,9 +587,16 @@ esp_err_t moonraker_get_afc(const pp_printer_t *pr, pp_afc_t *out)
             nnames++;
         }
     }
-    cJSON_Delete(root);
+    /* Require at least one lane — empty/stub AFC objects are not "installed". */
+    if (nnames == 0) { cJSON_Delete(root); return ESP_OK; }
 
-    if (nnames == 0) return ESP_OK;
+    out->present = true;
+    out->error = jbool(afc, "error_state");
+    jstr(afc, "current_state", out->state, sizeof(out->state));
+    if (!out->state[0]) strlcpy(out->state, "Idle", sizeof(out->state));
+    jstr(afc, "current_lane", out->current, sizeof(out->current));
+    if (!out->current[0]) jstr(afc, "current_load", out->current, sizeof(out->current));
+    cJSON_Delete(root);
 
     /* Batch-query AFC_stepper <name> for each lane. */
     char path[480];
@@ -741,6 +747,8 @@ esp_err_t moonraker_list_macros(const pp_printer_t *pr, pp_macro_list_t *out)
             if (out->count >= PP_MACRO_MAX) break;
             const char *name = it->string;
             if (!name || !name[0]) continue;
+            /* Skip private macros (Klipper convention: leading underscore). */
+            if (name[0] == '_') continue;
             /* Skip noisy builtins; keep user macros and common AFC/BT_ helpers. */
             if (!strncmp(name, "SET_", 4) || !strncmp(name, "GET_", 4) ||
                 !strncmp(name, "QUERY_", 6) || !strncmp(name, "DUMP_", 5) ||

@@ -250,11 +250,102 @@ static void do_mesh(void) { app_state_post_cmd(PP_CMD_MESH, NULL); }
 static void do_klipper_restart(void) { app_state_post_cmd(PP_CMD_KLIPPER_RESTART, NULL); }
 static void do_fw_restart(void) { app_state_post_cmd(PP_CMD_FIRMWARE_RESTART, NULL); }
 
+/* Dedicated E-STOP confirm: full-screen, huge Cancel + red Confirm — fast when intentional,
+ * hard to trigger by accident (header button alone does not stop). */
+static lv_obj_t *s_estop_modal;
+
+static void estop_modal_close(void)
+{
+    if (s_estop_modal) {
+        lv_obj_delete(s_estop_modal);
+        s_estop_modal = NULL;
+    }
+}
+
+static void on_estop_modal_cancel(lv_event_t *e)
+{
+    (void)e;
+    estop_modal_close();
+}
+
+static void on_estop_modal_ok(lv_event_t *e)
+{
+    (void)e;
+    estop_modal_close();
+    do_estop();
+}
+
 void ui_tools_estop(void)
 {
     if (ui_locked_block_public()) return;
     if (!app_state_active_is_moonraker()) return;
-    tools_confirm(tr(STR_ESTOP), "Emergency stop the printer?", do_estop);
+    if (s_estop_modal) return;
+
+    s_estop_modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_estop_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(s_estop_modal, PP_BG, 0);
+    lv_obj_set_style_bg_opa(s_estop_modal, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_estop_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_estop_modal, 0, 0);
+    lv_obj_clear_flag(s_estop_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(s_estop_modal);
+    lv_label_set_text(title, tr(STR_ESTOP));
+    lv_obj_set_style_text_color(title, PP_ERROR, 0);
+    lv_obj_set_style_text_font(title, PP_F28, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
+
+    lv_obj_t *body = lv_label_create(s_estop_modal);
+    lv_label_set_text(body, "Emergency stop the printer?\nMotors and heaters will cut immediately.");
+    lv_obj_set_style_text_color(body, PP_TEXT, 0);
+    lv_obj_set_style_text_font(body, PP_F16, 0);
+    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(body, tw() - 48);
+    lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, 100);
+
+    const bool P = t_portrait();
+    const int bw = P ? (tw() - 48) : 280;
+    const int bh = 96;
+
+    lv_obj_t *cancel = lv_button_create(s_estop_modal);
+    lv_obj_set_size(cancel, bw, bh);
+    lv_obj_set_style_bg_color(cancel, PP_SURFACE, 0);
+    lv_obj_set_style_bg_opa(cancel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(cancel, PP_SURFACE_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(cancel, PP_BORDER, 0);
+    lv_obj_set_style_border_width(cancel, 2, 0);
+    lv_obj_set_style_radius(cancel, 8, 0);
+    lv_obj_set_style_shadow_width(cancel, 0, 0);
+    lv_obj_add_event_cb(cancel, on_estop_modal_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, "Cancel");
+    lv_obj_set_style_text_color(cl, PP_TEXT, 0);
+    lv_obj_set_style_text_font(cl, PP_F20, 0);
+    lv_obj_center(cl);
+
+    lv_obj_t *ok = lv_button_create(s_estop_modal);
+    lv_obj_set_size(ok, bw, bh);
+    lv_obj_set_style_bg_color(ok, PP_ERROR, 0);
+    lv_obj_set_style_bg_opa(ok, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(ok, lv_color_darken(PP_ERROR, 30), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(ok, 0, 0);
+    lv_obj_set_style_radius(ok, 8, 0);
+    lv_obj_set_style_shadow_width(ok, 0, 0);
+    lv_obj_add_event_cb(ok, on_estop_modal_ok, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ol = lv_label_create(ok);
+    lv_label_set_text(ol, tr(STR_ESTOP));
+    lv_obj_set_style_text_color(ol, PP_WHITE, 0);
+    lv_obj_set_style_text_font(ol, PP_F20, 0);
+    lv_obj_center(ol);
+
+    if (P) {
+        lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, 0, -16 - bh - 16);
+        lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 0, -16);
+    } else {
+        lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, -(bw / 2 + 12), -32);
+        lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, (bw / 2 + 12), -32);
+    }
 }
 
 /* ---- Coming soon helper (kept for future stubs) ---- */
@@ -305,6 +396,9 @@ static void open_macros(lv_event_t *e)
 static void open_afc(lv_event_t *e)
 {
     (void)e;
+    pp_afc_t afc;
+    app_state_get_afc(&afc);
+    if (!afc.present) return;
     lv_screen_load(s_afc);
 }
 
@@ -324,14 +418,6 @@ static void on_endstop_refresh(lv_event_t *e)
     if (s_endstop_status) lv_label_set_text(s_endstop_status, tr(STR_LOADING));
     if (s_endstop_grid) lv_obj_clean(s_endstop_grid);
     app_state_post_cmd(PP_CMD_ENDSTOPS, NULL);
-}
-
-static void add_hub_row(lv_obj_t *list, const char *label, lv_event_cb_t cb, void *ud, lv_obj_t **store)
-{
-    lv_obj_t *btn = lv_list_add_button(list, LV_SYMBOL_RIGHT, label);
-    lv_obj_set_style_text_font(btn, PP_F16, 0);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
-    if (store) *store = btn;
 }
 
 static lv_obj_t *add_hub_tile(lv_obj_t *grid, const char *label, lv_event_cb_t cb,
@@ -379,6 +465,9 @@ static void fill_hub_tiles(void)
     add_hub_tile(s_hub_grid, tr(STR_TUNE), open_scr, s_tune, tile_w, tile_h, &s_hub_moon_btns[2]);
     add_hub_tile(s_hub_grid, tr(STR_CALIBRATION), open_scr, s_calib, tile_w, tile_h, &s_hub_moon_btns[3]);
     ui_tools_refresh_menu();
+    /* Always start hidden — ui_apply_afc reveals after Moonraker detects lanes.
+     * Do not call app_state_get_afc here: ui_tools_init runs before app_state_start. */
+    if (s_hub_afc_btn) lv_obj_add_flag(s_hub_afc_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_hub(void)
@@ -622,7 +711,7 @@ static void snap_fs_show(void)
 static void on_snap_load(lv_event_t *e)
 {
     (void)e;
-    s_snap_want_fs = true;
+    s_snap_want_fs = false;   /* Load stays in-page; tap the image for fullscreen */
     if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING));
     app_state_fetch_snapshot();
 }
@@ -630,8 +719,8 @@ static void on_snap_load(lv_event_t *e)
 static void on_snap_preview(lv_event_t *e)
 {
     (void)e;
+    /* Fullscreen only from the image itself — not the card chrome / empty areas. */
     if (s_snap_px) snap_fs_show();
-    else on_snap_load(NULL);
 }
 
 static void on_snap_fs_close(lv_event_t *e) { (void)e; snap_fs_hide(); }
@@ -657,8 +746,7 @@ static void build_webcam(void)
 
     s_snap_card = make_card(s_webcam, tw() - 32, th() - 120);
     lv_obj_align(s_snap_card, LV_ALIGN_TOP_MID, 0, 70);
-    lv_obj_add_flag(s_snap_card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_snap_card, on_snap_preview, LV_EVENT_CLICKED, NULL);
+    /* Card is display-only; do not fullscreen on empty-area taps. */
 
     lv_obj_t *cam_btn = make_button(s_snap_card, "Load", on_snap_load, NULL, NULL);
     lv_obj_set_size(cam_btn, 84, 34);
@@ -976,6 +1064,22 @@ static void on_console_refresh(lv_event_t *e)
     (void)e; app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
 }
 
+static void style_console_ta(lv_obj_t *ta)
+{
+    /* Near-black field — default LVGL textarea is white and blinding on this UI. */
+    lv_obj_set_style_bg_color(ta, PP_HEADER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta, PP_TEXT, LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta, PP_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(ta, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(ta, 8, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(ta, PP_ORANGE, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, PP_TEXT_MUTED, LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_bg_color(ta, PP_SURFACE_HI, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_SCROLLBAR);
+}
+
 static void build_console(void)
 {
     s_console = lv_obj_create(NULL);
@@ -988,12 +1092,14 @@ static void build_console(void)
     lv_textarea_set_text(s_console_log, "");
     lv_obj_set_style_text_font(s_console_log, PP_F12, 0);
     lv_obj_clear_flag(s_console_log, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    style_console_ta(s_console_log);
 
     s_console_ta = lv_textarea_create(s_console);
     lv_obj_set_size(s_console_ta, tw() - 200, 40);
     lv_obj_align(s_console_ta, LV_ALIGN_BOTTOM_LEFT, 16, -16);
     lv_textarea_set_one_line(s_console_ta, true);
     lv_textarea_set_placeholder_text(s_console_ta, "gcode…");
+    style_console_ta(s_console_ta);
 
     lv_obj_t *send = make_button(s_console, "Send", on_console_send, NULL, NULL);
     lv_obj_set_size(send, 70, 40);
@@ -1101,10 +1207,11 @@ void ui_apply_macros(void *arg)
         /* Pinned first (from prefs, may include names not in current list) */
         for (int i = 0; i < prefs_pinned_macro_count(); i++) {
             const char *n = prefs_pinned_macro(i);
+            if (!n || !n[0] || n[0] == '_') continue;
             add_macro_tile(n, true, tile_w);
         }
         for (int i = 0; i < ml->count && i < PP_MACRO_MAX; i++) {
-            if (macro_is_pinned(s_macro_names[i])) continue;
+            if (s_macro_names[i][0] == '_' || macro_is_pinned(s_macro_names[i])) continue;
             add_macro_tile(s_macro_names[i], false, tile_w);
         }
     }
@@ -1163,14 +1270,24 @@ static void on_flow_slider(lv_event_t *e)
 static void numpad_set_speed(float v)
 {
     s_tune_speed = (int)(v + 0.5f);
-    if (s_tune_speed_slider) lv_slider_set_value(s_tune_speed_slider, s_tune_speed, LV_ANIM_OFF);
+    if (s_tune_speed < 1) s_tune_speed = 1;
+    if (s_tune_speed > 999) s_tune_speed = 999;
+    if (s_tune_speed_slider) {
+        int sv = s_tune_speed > 200 ? 200 : s_tune_speed;
+        lv_slider_set_value(s_tune_speed_slider, sv, LV_ANIM_OFF);
+    }
     tune_set_speed_lbl();
     app_state_post_cmd_n(PP_CMD_SET_SPEED, 0, s_tune_speed, 0);
 }
 static void numpad_set_flow(float v)
 {
     s_tune_flow = (int)(v + 0.5f);
-    if (s_tune_flow_slider) lv_slider_set_value(s_tune_flow_slider, s_tune_flow, LV_ANIM_OFF);
+    if (s_tune_flow < 1) s_tune_flow = 1;
+    if (s_tune_flow > 999) s_tune_flow = 999;
+    if (s_tune_flow_slider) {
+        int sv = s_tune_flow > 200 ? 200 : s_tune_flow;
+        lv_slider_set_value(s_tune_flow_slider, sv, LV_ANIM_OFF);
+    }
     tune_set_flow_lbl();
     app_state_post_cmd_n(PP_CMD_SET_FLOW, 0, s_tune_flow, 0);
 }
@@ -1179,13 +1296,13 @@ static void on_speed_val_click(lv_event_t *e)
 {
     (void)e;
     if (ui_locked_block_public()) return;
-    tools_numpad_open("Speed %", (float)s_tune_speed, 1.f, 200.f, 0, numpad_set_speed);
+    tools_numpad_open("Speed %", (float)s_tune_speed, 1.f, 999.f, 0, numpad_set_speed);
 }
 static void on_flow_val_click(lv_event_t *e)
 {
     (void)e;
     if (ui_locked_block_public()) return;
-    tools_numpad_open("Flow %", (float)s_tune_flow, 1.f, 200.f, 0, numpad_set_flow);
+    tools_numpad_open("Flow %", (float)s_tune_flow, 1.f, 999.f, 0, numpad_set_flow);
 }
 
 static void on_speed(lv_event_t *e)
@@ -1221,10 +1338,13 @@ static void build_tune(void)
     s_tune_speed_val = lv_label_create(s_tune);
     lv_obj_set_style_text_color(s_tune_speed_val, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_tune_speed_val, PP_F20, 0);
-    lv_obj_align(s_tune_speed_val, LV_ALIGN_TOP_RIGHT, -16, 66);
+    lv_obj_align(s_tune_speed_val, LV_ALIGN_TOP_RIGHT, -100, 66);
     lv_obj_add_flag(s_tune_speed_val, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_tune_speed_val, on_speed_val_click, LV_EVENT_CLICKED, NULL);
     tune_set_speed_lbl();
+    lv_obj_t *sp_set = make_button(s_tune, "Set...", on_speed_val_click, NULL, NULL);
+    lv_obj_set_size(sp_set, 72, 36);
+    lv_obj_align(sp_set, LV_ALIGN_TOP_RIGHT, -16, 64);
 
     s_tune_speed_slider = lv_slider_create(s_tune);
     lv_obj_set_width(s_tune_speed_slider, tw() - 32);
@@ -1234,12 +1354,12 @@ static void build_tune(void)
     lv_obj_set_style_bg_color(s_tune_speed_slider, PP_ORANGE, LV_PART_INDICATOR);
     lv_obj_add_event_cb(s_tune_speed_slider, on_speed_slider, LV_EVENT_RELEASED, NULL);
 
-    const int sp[] = {50, 100, 150};
-    for (int i = 0; i < 3; i++) {
+    const int sp[] = {50, 100, 150, 200};
+    for (int i = 0; i < 4; i++) {
         char buf[8]; snprintf(buf, sizeof(buf), "%d%%", sp[i]);
         lv_obj_t *b = make_button(s_tune, buf, on_speed, (void *)(intptr_t)sp[i], NULL);
-        lv_obj_set_size(b, 90, 40);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 100, 140);
+        lv_obj_set_size(b, 70, 40);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 140);
     }
 
     lv_obj_t *fl = lv_label_create(s_tune);
@@ -1250,10 +1370,13 @@ static void build_tune(void)
     s_tune_flow_val = lv_label_create(s_tune);
     lv_obj_set_style_text_color(s_tune_flow_val, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_tune_flow_val, PP_F20, 0);
-    lv_obj_align(s_tune_flow_val, LV_ALIGN_TOP_RIGHT, -16, 196);
+    lv_obj_align(s_tune_flow_val, LV_ALIGN_TOP_RIGHT, -100, 196);
     lv_obj_add_flag(s_tune_flow_val, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_tune_flow_val, on_flow_val_click, LV_EVENT_CLICKED, NULL);
     tune_set_flow_lbl();
+    lv_obj_t *fl_set = make_button(s_tune, "Set...", on_flow_val_click, NULL, NULL);
+    lv_obj_set_size(fl_set, 72, 36);
+    lv_obj_align(fl_set, LV_ALIGN_TOP_RIGHT, -16, 194);
 
     s_tune_flow_slider = lv_slider_create(s_tune);
     lv_obj_set_width(s_tune_flow_slider, tw() - 32);
@@ -1263,12 +1386,12 @@ static void build_tune(void)
     lv_obj_set_style_bg_color(s_tune_flow_slider, PP_ORANGE, LV_PART_INDICATOR);
     lv_obj_add_event_cb(s_tune_flow_slider, on_flow_slider, LV_EVENT_RELEASED, NULL);
 
-    const int flv[] = {95, 100, 105};
-    for (int i = 0; i < 3; i++) {
+    const int flv[] = {95, 100, 105, 110};
+    for (int i = 0; i < 4; i++) {
         char buf[8]; snprintf(buf, sizeof(buf), "%d%%", flv[i]);
         lv_obj_t *b = make_button(s_tune, buf, on_flow, (void *)(intptr_t)flv[i], NULL);
-        lv_obj_set_size(b, 90, 40);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 100, 270);
+        lv_obj_set_size(b, 70, 40);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 270);
     }
 }
 
@@ -1456,15 +1579,30 @@ static void build_calib(void)
     s_calib = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_calib, PP_BG, 0);
     make_hdr(s_calib, tr(STR_CALIBRATION), go_hub);
-    lv_obj_t *list = lv_list_create(s_calib);
-    lv_obj_set_size(list, LV_PCT(100), th() - 56);
-    lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 56);
-    lv_obj_set_style_bg_color(list, PP_BG, 0);
-    lv_obj_set_style_border_width(list, 0, 0);
-    add_hub_row(list, tr(STR_ENDSTOPS), open_endstops, NULL, NULL);
-    add_hub_row(list, tr(STR_AUTO_PID), open_scr, s_pid, NULL);
-    add_hub_row(list, tr(STR_Z_OFFSET), open_scr, s_zoff, NULL);
-    add_hub_row(list, tr(STR_BED_MESH), open_scr, s_mesh, NULL);
+
+    lv_obj_t *grid = lv_obj_create(s_calib);
+    lv_obj_set_size(grid, LV_PCT(100), th() - 56);
+    lv_obj_align(grid, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_bg_color(grid, PP_BG, 0);
+    lv_obj_set_style_border_width(grid, 0, 0);
+    lv_obj_set_style_pad_all(grid, 16, 0);
+    lv_obj_set_style_pad_row(grid, 12, 0);
+    lv_obj_set_style_pad_column(grid, 12, 0);
+    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLL_ELASTIC);
+
+    const int cols = t_portrait() ? 2 : 4;
+    const int gap = 12;
+    const int pad = 16;
+    const int tile_w = (tw() - pad * 2 - gap * (cols - 1)) / cols;
+    const int tile_h = t_portrait() ? 88 : 100;
+
+    add_hub_tile(grid, tr(STR_ENDSTOPS), open_endstops, NULL, tile_w, tile_h, NULL);
+    add_hub_tile(grid, tr(STR_AUTO_PID), open_scr, s_pid, tile_w, tile_h, NULL);
+    add_hub_tile(grid, tr(STR_Z_OFFSET), open_scr, s_zoff, tile_w, tile_h, NULL);
+    add_hub_tile(grid, tr(STR_BED_MESH), open_scr, s_mesh, tile_w, tile_h, NULL);
 }
 
 /* ---- Fault page ---- */
@@ -1540,6 +1678,9 @@ void ui_tools_open(void)
 
 void ui_tools_open_afc(void)
 {
+    pp_afc_t afc;
+    app_state_get_afc(&afc);
+    if (!afc.present) return;
     lv_screen_load(s_afc);
 }
 
