@@ -20,7 +20,7 @@ typedef enum {
     PP_CMD_DASH_REFRESH,
     PP_CMD_SET_PREF,      /* uses index = packed pref (NVS write off the LVGL task) */
     PP_CMD_FARM_REFRESH,  /* fetch Prusa Farm stats+orders -> ui_apply_farm */
-    PP_CMD_SNAPSHOT,      /* fetch active cloud printer's webcam JPEG -> ui_apply_snapshot */
+    PP_CMD_SNAPSHOT,      /* fetch active printer webcam JPEG -> ui_apply_snapshot */
     PP_CMD_HOME,          /* home axes (Connect HOME / gcode G28), no args */
     PP_CMD_MOVE,          /* relative jog: index=axis(0=X,1=Y,2=Z), i32a=dist*100 mm, i32b=feedrate */
     PP_CMD_DIALOG_ACTION, /* answer the active printer's attention dialog: index=dialog_id, path=button label */
@@ -29,6 +29,30 @@ typedef enum {
     PP_CMD_STORE_REMOVE,  /* remove printer at cmd.index                                         */
     PP_CMD_CHECK_UPDATE,  /* query GitHub for a newer firmware -> ui_apply_update_check          */
     PP_CMD_APPLY_UPDATE,  /* download+flash the update found by the last check (reboots)         */
+    PP_CMD_AFC_CHANGE,    /* Moonraker AFC: BT_CHANGE_TOOL LANE=index                             */
+    PP_CMD_AFC_UNLOAD,    /* Moonraker AFC: BT_TOOL_UNLOAD                                       */
+    PP_CMD_ESTOP,         /* Moonraker emergency stop                                            */
+    PP_CMD_AFC_EJECT,     /* index=lane                                                          */
+    PP_CMD_AFC_MOVE,      /* index=lane, i32a=distance_mm                                        */
+    PP_CMD_AFC_PREP,
+    PP_CMD_AFC_RESUME,
+    PP_CMD_AFC_CLEAR,
+    PP_CMD_FAN,           /* i32a = 0..100 percent                                               */
+    PP_CMD_UNLOCK,        /* M84 motors off                                                      */
+    PP_CMD_EXTRUDE,       /* i32a=length*100 mm (signed), i32b=feed mm/min                       */
+    PP_CMD_SET_SPEED,     /* i32a = M220 percent                                                 */
+    PP_CMD_SET_FLOW,      /* i32a = M221 percent                                                 */
+    PP_CMD_SET_TEMP,      /* index=0 nozzle / 1 bed, i32a=temp C                                 */
+    PP_CMD_PID,           /* index=0 extruder / 1 bed, i32a=target C                             */
+    PP_CMD_Z_ADJUST,      /* i32a = delta*1000 mm (SET_GCODE_OFFSET Z_ADJUST)                    */
+    PP_CMD_Z_APPLY,       /* apply probe z offset                                                */
+    PP_CMD_MESH,          /* BED_MESH_CALIBRATE                                                  */
+    PP_CMD_SAVE_CONFIG,   /* SAVE_CONFIG                                                         */
+    PP_CMD_ENDSTOPS,      /* query -> ui_apply_endstops                                          */
+    PP_CMD_GCODE_LOG,     /* fetch store -> ui_apply_gcode_log                                   */
+    PP_CMD_LIST_MACROS,   /* -> ui_apply_macros                                                  */
+    PP_CMD_KLIPPER_RESTART,      /* RESTART                                                      */
+    PP_CMD_FIRMWARE_RESTART,     /* FIRMWARE_RESTART                                             */
 } pp_cmd_kind_t;
 
 /* Preference writes are routed through the net task because the LVGL task's stack
@@ -58,6 +82,12 @@ void app_state_start(void);
 
 /* Thread-safe snapshot of the active printer's latest status. */
 void app_state_get(pp_status_t *out);
+
+/* Thread-safe snapshot of AFC lanes for the active Moonraker printer (present=false if N/A). */
+void app_state_get_afc(pp_afc_t *out);
+
+/* True when the active printer's detected backend is Moonraker. */
+bool app_state_active_is_moonraker(void);
 
 /* Thread-safe snapshot of the whole fleet cache. Copies up to `max` entries into
  * arr[] and writes the count to *count. */

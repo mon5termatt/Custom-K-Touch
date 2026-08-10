@@ -22,3 +22,7 @@ esp_err_t bambu_pause(const pp_printer_t *pr);
 esp_err_t bambu_resume(const pp_printer_t *pr);
 esp_err_t bambu_stop(const pp_printer_t *pr);
 esp_err_t bambu_gcode(const pp_printer_t *pr, const char *gcode);   /* raw M/G-code via gcode_line */
+
+/* One JPEG frame from the P1/A1 LAN camera (TLS TCP :6000). Caller frees *out.
+ * X1 RTSPS is not supported here. */
+esp_err_t bambu_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *out_len);

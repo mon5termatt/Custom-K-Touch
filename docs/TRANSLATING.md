@@ -1,4 +1,4 @@
-# Translating Prusa Touch
+# Translating Klipper Touch
 
 All on-screen text lives in **one file**: [`firmware/main/i18n.c`](../firmware/main/i18n.c).
 To translate, you edit that file — copy the English block, rename it, and translate

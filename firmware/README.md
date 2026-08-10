@@ -1,11 +1,11 @@
-# Prusa Touch — firmware (build from source)
+# Klipper Touch — firmware (build from source)
 
-Native, open firmware for the BigTreeTech **K-Touch** (and its sibling Panda Touch)
-that talks to **PrusaLink** and **Moonraker/Klipper** directly and shows a
-**Prusa Connect-style fleet dashboard** — no bridge, no extra hardware on your network.
+Native, open firmware for the BigTreeTech **K-Touch** (and its sibling Panda Touch).
+**Moonraker/Klipper first**, with optional PrusaLink, Prusa Connect, and Bambu — fleet
+dashboard on the desk, no bridge hardware.
 
 If you just want to flash it, grab the prebuilt image from the
-[Releases page](https://github.com/nomadsgalaxy/Prusa-Connect-Touch/releases) and
+[Releases page](https://github.com/mon5termatt/Custom-K-Touch/releases) and
 follow the flashing steps in the [root README](../README.md). This document is for
 building from source.
 

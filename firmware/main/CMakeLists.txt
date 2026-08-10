@@ -13,6 +13,7 @@ idf_component_register(
         "web.c"
         "ota_update.c"
         "ui.c"
+        "ui_tools.c"
         "prusa_connect.c"
         "bambu.c"
         "bambu_cloud.c"

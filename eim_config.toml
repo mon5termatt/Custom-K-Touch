@@ -1,0 +1,28 @@
+path = 'C:\esp'
+idf_path = 'C:\esp\v5.3.1\esp-idf'
+esp_idf_json_path = 'C:\Espressif\tools'
+tool_download_folder_name = 'C:\Espressif\dist'
+tool_install_folder_name = 'C:\Espressif\tools'
+target = ["all"]
+idf_versions = ["v5.3.1"]
+tools_json_file = "tools/tools.json"
+config_file_save_path = "eim_config.toml"
+non_interactive = true
+wizard_all_questions = false
+mirror = "https://dl.espressif.com/github_assets"
+idf_mirror = "https://github.com"
+pypi_mirror = "https://pypi.org/simple"
+recurse_submodules = true
+install_all_prerequisites = true
+skip_prerequisites_check = false
+cleanup = false
+python_env_folder_name = "python"
+activation_script_path_override = 'C:\Espressif\tools'
+python_version_override = "python313"
+create_bat_activation_script = false
+
+[idf_features_per_version]
+"v5.3.1" = ["core"]
+
+[idf_tools_per_version]
+"v5.3.1" = ["xtensa-esp-elf-gdb", "riscv32-esp-elf-gdb", "xtensa-esp-elf", "esp-clang", "riscv32-esp-elf", "esp32ulp-elf", "cmake", "openocd-esp32", "ninja", "idf-exe", "ccache", "dfu-util", "esp-rom-elfs"]

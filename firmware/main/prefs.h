@@ -12,8 +12,8 @@ typedef enum {
 } pp_sort_t;
 
 typedef enum {
-    PP_LOGO_STACKED = 0,  /* [PRUSA|TOUCH] + "by NomadsGalaxy" (default) */
-    PP_LOGO_SINGLE,       /* single-line [PRUSA|TOUCH], no byline        */
+    PP_LOGO_STACKED = 0,  /* [KLIPPER|TOUCH] + byline (default) */
+    PP_LOGO_SINGLE,       /* single-line [KLIPPER|TOUCH], no byline     */
 } pp_logo_t;
 
 typedef enum {
@@ -64,3 +64,16 @@ uint8_t prefs_reboot_hour(void);
 void    prefs_set_reboot_hour(uint8_t h);      /* 0..23 enables; anything else disables */
 int8_t  prefs_tz_offset(void);
 void    prefs_set_tz_offset(int8_t hrs);
+
+/* Pinned Klipper macros (touch Macros screen). Names are gcode macro identifiers. */
+#define PP_PINNED_MACRO_MAX 8
+#define PP_PINNED_MACRO_LEN 40
+int         prefs_pinned_macro_count(void);
+const char *prefs_pinned_macro(int i);
+void        prefs_pin_macro_toggle(const char *name);   /* add if absent, remove if present */
+
+/* Web advanced setup (touch consumes defaults only). */
+int         prefs_webcam_index(void);                   /* Moonraker webcam list index (0=first) */
+void        prefs_set_webcam_index(int i);
+const char *prefs_led_notes(void);                      /* freeform LED/neopixel assignment notes */
+void        prefs_set_led_notes(const char *s);

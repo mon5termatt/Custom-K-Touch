@@ -1,5 +1,6 @@
 /* Prusa-Touch — Moonraker (Klipper) client. See moonraker.h. */
 #include "moonraker.h"
+#include "prefs.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -147,7 +148,7 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
     out->time_remaining = -1;
 
     const char *path = "/printer/objects/query?extruder&heater_bed&print_stats"
-                       "&toolhead&gcode_move&virtual_sdcard&display_status";
+                       "&toolhead&gcode_move&virtual_sdcard&display_status&webhooks";
     resp_t r = {0};
     int sc = 0;
     if (do_request(pr, HTTP_METHOD_GET, path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
@@ -186,6 +187,15 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
             if (cJSON_IsString(s)) kstate = s->valuestring;
             cJSON *fn = cJSON_GetObjectItemCaseSensitive(ps, "filename");
             if (cJSON_IsString(fn) && fn->valuestring) strlcpy(out->job_name, fn->valuestring, sizeof(out->job_name));
+        }
+        /* Prefer Klipper host state when shutdown/error so the fault screen can open. */
+        cJSON *wh = cJSON_GetObjectItemCaseSensitive(st, "webhooks");
+        if (wh) {
+            cJSON *ws = cJSON_GetObjectItemCaseSensitive(wh, "state");
+            if (cJSON_IsString(ws) && ws->valuestring) {
+                if (!strcmp(ws->valuestring, "shutdown") || !strcmp(ws->valuestring, "error"))
+                    kstate = "error";
+            }
         }
         strlcpy(out->state, map_state(kstate), sizeof(out->state));
         out->has_job = (!strcmp(out->state, "PRINTING") || !strcmp(out->state, "PAUSED"));
@@ -257,11 +267,169 @@ esp_err_t moonraker_list(const pp_printer_t *pr, pp_file_t *arr, int max, int *c
         f->is_print = true;
         f->mtime = (uint32_t)jnum(it, "modified", 0);
         build_meta(f->mtime, f->display, f->meta, sizeof(f->meta));
-        /* thumbnails require a per-file metadata call; left empty for now */
+        /* Thumb fetch uses metadata later; stash the gcode path as the thumb ref. */
+        strlcpy(f->thumb, f->path, sizeof(f->thumb));
         (*count)++;
     }
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+/* GET arbitrary path and return body bytes (caller frees). Optional port override
+ * (0 = use printer's Moonraker port). Webcam proxies often live on :80 while the API is :7125. */
+static esp_err_t get_bytes_port(const pp_printer_t *pr, const char *path, int port,
+                                uint8_t **out, int *out_len)
+{
+    if (out) *out = NULL;
+    if (out_len) *out_len = 0;
+    if (!pr || !path) return ESP_FAIL;
+    resp_t r = {0};
+    esp_http_client_config_t cfg = {
+        .host = pr->host,
+        .port = port > 0 ? port : (pr->port ? pr->port : MOONRAKER_PORT_DEFAULT),
+        .path = path,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 8000,
+        .event_handler = http_event,
+        .user_data = &r,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) return ESP_FAIL;
+    if (pr->api_key[0]) esp_http_client_set_header(c, "X-Api-Key", pr->api_key);
+    esp_err_t err = esp_http_client_perform(c);
+    int sc = esp_http_client_get_status_code(c);
+    esp_http_client_cleanup(c);
+    if (err != ESP_OK || sc != 200 || !r.buf || r.len <= 0) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    /* Reject non-image HTML error pages that some proxies return as 200. */
+    if (r.len >= 3 && (uint8_t)r.buf[0] == 0xFF && (uint8_t)r.buf[1] == 0xD8) {
+        /* JPEG */
+    } else if (r.len >= 8 && memcmp(r.buf, "\x89PNG\r\n\x1a\n", 8) == 0) {
+        /* PNG */
+    } else {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    if (out) *out = (uint8_t *)r.buf; else free(r.buf);
+    if (out_len) *out_len = r.len;
+    return ESP_OK;
+}
+
+static esp_err_t get_bytes(const pp_printer_t *pr, const char *path, uint8_t **out, int *out_len)
+{
+    return get_bytes_port(pr, path, 0, out, out_len);
+}
+
+esp_err_t moonraker_fetch_thumb(const pp_printer_t *pr, const char *gcode_path,
+                                uint8_t **out, int *out_len)
+{
+    if (!pr || !gcode_path || !gcode_path[0] || !out || !out_len) return ESP_FAIL;
+    *out = NULL; *out_len = 0;
+
+    char enc[220], meta_path[280];
+    const char *rel = (gcode_path[0] == '/') ? gcode_path + 1 : gcode_path;
+    q_encode(rel, enc, sizeof(enc));
+    snprintf(meta_path, sizeof(meta_path), "/server/files/metadata?filename=%s", enc);
+
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, meta_path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_FAIL;
+
+    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+    cJSON *thumbs = res ? cJSON_GetObjectItemCaseSensitive(res, "thumbnails") : NULL;
+    const char *best = NULL;
+    int best_area = -1;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, thumbs) {
+        cJSON *rp = cJSON_GetObjectItemCaseSensitive(it, "relative_path");
+        int w = (int)jnum(it, "width", 0);
+        int h = (int)jnum(it, "height", 0);
+        if (!cJSON_IsString(rp) || !rp->valuestring) continue;
+        int area = w * h;
+        if (area >= best_area) { best_area = area; best = rp->valuestring; }
+    }
+    if (!best) { cJSON_Delete(root); return ESP_FAIL; }
+
+    /* relative_path is under the gcodes root (often .thumbs/...). */
+    char thumb_url[300];
+    snprintf(thumb_url, sizeof(thumb_url), "/server/files/gcodes/%s", best);
+    cJSON_Delete(root);
+
+    return get_bytes(pr, thumb_url, out, out_len);
+}
+
+esp_err_t moonraker_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *out_len)
+{
+    if (!pr || !out || !out_len) return ESP_FAIL;
+    *out = NULL; *out_len = 0;
+
+    char path[300] = "/webcam/?action=snapshot";
+    int abs_port = 0;   /* set when snapshot_url is an absolute http://host:port/... */
+
+    /* Prefer configured webcams list (Moonraker >= 0.8). */
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/server/webcams/list", &r, &sc) == ESP_OK &&
+        sc == 200 && r.buf) {
+        cJSON *root = cJSON_Parse(r.buf);
+        free(r.buf); r.buf = NULL;
+        if (root) {
+            cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+            cJSON *webcams = res ? cJSON_GetObjectItemCaseSensitive(res, "webcams") : NULL;
+            int want = prefs_webcam_index();
+            int idx = 0;
+            cJSON *it = NULL;
+            cJSON_ArrayForEach(it, webcams) {
+                cJSON *en = cJSON_GetObjectItemCaseSensitive(it, "enabled");
+                if (cJSON_IsBool(en) && !cJSON_IsTrue(en)) continue;
+                if (idx++ < want) continue;
+                cJSON *snap = cJSON_GetObjectItemCaseSensitive(it, "snapshot_url");
+                if (!cJSON_IsString(snap) || !snap->valuestring || !snap->valuestring[0]) continue;
+                const char *url = snap->valuestring;
+                if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
+                    /* Absolute URL — use path (+ port if present). Host stays the printer. */
+                    const char *after = strstr(url, "://");
+                    after = after ? after + 3 : NULL;
+                    const char *slash = after ? strchr(after, '/') : NULL;
+                    if (!slash) continue;
+                    abs_port = 80;
+                    if (after) {
+                        const char *colon = memchr(after, ':', (size_t)(slash - after));
+                        if (colon) abs_port = atoi(colon + 1);
+                    }
+                    strlcpy(path, slash, sizeof(path));
+                } else {
+                    strlcpy(path, url, sizeof(path));
+                }
+                break;
+            }
+            cJSON_Delete(root);
+        }
+    } else {
+        free(r.buf);
+    }
+
+    /* Relative webcam URLs are usually served by the machine's front-end proxy (:80),
+     * not Moonraker (:7125). Try Moonraker port first, then :80. */
+    int mr_port = pr->port ? pr->port : MOONRAKER_PORT_DEFAULT;
+    if (abs_port > 0) {
+        if (get_bytes_port(pr, path, abs_port, out, out_len) == ESP_OK) return ESP_OK;
+    }
+    if (get_bytes_port(pr, path, mr_port, out, out_len) == ESP_OK) return ESP_OK;
+    if (mr_port != 80 && get_bytes_port(pr, path, 80, out, out_len) == ESP_OK) return ESP_OK;
+    /* Common alternate path when webcams/list is empty/misconfigured. */
+    if (strcmp(path, "/webcam/?action=snapshot") != 0) {
+        if (get_bytes_port(pr, "/webcam/?action=snapshot", 80, out, out_len) == ESP_OK) return ESP_OK;
+    }
+    return ESP_FAIL;
 }
 
 /* POST helpers (Moonraker actions are simple POSTs, no body needed). */
@@ -294,7 +462,7 @@ esp_err_t moonraker_upload(const pp_printer_t *pr, const char *local_path, const
     long file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    const char *boundary = "----PrusaTouchBoundary";
+    const char *boundary = "----KlipperTouchBoundary";
     char preamble[256];
     int preamble_len = snprintf(preamble, sizeof(preamble),
                                 "--%s\r\n"
@@ -365,3 +533,278 @@ esp_err_t moonraker_gcode(const pp_printer_t *pr, const char *gcode)
     snprintf(url, sizeof(url), "/printer/gcode/script?script=%s", enc);
     return post(pr, url);
 }
+
+static void jstr(const cJSON *o, const char *k, char *dst, size_t n)
+{
+    if (!dst || !n) return;
+    dst[0] = '\0';
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
+    if (cJSON_IsString(v) && v->valuestring) strlcpy(dst, v->valuestring, n);
+}
+
+static bool jbool(const cJSON *o, const char *k)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
+    return cJSON_IsTrue(v);
+}
+
+esp_err_t moonraker_get_afc(const pp_printer_t *pr, pp_afc_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/printer/objects/query?AFC", &r, &sc) != ESP_OK ||
+        sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_OK;   /* unreachable / no AFC — present stays false */
+    }
+
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_OK;
+
+    cJSON *st = cJSON_GetObjectItemCaseSensitive(root, "result");
+    if (st) st = cJSON_GetObjectItemCaseSensitive(st, "status");
+    cJSON *afc = st ? cJSON_GetObjectItemCaseSensitive(st, "AFC") : NULL;
+    if (!cJSON_IsObject(afc)) { cJSON_Delete(root); return ESP_OK; }
+
+    out->present = true;
+    out->error = jbool(afc, "error_state");
+    jstr(afc, "current_state", out->state, sizeof(out->state));
+    if (!out->state[0]) strlcpy(out->state, "Idle", sizeof(out->state));
+    jstr(afc, "current_lane", out->current, sizeof(out->current));
+    if (!out->current[0]) jstr(afc, "current_load", out->current, sizeof(out->current));
+
+    char lane_names[PP_AFC_MAX_LANES][12];
+    int nnames = 0;
+    cJSON *lanes = cJSON_GetObjectItemCaseSensitive(afc, "lanes");
+    if (cJSON_IsArray(lanes)) {
+        cJSON *it;
+        cJSON_ArrayForEach(it, lanes) {
+            if (!cJSON_IsString(it) || !it->valuestring || nnames >= PP_AFC_MAX_LANES) continue;
+            strlcpy(lane_names[nnames], it->valuestring, sizeof(lane_names[0]));
+            nnames++;
+        }
+    }
+    cJSON_Delete(root);
+
+    if (nnames == 0) return ESP_OK;
+
+    /* Batch-query AFC_stepper <name> for each lane. */
+    char path[480];
+    size_t off = 0;
+    off += (size_t)snprintf(path + off, sizeof(path) - off, "/printer/objects/query");
+    for (int i = 0; i < nnames && off + 48 < sizeof(path); i++) {
+        char enc[64];
+        char key[32];
+        /* Build "AFC_stepper <name>" without snprintf+%s (avoids -Wformat-truncation). */
+        memcpy(key, "AFC_stepper ", 12);
+        strlcpy(key + 12, lane_names[i], sizeof(key) - 12);
+        q_encode(key, enc, sizeof(enc));
+        off += (size_t)snprintf(path + off, sizeof(path) - off, "%c%s", i ? '&' : '?', enc);
+    }
+
+    r = (resp_t){0};
+    if (do_request(pr, HTTP_METHOD_GET, path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
+        free(r.buf);
+        /* Still present — lane list from AFC object, detail unavailable. */
+        for (int i = 0; i < nnames; i++) {
+            strlcpy(out->lanes[i].name, lane_names[i], sizeof(out->lanes[i].name));
+            out->lanes[i].num = i + 1;
+        }
+        out->n = nnames;
+        return ESP_OK;
+    }
+
+    root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_OK;
+    st = cJSON_GetObjectItemCaseSensitive(root, "result");
+    if (st) st = cJSON_GetObjectItemCaseSensitive(st, "status");
+
+    for (int i = 0; i < nnames; i++) {
+        pp_afc_lane_t *L = &out->lanes[out->n];
+        strlcpy(L->name, lane_names[i], sizeof(L->name));
+        L->num = i + 1;
+
+        char key[32];
+        memcpy(key, "AFC_stepper ", 12);
+        strlcpy(key + 12, lane_names[i], sizeof(key) - 12);
+        cJSON *ls = st ? cJSON_GetObjectItemCaseSensitive(st, key) : NULL;
+        if (cJSON_IsObject(ls)) {
+            int num = (int)jnum(ls, "lane", (float)(i + 1));
+            if (num > 0) L->num = num;
+            jstr(ls, "map", L->map, sizeof(L->map));
+            jstr(ls, "material", L->material, sizeof(L->material));
+            jstr(ls, "color", L->color, sizeof(L->color));
+            jstr(ls, "filament_status", L->status, sizeof(L->status));
+            bool prep = jbool(ls, "prep");
+            bool load = jbool(ls, "load");
+            L->ready = prep && load;
+            L->tool_loaded = jbool(ls, "tool_loaded");
+            if (L->tool_loaded && !out->current[0])
+                strlcpy(out->current, L->name, sizeof(out->current));
+        }
+        out->n++;
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t moonraker_afc_change(const pp_printer_t *pr, int lane_num)
+{
+    if (lane_num < 1 || lane_num > 99) return ESP_FAIL;
+    char g[40];
+    snprintf(g, sizeof(g), "BT_CHANGE_TOOL LANE=%d", lane_num);
+    return moonraker_gcode(pr, g);
+}
+
+esp_err_t moonraker_afc_unload(const pp_printer_t *pr)
+{
+    return moonraker_gcode(pr, "BT_TOOL_UNLOAD");
+}
+
+esp_err_t moonraker_emergency_stop(const pp_printer_t *pr)
+{
+    return post(pr, "/printer/emergency_stop");
+}
+
+static bool gcode_msg_is_temp(const char *m)
+{
+    if (!m || !m[0]) return false;
+    /* Skip leading "ok " / "Recv: " / whitespace */
+    while (*m == ' ' || *m == '\t') m++;
+    if (!strncmp(m, "ok ", 3)) m += 3;
+    else if (!strncmp(m, "Recv: ", 6)) m += 6;
+    while (*m == ' ' || *m == '\t') m++;
+    /* Classic Marlin/Klipper heater report starts with T: then a digit */
+    if (m[0] == 'T' && m[1] == ':') {
+        const char *p = m + 2;
+        if (*p == '-' || *p == '+') p++;
+        if (*p >= '0' && *p <= '9') return true;
+    }
+    return false;
+}
+
+esp_err_t moonraker_gcode_store(const pp_printer_t *pr, pp_gcode_log_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/server/gcode_store?count=64", &r, &sc) != ESP_OK ||
+        sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_FAIL;
+    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+    cJSON *gcode = res ? cJSON_GetObjectItemCaseSensitive(res, "gcode_store") : NULL;
+    if (cJSON_IsArray(gcode)) {
+        cJSON *it;
+        cJSON_ArrayForEach(it, gcode) {
+            if (out->count >= PP_GCODE_LOG_MAX) break;
+            cJSON *msg = cJSON_GetObjectItemCaseSensitive(it, "message");
+            if (!cJSON_IsString(msg) || !msg->valuestring) continue;
+            const char *m = msg->valuestring;
+            /* Suppress heater/temp poll spam: "ok T:…", "T:25.1 /0.0 B:…" */
+            if (gcode_msg_is_temp(m)) continue;
+            strlcpy(out->lines[out->count], m, PP_GCODE_LOG_LINE);
+            out->count++;
+        }
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t moonraker_list_macros(const pp_printer_t *pr, pp_macro_list_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/printer/gcode/help", &r, &sc) != ESP_OK ||
+        sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_FAIL;
+    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+    if (cJSON_IsObject(res)) {
+        for (cJSON *it = res->child; it; it = it->next) {
+            if (out->count >= PP_MACRO_MAX) break;
+            const char *name = it->string;
+            if (!name || !name[0]) continue;
+            /* Skip noisy builtins; keep user macros and common AFC/BT_ helpers. */
+            if (!strncmp(name, "SET_", 4) || !strncmp(name, "GET_", 4) ||
+                !strncmp(name, "QUERY_", 6) || !strncmp(name, "DUMP_", 5) ||
+                !strncmp(name, "BED_MESH_", 9) || !strncmp(name, "TUNING_", 7) ||
+                !strncmp(name, "ACCELEROMETER_", 14) || !strncmp(name, "TEST_", 5) ||
+                !strncmp(name, "DELAYED_", 8) || !strcmp(name, "RESPOND") ||
+                !strcmp(name, "SAVE_CONFIG") || !strcmp(name, "RESTART") ||
+                !strcmp(name, "FIRMWARE_RESTART") || !strcmp(name, "STATUS") ||
+                !strcmp(name, "HELP") || !strcmp(name, "M112") ||
+                (name[0] == 'M' && name[1] >= '0' && name[1] <= '9') ||
+                (name[0] == 'G' && name[1] >= '0' && name[1] <= '9'))
+                continue;
+            strlcpy(out->names[out->count], name, PP_MACRO_NAME_LEN);
+            out->count++;
+        }
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t moonraker_query_endstops(const pp_printer_t *pr, pp_endstop_list_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/printer/query_endstops/status", &r, &sc) != ESP_OK ||
+        sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_FAIL;
+    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+    if (cJSON_IsObject(res)) {
+        for (cJSON *it = res->child; it && out->count < PP_ENDSTOP_MAX; it = it->next) {
+            if (!it->string) continue;
+            const char *val = cJSON_IsString(it) ? it->valuestring : "?";
+            strlcpy(out->name[out->count], it->string, PP_ENDSTOP_NAME_LEN);
+            strlcpy(out->state[out->count], val ? val : "?", PP_ENDSTOP_STATE_LEN);
+            out->count++;
+        }
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t moonraker_afc_eject(const pp_printer_t *pr, int lane_num)
+{
+    if (lane_num < 1 || lane_num > 99) return ESP_FAIL;
+    char g[40];
+    snprintf(g, sizeof(g), "BT_LANE_EJECT LANE=%d", lane_num);
+    return moonraker_gcode(pr, g);
+}
+
+esp_err_t moonraker_afc_move(const pp_printer_t *pr, int lane_num, int distance_mm)
+{
+    if (lane_num < 1 || lane_num > 99) return ESP_FAIL;
+    char g[48];
+    snprintf(g, sizeof(g), "BT_LANE_MOVE LANE=%d DISTANCE=%d", lane_num, distance_mm);
+    return moonraker_gcode(pr, g);
+}
+
+esp_err_t moonraker_afc_prep(const pp_printer_t *pr)   { return moonraker_gcode(pr, "BT_PREP"); }
+esp_err_t moonraker_afc_resume(const pp_printer_t *pr) { return moonraker_gcode(pr, "BT_RESUME"); }
+esp_err_t moonraker_afc_clear(const pp_printer_t *pr)  { return moonraker_gcode(pr, "AFC_CLEAR_MESSAGE"); }

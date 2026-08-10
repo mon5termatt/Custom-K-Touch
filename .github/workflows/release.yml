@@ -37,14 +37,14 @@ jobs:
             idf.py set-target esp32s3 build &&
             cd build &&
             esptool.py --chip esp32s3 merge_bin --fill-flash-size 16MB
-            -o prusa-touch-full.bin @flash_args &&
-            cp prusa-touch.bin prusa-touch-app.bin
+            -o klipper-touch-full.bin @flash_args &&
+            cp klipper-touch.bin klipper-touch-app.bin
 
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp firmware/build/prusa-touch-full.bin dist/
-          cp firmware/build/prusa-touch.bin      dist/prusa-touch-app.bin
+          cp firmware/build/klipper-touch-full.bin dist/
+          cp firmware/build/klipper-touch.bin      dist/klipper-touch-app.bin
           cp firmware/build/bootloader/bootloader.bin dist/
           cp firmware/build/partition_table/partition-table.bin dist/
           ls -l dist
@@ -52,7 +52,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: prusa-touch-firmware
+          name: klipper-touch-firmware
           path: dist/*
 
       - name: Attach to GitHub Release (on version tags)
@@ -64,11 +64,11 @@ jobs:
           body: |
             ## Flash it
 
-            Download `prusa-touch-full.bin` and flash over USB-C:
+            Download `klipper-touch-full.bin` and flash over USB-C:
 
             ```
-            esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 prusa-touch-full.bin
+            esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 klipper-touch-full.bin
             ```
 
-            See the [README](https://github.com/nomadsgalaxy/Prusa-Connect-Touch#install-prebuilt-image)
+            See the [README](https://github.com/mon5termatt/Custom-K-Touch#install-prebuilt-image)
             for details. Back up the stock firmware first.

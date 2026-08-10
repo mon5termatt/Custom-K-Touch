@@ -59,14 +59,14 @@ static void apply_and_connect(const char *ssid, const char *pass)
     esp_wifi_connect();
 }
 
-/* Bring up an open SoftAP "PrusaTouch-XXXX" (192.168.4.1) so a phone/laptop can
+/* Bring up an open SoftAP "KlipperTouch-XXXX" (192.168.4.1) so a phone/laptop can
  * reach the web UI and configure WiFi. Runs in APSTA so STA keeps retrying. */
 static void start_ap(void)
 {
     if (s_ap_active) return;
     uint8_t mac[6] = {0};
     esp_wifi_get_mac(WIFI_IF_AP, mac);
-    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "PrusaTouch-%02X%02X", mac[4], mac[5]);
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "KlipperTouch-%02X%02X", mac[4], mac[5]);
 
     wifi_config_t ap = {0};
     strlcpy((char *)ap.ap.ssid, s_ap_ssid, sizeof(ap.ap.ssid));

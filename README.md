@@ -1,13 +1,13 @@
-# Prusa Touch
+# Klipper Touch
 
 A community touchscreen for your 3D printers, built on the **BigTreeTech K-Touch** (5")
-and **Panda Touch** (5"). It works two ways: talk **straight to your printers over your
-LAN** (no companion app, no cloud account, no extra hardware), or **sign in to Prusa
-Connect** and pull your whole fleet in at once. Either way you get a Prusa Connect-style
-fleet dashboard on the desk.
+and **Panda Touch**. **Klipper / Moonraker first** — add Fluidd/Mainsail hosts over your
+LAN (no companion app). Optional backends for PrusaLink, Prusa Connect, and Bambu stay
+available but are secondary in the UI.
 
-> Independent, open project. **Not affiliated with or endorsed by Prusa Research.**
-> "Prusa" and "Prusa Connect" are trademarks of Prusa Research.
+> Fork of the Prusa Touch / Prusa-Connect-Touch community firmware.
+> **Not affiliated with or endorsed by Prusa Research.** "Prusa" and "Prusa Connect" are
+> trademarks of Prusa Research.
 
 <img src="docs/img/fleet-dashboard.png" alt="Fleet dashboard" width="640">
 
@@ -27,19 +27,15 @@ with the desktop simulator.)
   screen does.
 - **Control.** Preheat presets, set temperatures, jog and home. Controls that a backend
   doesn't expose hide themselves.
-- **Needs-attention dialogs.** When a printer wants attention (a heater timeout, filament
-  runout, that kind of thing) its dialog shows up on the detail screen with the same buttons
-  you'd see in Connect, so you can clear it from the touchscreen.
-- **Prusa Connect (optional).** Sign in once and the whole fleet appears, including
-  Buddy-embedded printers you'd otherwise only reach through the cloud. The device quietly
-  learns each printer's LAN address and PrusaLink key, so it keeps working locally even if
-  your Connect sign-in later expires.
-- **Bambu Lab.** Add Bambu printers over your LAN (X1 / P1 / A1 in LAN + Developer Mode) for
-  live status and pause / resume / stop / preheat / move, right alongside your Prusa fleet.
-  Cloud sign-in is available too (see [Connecting to Bambu Lab](#connecting-to-bambu-lab)).
-- **Guided "Add a printer".** One place to add machines: pick **Cloud accounts** (Prusa or
-  Bambu) or a **Local printer** (Prusa / Klipper / Bambu), and only the fields that type needs
-  appear. Works the same on the touchscreen and the web UI.
+- **Klipper / Moonraker (primary).** Add `host` or `host:7125`, optional API key; status,
+  files, print control, thumbnails, and webcam when Moonraker exposes them.
+- **Needs-attention dialogs.** When a Prusa Connect printer wants attention, its dialog shows
+  up on the detail screen with the same buttons you'd see in Connect.
+- **Prusa Connect (optional).** Sign in once and pull a Prusa fleet; demoted in the add-printer
+  picker but fully kept.
+- **Bambu Lab (optional).** LAN or cloud Bambu printers alongside Klipper.
+- **Guided "Add a printer".** Klipper first, then PrusaLink / Bambu LAN, then optional cloud
+  accounts. Works the same on the touchscreen and the web UI.
 - **Optional security.** Off by default: set a **web password** to put the web interface behind
   a login, and/or a **screen lock** that asks for a PIN before actions after a few idle minutes
   (you can still browse the fleet while locked).
@@ -47,18 +43,18 @@ with the desktop simulator.)
   portrait, each with a 180° flip.
 - **Multi-printer.** Add as many as you like, on the screen or from the built-in web UI.
 - **Network onboarding.** Pick your Wi-Fi on-device; with no known network it raises its own
-  `PrusaTouch-XXXX` hotspot so you can set it up from a phone.
+  `KlipperTouch-XXXX` hotspot so you can set it up from a phone.
 - **OTA updates.** Flash new firmware from its web page, or turn on automatic updates (off by
   default) to have it pull releases from GitHub on its own.
 
 ## Supported printers
-- **Prusa Connect** - any printer on your Prusa account, added all at once by signing in (see
-  [Connecting to Prusa Connect](#connecting-to-prusa-connect)).
-- **Prusa** over **PrusaLink** - MK4 / MK4S / MK3.5 / MK3.9 / MINI / CORE One / XL
+- **Klipper** over **Moonraker** (recommended) — anything you'd reach with Fluidd or Mainsail.
+  Add the host (port **7125** by default, or `192.168.1.50:7125`).
+- **Prusa** over **PrusaLink** — MK4 / MK4S / MK3.5 / MK3.9 / MINI / CORE One / XL
   (Buddy-embedded PrusaLink), and Pi-hosted PrusaLink. Add the printer's IP + API key.
-- **Klipper** over **Moonraker** - anything you'd reach with Fluidd or Mainsail. Add the host
-  with port **7125** (e.g. `192.168.1.50:7125`); the backend is auto-detected.
-- **Bambu Lab** - X1 / P1 / A1 series over the LAN (add the IP, LAN Access Code, and serial),
+- **Prusa Connect** (optional) — any printer on your Prusa account, added by signing in (see
+  [Connecting to Prusa Connect](#connecting-to-prusa-connect)).
+- **Bambu Lab** — X1 / P1 / A1 series over the LAN (add the IP, LAN Access Code, and serial),
   or via your Bambu account (see [Connecting to Bambu Lab](#connecting-to-bambu-lab)). LAN
   control needs the printer in **LAN Mode** with **Developer Mode** enabled.
 
@@ -71,14 +67,15 @@ with the desktop simulator.)
 
 ## Install (prebuilt image)
 
-Grab the latest **`prusa-touch-full.bin`** from the [Releases page](https://github.com/nomadsgalaxy/Prusa-Connect-Touch/releases).
+Grab the latest **`klipper-touch-full.bin`** from the [Releases page](https://github.com/mon5termatt/Custom-K-Touch/releases)
+(or build from source — see [`firmware/README.md`](firmware/README.md)).
 
 ### Option A: Web Serial (easiest, all platforms)
 No command line. Use a Chromium-based browser (Chrome, Edge, Brave).
 1. Open the [ESP Web Flasher](https://espressif.github.io/esptool-js/).
 2. Connect the touchscreen over USB-C.
 3. Click **Connect** and pick the serial port (see "Finding your port" below).
-4. Set the address to `0x0`, select your `prusa-touch-full.bin`.
+4. Set the address to `0x0`, select your `klipper-touch-full.bin`.
 5. Click **Program**.
 6. Disconnect once you see:
    ```
@@ -100,7 +97,7 @@ Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/othe
 1. `pip install esptool`
 2. Connect the screen and flash:
    ```bash
-   esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 prusa-touch-full.bin
+   esptool.py --chip esp32s3 -p <PORT> -b 460800 write_flash 0x0 klipper-touch-full.bin
    ```
 
 #### Finding your `<PORT>`
@@ -110,9 +107,9 @@ Use the [ESP32 Download Tool](https://www.espressif.com/en/support/download/othe
 
 ### First boot
 1. First boot shows a Wi-Fi setup page.
-2. Pick your network on-screen, or join the `PrusaTouch-XXXX` hotspot from your phone and open `http://192.168.4.1`.
-3. Once connected, add printers one of two ways: enter each printer's IP + API key, or sign
-   in to Prusa Connect to pull them all in (next section).
+2. Pick your network on-screen, or join the `KlipperTouch-XXXX` hotspot from your phone and open `http://192.168.4.1`.
+3. Once connected, open the web UI or use Add printer and pick **Klipper (Moonraker)** —
+   enter the host (port 7125 by default). Prusa / Bambu remain available further down.
 
 ## Connecting to Prusa Connect
 
@@ -210,7 +207,7 @@ Bambu account.
 > If the device won't enter download mode on its own, hold **BOOT** while tapping **RESET**.
 
 > [!NOTE]
-> The full `prusa-touch-full.bin` writes from `0x0` and **resets stored settings** (Wi-Fi,
+> The full `klipper-touch-full.bin` writes from `0x0` and **resets stored settings** (Wi-Fi,
 > linked account, configured printers). Great for a first install, but re-flashing it later
 > wipes your config. To update an existing device, use the in-app **OTA** (Firmware tab /
 > automatic updates), which keeps your settings.

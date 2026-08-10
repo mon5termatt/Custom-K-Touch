@@ -44,7 +44,7 @@ static void set_fonts(uint8_t fam)   /* 0 = Montserrat (LVGL built-in), 1 = Inte
     .state_blue=LV_COLOR_MAKE(0x7D,0xA7,0xD9), .state_yellow=LV_COLOR_MAKE(0xFD,0xDC,0x71), \
     .state_red=LV_COLOR_MAKE(0xF8,0x79,0x5F), \
     .temp_cold=LV_COLOR_MAKE(0x00,0x72,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x00,0x00), \
-    .font_family=0, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }
+    .font_family=0, .brand="KLIPPER | TOUCH", .byline="Klipper first" }
 
 /* "Stargate" — deep-space blue-black + DHD amber, event-horizon blue. Dark, so white text reads. */
 #define SKIN_STARGATE { \
@@ -59,7 +59,7 @@ static void set_fonts(uint8_t fam)   /* 0 = Montserrat (LVGL built-in), 1 = Inte
     .state_blue=LV_COLOR_MAKE(0x4E,0x9F,0xD6), .state_yellow=LV_COLOR_MAKE(0xD9,0xB8,0x4A), \
     .state_red=LV_COLOR_MAKE(0xD9,0x60,0x5A), \
     .temp_cold=LV_COLOR_MAKE(0x2E,0x96,0xFF), .temp_hot=LV_COLOR_MAKE(0xFF,0x4E,0x3A), \
-    .font_family=0, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }
+    .font_family=0, .brand="KLIPPER | TOUCH", .byline="Klipper first" }
 
 /* "Nord" — the popular polar-night dark palette with a frost-blue accent. */
 #define SKIN_NORD { \
@@ -74,10 +74,10 @@ static void set_fonts(uint8_t fam)   /* 0 = Montserrat (LVGL built-in), 1 = Inte
     .state_blue=LV_COLOR_MAKE(0x81,0xA1,0xC1), .state_yellow=LV_COLOR_MAKE(0xEB,0xCB,0x8B), \
     .state_red=LV_COLOR_MAKE(0xBF,0x61,0x6A), \
     .temp_cold=LV_COLOR_MAKE(0x81,0xA1,0xC1), .temp_hot=LV_COLOR_MAKE(0xBF,0x61,0x6A), \
-    .font_family=1, .brand="PRUSA | TOUCH", .byline="by NomadsGalaxy" }   /* Nord showcases the Inter font */
+    .font_family=1, .brand="KLIPPER | TOUCH", .byline="Klipper first" }   /* Nord showcases the Inter font */
 
 static const pp_skin_t PRESETS[]    = { SKIN_CONNECT, SKIN_STARGATE, SKIN_NORD };
-static const char     *PRESET_NAME[] = { "Connect (default)", "Stargate", "Nord" };
+static const char     *PRESET_NAME[] = { "Default", "Stargate", "Nord" };
 #define SKIN_N ((int)(sizeof(PRESETS) / sizeof(PRESETS[0])))
 
 /* The live palette. Defaults to Connect so it's valid even before skin_init() runs. */

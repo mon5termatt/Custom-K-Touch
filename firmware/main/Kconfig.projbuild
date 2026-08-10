@@ -1,4 +1,4 @@
-menu "Prusa-Touch Configuration"
+menu "Klipper Touch Configuration"
 
     config PP_WIFI_SSID
         string "WiFi SSID"
@@ -13,56 +13,56 @@ menu "Prusa-Touch Configuration"
             WPA2 password for the WiFi network.
 
     config PP_PRINTER_HOST
-        string "PrusaLink host (IP or hostname)"
+        string "Default printer host (IP or hostname)"
         default "192.168.1.50"
         help
-            Address of the Prusa printer's PrusaLink (or the Pi running PrusaLink
-            for an MK3/MK3S).
+            Seed printer used when NVS is empty (skipped if left at the default
+            placeholder). Prefer a Moonraker/Klipper host; PrusaLink and Bambu
+            can still be added from the web UI.
 
     config PP_PRINTER_PORT
-        int "PrusaLink port"
-        default 80
+        int "Default printer port"
+        default 7125
         help
-            HTTP port for PrusaLink. Usually 80.
+            HTTP port for the seed printer. Moonraker is usually 7125; PrusaLink
+            is usually 80.
 
     config PP_PRINTER_APIKEY
-        string "PrusaLink API key (preferred)"
+        string "Printer API key (optional)"
         default ""
         help
-            PrusaLink API key, sent as the X-Api-Key header. This is how
-            PrusaSlicer/OrcaSlicer authenticate to PrusaLink and is the simplest
-            method. Leave blank to fall back to Digest (username/password) below.
+            Moonraker X-Api-Key, or PrusaLink API key. Leave blank if the host
+            allows unauthenticated LAN clients (common for Moonraker).
 
     config PP_PRINTER_USER
         string "PrusaLink Digest username (fallback)"
         default "maker"
         help
-            Used only if the API key is blank. PrusaLink Digest username is "maker".
+            Used only for PrusaLink Digest auth when the API key is blank.
 
     config PP_PRINTER_PASSWORD
         string "PrusaLink Digest password (fallback)"
         default "changeme"
         help
-            Used only if the API key is blank. The PrusaLink password shown on the
-            printer (Settings -> Network). Used for HTTP Digest authentication.
+            Used only for PrusaLink Digest auth when the API key is blank.
 
     config PP_STORAGE
-        string "Default storage name"
+        string "Default PrusaLink storage name"
         default "local"
         help
-            Storage identifier used in /api/v1/files/<storage>/...  Typically
-            "local" (printer flash/SD) or "usb".
+            Storage identifier used in /api/v1/files/<storage>/... for PrusaLink.
+            Typically "local" (printer flash/SD) or "usb".
 
     config PP_POLL_INTERVAL_MS
         int "Status poll interval (ms)"
         default 1000
         range 200 10000
         help
-            How often to poll /api/v1/status.
+            How often to poll printer status.
 
     config PP_UPDATE_REPO
         string "GitHub repo for auto-update (owner/name)"
-        default "nomadsgalaxy/Prusa-Connect-Touch"
+        default "mon5termatt/Custom-K-Touch"
         help
             Releases of this GitHub repo are checked by the auto-updater. The latest
             release's .bin asset is downloaded and OTA-flashed on demand.

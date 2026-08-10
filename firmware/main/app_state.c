@@ -41,11 +41,13 @@ static EXT_RAM_BSS_ATTR char             s_info_model[PP_MAX_PRINTERS][28];  /* 
 static EXT_RAM_BSS_ATTR char             s_info_fw[PP_MAX_PRINTERS][24];
 static EXT_RAM_BSS_ATTR bool             s_info_control[PP_MAX_PRINTERS];
 static EXT_RAM_BSS_ATTR uint8_t          s_backend[PP_MAX_PRINTERS];          /* pp_backend_t, auto-detected */
+static EXT_RAM_BSS_ATTR pp_afc_t         s_afc;                               /* active printer AFC lanes     */
 static int              s_cache_count;
 
 /* Detect (and cache) whether a printer speaks PrusaLink or Moonraker. Probe runs
- * once per printer on the net task. NOTE: if a Moonraker printer is unreachable at
- * first contact it defaults to PrusaLink until the cache resets (printer edit / reboot). */
+ * on the net task. Port 7125 (or an explicit Moonraker success) prefers Klipper;
+ * a failed probe on a Moonraker-likely host is NOT sticky-cached as PrusaLink so
+ * we retry next poll once the host comes up. */
 static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
 {
     if (i < 0 || i >= PP_MAX_PRINTERS) return PP_BK_PRUSALINK;
@@ -53,7 +55,14 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
     if (strncmp(pr->host, "bambu:", 6) == 0 ||
         strncmp(pr->host, "bambucloud:", 11) == 0) return PP_BK_BAMBU;   /* LAN or cloud; bambu.c routes */
     if (s_backend[i] == PP_BK_UNKNOWN) {
-        s_backend[i] = moonraker_probe(pr) ? PP_BK_MOONRAKER : PP_BK_PRUSALINK;
+        if (moonraker_probe(pr)) {
+            s_backend[i] = PP_BK_MOONRAKER;
+        } else if (pr->port == 7125) {
+            /* Likely Moonraker but unreachable — retry next poll, don't lock PrusaLink. */
+            return PP_BK_MOONRAKER;
+        } else {
+            s_backend[i] = PP_BK_PRUSALINK;
+        }
     }
     return (pp_backend_t)s_backend[i];
 }
@@ -80,6 +89,47 @@ void app_state_get(pp_status_t *out)
     xSemaphoreGive(s_lock);
 }
 
+void app_state_get_afc(pp_afc_t *out)
+{
+    if (!out) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    *out = s_afc;
+    xSemaphoreGive(s_lock);
+}
+
+bool app_state_active_is_moonraker(void)
+{
+    int aidx = printer_store_active();
+    pp_printer_t apr;
+    if (aidx < 0 || !printer_store_get(aidx, &apr)) return false;
+    return detect_backend(aidx, &apr) == PP_BK_MOONRAKER;
+}
+
+/* Refresh AFC for the active Moonraker printer and push to the UI when it changes. */
+static void refresh_afc_active(void)
+{
+    pp_printer_t apr;
+    pp_afc_t fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    if (printer_store_active_get(&apr)) {
+        int aidx = printer_store_active();
+        if (aidx >= 0 && detect_backend(aidx, &apr) == PP_BK_MOONRAKER)
+            moonraker_get_afc(&apr, &fresh);
+    }
+
+    bool changed = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    changed = (memcmp(&s_afc, &fresh, sizeof(fresh)) != 0);
+    s_afc = fresh;
+    xSemaphoreGive(s_lock);
+
+    if (!changed) return;
+    pp_afc_t *copy = malloc(sizeof(*copy));
+    if (!copy) return;
+    *copy = fresh;
+    if (pt_display_schedule_ui(ui_apply_afc, copy) != LV_RESULT_OK) free(copy);
+}
+
 void app_state_printers_changed(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -88,6 +138,7 @@ void app_state_printers_changed(void)
     memset(s_info_fw, 0, sizeof(s_info_fw));
     memset(s_info_control, 0, sizeof(s_info_control));
     memset(s_backend, 0, sizeof(s_backend));   /* re-detect backend after edits */
+    memset(&s_afc, 0, sizeof(s_afc));
     s_cache_count = printer_store_count();
     s_poll_idx = 0;
     xSemaphoreGive(s_lock);
@@ -423,6 +474,9 @@ static bool poll_printer(int i)
     s_cache_count = printer_store_count();
     if (i == active) s_status = fresh;
     xSemaphoreGive(s_lock);
+
+    /* AFC lanes: only for the active Moonraker printer (Control / Status consumers). */
+    if (i == active && bk == PP_BK_MOONRAKER && fresh.online) refresh_afc_active();
     return changed;
 }
 
@@ -532,9 +586,11 @@ static void run_command(const pp_cmd_t *cmd)
         wifi_save_and_connect(cmd->path, cmd->arg2);
         return;
     case PP_CMD_THUMB: {
-        if (!moon && cmd->path[0]) {   /* Moonraker thumbnails not wired yet */
+        if (cmd->path[0]) {
             uint8_t *buf = NULL; int len = 0;
-            if (prusalink_get_blob(cmd->path, &buf, &len) == ESP_OK) {
+            esp_err_t tr = moon ? moonraker_fetch_thumb(&apr, cmd->path, &buf, &len)
+                                : prusalink_get_blob(cmd->path, &buf, &len);
+            if (tr == ESP_OK) {
                 pp_image_t *im = malloc(sizeof(*im));
                 if (im) {
                     im->data = buf; im->len = len;
@@ -549,17 +605,18 @@ static void run_command(const pp_cmd_t *cmd)
     case PP_CMD_THUMB_DASH: {
         if (cmd->path[0]) {
             uint8_t *buf = NULL; int len = 0;
-            /* Fetching a dashboard thumbnail for printer cmd->index (PrusaLink only). */
             pp_printer_t pr;
-            if (printer_store_get(cmd->index, &pr) &&
-                detect_backend(cmd->index, &pr) != PP_BK_MOONRAKER) {
-                if (prusalink_get_blob_of(&pr, cmd->path, &buf, &len) == ESP_OK) {
+            if (printer_store_get(cmd->index, &pr)) {
+                pp_backend_t tbk = detect_backend(cmd->index, &pr);
+                esp_err_t tr = (tbk == PP_BK_MOONRAKER)
+                    ? moonraker_fetch_thumb(&pr, cmd->path, &buf, &len)
+                    : prusalink_get_blob_of(&pr, cmd->path, &buf, &len);
+                if (tr == ESP_OK) {
                     pp_image_t *im = malloc(sizeof(*im));
                     pp_thumb_dash_t *td = malloc(sizeof(*td));
                     if (im && td) {
                         im->data = buf; im->len = len;
                         td->image = im; td->index = cmd->index;
-                        /* Use the wrapper to pass data to the LVGL thread. */
                         if (pt_display_schedule_ui(ui_apply_thumb_dash, td) != LV_RESULT_OK) {
                             free(buf); free(im); free(td);
                         }
@@ -680,17 +737,151 @@ static void run_command(const pp_cmd_t *cmd)
         do_farm_refresh();
         return;
     case PP_CMD_SNAPSHOT: {
-        /* Active printer's webcam snapshot — cloud only (Connect relays the camera). */
+        /* Active printer webcam: Connect / Moonraker HTTP / Bambu P1·A1 TLS JPEG. */
         pp_image_t *im = malloc(sizeof(*im));
         if (im) {
             im->data = NULL; im->len = 0;
-            if (cloud) prusa_connect_fetch_snapshot(uuid, &im->data, &im->len);
+            if (cloud) {
+                prusa_connect_fetch_snapshot(uuid, &im->data, &im->len);
+            } else if (moon) {
+                moonraker_fetch_snapshot(&apr, &im->data, &im->len);
+            } else if (bambu) {
+                bambu_fetch_snapshot(&apr, &im->data, &im->len);
+            }
             if (pt_display_schedule_ui(ui_apply_snapshot, im) != LV_RESULT_OK) {
                 free(im->data); free(im);
             }
         }
         return;
     }
+    case PP_CMD_AFC_CHANGE:
+        if (moon && have_apr) {
+            moonraker_afc_change(&apr, cmd->index);
+            refresh_afc_active();
+        }
+        return;
+    case PP_CMD_AFC_UNLOAD:
+        if (moon && have_apr) {
+            moonraker_afc_unload(&apr);
+            refresh_afc_active();
+        }
+        return;
+    case PP_CMD_ESTOP:
+        if (moon && have_apr) moonraker_emergency_stop(&apr);
+        return;
+    case PP_CMD_AFC_EJECT:
+        if (moon && have_apr) { moonraker_afc_eject(&apr, cmd->index); refresh_afc_active(); }
+        return;
+    case PP_CMD_AFC_MOVE:
+        if (moon && have_apr) { moonraker_afc_move(&apr, cmd->index, cmd->i32a); refresh_afc_active(); }
+        return;
+    case PP_CMD_AFC_PREP:
+        if (moon && have_apr) { moonraker_afc_prep(&apr); refresh_afc_active(); }
+        return;
+    case PP_CMD_AFC_RESUME:
+        if (moon && have_apr) { moonraker_afc_resume(&apr); refresh_afc_active(); }
+        return;
+    case PP_CMD_AFC_CLEAR:
+        if (moon && have_apr) { moonraker_afc_clear(&apr); refresh_afc_active(); }
+        return;
+    case PP_CMD_FAN: {
+        int pct = cmd->i32a; if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+        char g[24];
+        snprintf(g, sizeof(g), "M106 S%d", (pct * 255) / 100);
+        if (have_apr) be_gcode(abk, &apr, g);
+        return;
+    }
+    case PP_CMD_UNLOCK:
+        if (have_apr) be_gcode(abk, &apr, "M84");
+        return;
+    case PP_CMD_EXTRUDE: {
+        float mm = cmd->i32a / 100.0f;
+        int feed = cmd->i32b > 0 ? cmd->i32b : 300;
+        if (have_apr) {
+            char g[40];
+            be_gcode(abk, &apr, "M83");
+            snprintf(g, sizeof(g), "G1 E%.2f F%d", mm, feed);
+            be_gcode(abk, &apr, g);
+        }
+        return;
+    }
+    case PP_CMD_SET_SPEED: {
+        char g[20]; snprintf(g, sizeof(g), "M220 S%d", cmd->i32a);
+        if (have_apr) be_gcode(abk, &apr, g);
+        return;
+    }
+    case PP_CMD_SET_FLOW: {
+        char g[20]; snprintf(g, sizeof(g), "M221 S%d", cmd->i32a);
+        if (have_apr) be_gcode(abk, &apr, g);
+        return;
+    }
+    case PP_CMD_SET_TEMP: {
+        char g[24];
+        if (cmd->index == 1) snprintf(g, sizeof(g), "M140 S%d", cmd->i32a);
+        else                 snprintf(g, sizeof(g), "M104 S%d", cmd->i32a);
+        if (have_apr) be_gcode(abk, &apr, g);
+        return;
+    }
+    case PP_CMD_PID: {
+        char g[64];
+        if (cmd->index == 1)
+            snprintf(g, sizeof(g), "PID_CALIBRATE HEATER=heater_bed TARGET=%d", cmd->i32a);
+        else
+            snprintf(g, sizeof(g), "PID_CALIBRATE HEATER=extruder TARGET=%d", cmd->i32a);
+        if (moon && have_apr) moonraker_gcode(&apr, g);
+        return;
+    }
+    case PP_CMD_Z_ADJUST: {
+        char g[48];
+        snprintf(g, sizeof(g), "SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1", cmd->i32a / 1000.0f);
+        if (moon && have_apr) moonraker_gcode(&apr, g);
+        return;
+    }
+    case PP_CMD_Z_APPLY:
+        if (moon && have_apr) moonraker_gcode(&apr, "Z_OFFSET_APPLY_PROBE");
+        return;
+    case PP_CMD_MESH:
+        if (moon && have_apr) moonraker_gcode(&apr, "BED_MESH_CALIBRATE");
+        return;
+    case PP_CMD_SAVE_CONFIG:
+        if (moon && have_apr) moonraker_gcode(&apr, "SAVE_CONFIG");
+        return;
+    case PP_CMD_ENDSTOPS: {
+        if (!moon || !have_apr) return;
+        pp_endstop_list_t *el = malloc(sizeof(*el));
+        if (!el) return;
+        if (moonraker_query_endstops(&apr, el) != ESP_OK) {
+            memset(el, 0, sizeof(*el));
+            /* Signal failure with a single synthetic row for the UI. */
+            strlcpy(el->name[0], "error", PP_ENDSTOP_NAME_LEN);
+            strlcpy(el->state[0], "query failed", PP_ENDSTOP_STATE_LEN);
+            el->count = 1;
+        }
+        if (pt_display_schedule_ui(ui_apply_endstops, el) != LV_RESULT_OK) free(el);
+        return;
+    }
+    case PP_CMD_GCODE_LOG: {
+        if (!moon || !have_apr) return;
+        pp_gcode_log_t *log = malloc(sizeof(*log));
+        if (!log) return;
+        if (moonraker_gcode_store(&apr, log) != ESP_OK) { free(log); return; }
+        if (pt_display_schedule_ui(ui_apply_gcode_log, log) != LV_RESULT_OK) free(log);
+        return;
+    }
+    case PP_CMD_LIST_MACROS: {
+        if (!moon || !have_apr) return;
+        pp_macro_list_t *ml = malloc(sizeof(*ml));
+        if (!ml) return;
+        if (moonraker_list_macros(&apr, ml) != ESP_OK) { free(ml); return; }
+        if (pt_display_schedule_ui(ui_apply_macros, ml) != LV_RESULT_OK) free(ml);
+        return;
+    }
+    case PP_CMD_KLIPPER_RESTART:
+        if (moon && have_apr) moonraker_gcode(&apr, "RESTART");
+        return;
+    case PP_CMD_FIRMWARE_RESTART:
+        if (moon && have_apr) moonraker_gcode(&apr, "FIRMWARE_RESTART");
+        return;
     case PP_CMD_SET_PREF: {
         int pref = cmd->index >> 8, val = cmd->index & 0xFF;   /* NVS write on net task */
         if (pref == PP_PREF_SORT) { prefs_set_sort((pp_sort_t)val); publish_dashboard(); }

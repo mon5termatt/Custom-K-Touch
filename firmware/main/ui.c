@@ -16,7 +16,6 @@
 #include "lvgl.h"
 #include "misc/cache/lv_image_cache.h"   /* lv_image_cache_drop (not in lvgl.h) */
 #include "draw/lv_image_decoder.h"       /* lv_image_decoder_get_info           */
-
 #include "esp_attr.h"
 #include "esp_heap_caps.h"   /* PSRAM allocation for the fleet snapshot */
 
@@ -46,7 +45,6 @@ typedef struct {
 } pp_card_thumb_t;
 static EXT_RAM_BSS_ATTR pp_card_thumb_t s_card_thumbs[PP_MAX_PRINTERS];
 static lv_obj_t      *s_scr_status;     /* per-printer detail      */
-static lv_obj_t *s_scr_control;    /* preheat/jog/home        */
 static lv_obj_t *s_scr_files;
 static lv_obj_t *s_scr_printers;
 static lv_obj_t *s_scr_addpick;    /* "Add a printer" -> QR/IP escort to the web UI (issue #5) */
@@ -129,10 +127,9 @@ static lv_image_dsc_t s_thumb_dsc;      /* descriptor over s_thumb_buf */
 static uint8_t       *s_thumb_buf;      /* owned PNG bytes on display  */
 static char           s_sel_path[160];  /* file selected for printing  */
 
-static lv_obj_t      *s_snap_img;       /* lv_image (webcam JPEG, Control screen) */
-static lv_obj_t      *s_snap_ph;        /* placeholder label                      */
-static lv_image_dsc_t s_snap_dsc;       /* descriptor over s_snap_buf             */
-static uint8_t       *s_snap_buf;       /* owned JPEG bytes on display            */
+
+/* AFC (Moonraker BoxTurtle) — Control lane card + Status chip */
+static lv_obj_t      *s_afc_chip;       /* Status: "AFC: laneN"                   */
 
 static void fmt_eta(int secs, char *out, size_t n)
 {
@@ -143,17 +140,20 @@ static void fmt_eta(int secs, char *out, size_t n)
 }
 
 /* forward declarations */
+static void on_control_clicked(lv_event_t *e);
+static void on_estop_clicked(lv_event_t *e);
+static void on_afc_chip_clicked(lv_event_t *e);
 static void on_printers_clicked(lv_event_t *e);
 static void refresh_printers_list(void);
 /* Screen lock: returns true (and pops the PIN prompt) if the screen is locked, so an action
  * callback can bail. Browsing callbacks don't call it. */
 static bool ui_locked_block(void);
+bool ui_locked_block_public(void) { return ui_locked_block(); }
 static void on_wifi_open(lv_event_t *e);
 static void on_about_open(lv_event_t *e);
 static void on_farm_open(lv_event_t *e);
 static void on_prefs_open(lv_event_t *e);
 static void thumb_clear(void);
-static void snap_clear(void);
 static lv_obj_t *make_header(lv_obj_t *parent, const char *text);
 static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_coord_t w);
@@ -218,16 +218,19 @@ static void on_back_clicked(lv_event_t *e)
 static void on_control_back(lv_event_t *e)
 {
     (void)e;
-    lv_screen_load(s_scr_status);
+    ui_request_screen("status");
 }
 
 static void on_control_clicked(lv_event_t *e)
 {
     (void)e;
-    snap_clear();                  /* drop any prior printer's frame */
-    if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING_WEBCAM));
-    app_state_fetch_snapshot();    /* load immediately; the 7s timer keeps it live */
-    lv_screen_load(s_scr_control);
+    ui_tools_open();
+}
+
+static void on_estop_clicked(lv_event_t *e)
+{
+    (void)e;
+    ui_tools_estop();
 }
 
 /* Attention-banner button: answer the active printer's Connect dialog with the tapped label. */
@@ -335,6 +338,12 @@ static lv_obj_t *detail_cell(lv_obj_t *parent, int x, int y, int w, const char *
     return v;
 }
 
+static void on_afc_chip_clicked(lv_event_t *e)
+{
+    (void)e;
+    ui_tools_open_afc();
+}
+
 static void build_status_screen(void)
 {
     s_scr_status = lv_obj_create(NULL);
@@ -353,6 +362,10 @@ static void build_status_screen(void)
     lv_obj_set_style_border_width(s_conn_dot, 0, 0);
     lv_obj_set_style_bg_color(s_conn_dot, PP_ERROR, 0);
     lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -12, 0);
+
+    /* E-stop — Moonraker only; handler no-ops / confirms inside ui_tools. */
+    lv_obj_t *estop = make_barbtn(bar, tr(STR_ESTOP), on_estop_clicked, NULL, 72);
+    lv_obj_align(estop, LV_ALIGN_RIGHT_MID, -100, 0);
 
     /* Portrait (480x800) lays the detail screen out single-column: hero across the top,
      * 2x2 telemetry, full-width job/attention card, 2x2 action buttons. Landscape keeps the
@@ -416,6 +429,15 @@ static void build_status_screen(void)
     lv_label_set_long_mode(s_model_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_model_lbl, P ? scr_w() - 128 : 540);
     lv_obj_align(s_model_lbl, LV_ALIGN_TOP_LEFT, 112, 114);
+
+    s_afc_chip = lv_label_create(s_scr_status);
+    lv_label_set_text(s_afc_chip, "");
+    lv_obj_set_style_text_color(s_afc_chip, PP_ORANGE, 0);
+    lv_obj_set_style_text_font(s_afc_chip, PP_F14, 0);
+    lv_obj_align(s_afc_chip, LV_ALIGN_TOP_LEFT, 112, 134);
+    lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_afc_chip, on_afc_chip_clicked, LV_EVENT_CLICKED, NULL);
 
     /* ---- telemetry cells ---- landscape: 4 across; portrait: 2x2 grid ---- */
     if (P) {
@@ -510,7 +532,7 @@ static void build_status_screen(void)
     lv_obj_t *pause_btn = make_button(s_scr_status, tr(STR_PAUSE), on_pause_clicked, NULL, &s_btn_pause_lbl);
     lv_obj_t *stop_btn  = make_button(s_scr_status, "STOP", on_stop_clicked, NULL, NULL);
     lv_obj_t *files_btn = make_button(s_scr_status, "FILES", on_files_clicked, NULL, NULL);
-    s_btn_control = make_button(s_scr_status, "CONTROL", on_control_clicked, NULL, NULL);
+    s_btn_control = make_button(s_scr_status, tr(STR_TOOLS), on_control_clicked, NULL, NULL);
     if (P) {
         /* Portrait: sit the 2x2 buttons directly under the job/attention card (which ends ~y430)
          * instead of pinning them to the bottom — bottom-pinning left a ~160px dead band mid-screen. */
@@ -1003,7 +1025,7 @@ static void wifi_status_label_refresh(void)
     } else {
         lv_obj_set_style_text_color(s_wifi_ap_lbl, PP_TEXT_MUTED, 0);
         lv_label_set_text(s_wifi_ap_lbl,
-            "Tip: if no known network is found, the device opens a \"PrusaTouch-...\" "
+            "Tip: if no known network is found, the device opens a \"KlipperTouch-...\" "
             "hotspot at http://192.168.4.1 for setup.");
     }
 }
@@ -1314,7 +1336,7 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
         ch = true;
     }
     ch |= lbl_set_if_changed(r->name_lbl, s->printer_name[0] ? s->printer_name : "Printer");
-    ch |= lbl_set_if_changed(r->model_lbl, s->model[0] ? s->model : (online ? "Prusa printer" : ""));
+    ch |= lbl_set_if_changed(r->model_lbl, s->model[0] ? s->model : (online ? "Printer" : ""));
     char nz[24], hb[24], sp[16], zx[16];
     fmt_telemetry(s, nz, hb, sp, zx);
     ch |= lbl_set_if_changed(r->v_noz, nz);
@@ -1481,7 +1503,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     }
 
     lv_obj_t *md = lv_label_create(c);
-    lv_label_set_text(md, s->model[0] ? s->model : (online ? "Prusa printer" : ""));
+    lv_label_set_text(md, s->model[0] ? s->model : (online ? "Printer" : ""));
     lv_obj_set_style_text_color(md, PP_TEXT, 0);
     lv_obj_set_style_text_font(md, PP_F14, 0);
     lv_label_set_long_mode(md, LV_LABEL_LONG_DOT);
@@ -1589,7 +1611,7 @@ static void make_wordmark(lv_obj_t *parent)
     /* top line: the skin's brand, split on "|" into the two-tone "left | right". */
     char bl[16] = {0}, br[16] = {0};
     {
-        const char *brand = g_skin.brand[0] ? g_skin.brand : "PRUSA | TOUCH";
+        const char *brand = g_skin.brand[0] ? g_skin.brand : "KLIPPER | TOUCH";
         const char *bar = strchr(brand, '|');
         if (bar) {
             int n = (int)(bar - brand);
@@ -1810,6 +1832,14 @@ static void build_lock_overlay(void)
     lv_obj_align(s_lock_ta,  LV_ALIGN_TOP_MID, 0, gtop + 44);
 }
 
+
+
+
+
+
+
+
+
 static void build_dashboard_screen(void)
 {
     s_scr_dash = lv_obj_create(NULL);
@@ -1983,121 +2013,25 @@ static void on_about_back(lv_event_t *e) { lv_screen_load(s_scr_printers); }
 
 static void on_about_open(lv_event_t *e) { lv_screen_load(s_scr_about); }
 
-static void on_preheat_clicked(lv_event_t *e)
+void ui_status_set_afc_chip(const pp_afc_t *a)
 {
-    if (ui_locked_block()) return;
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    app_state_post_cmd_n(PP_CMD_PREHEAT, idx, 0, 0);
-}
-
-/* Jog buttons carry a 2-char token in user_data: "X+","X-","Y+","Y-","Z+","Z-", or "HM"
- * (home). We post backend-agnostic intent (PP_CMD_MOVE / PP_CMD_HOME); the net task picks
- * dedicated Connect commands vs gcode per the active printer's backend. */
-static void on_jog_clicked(lv_event_t *e)
-{
-    if (ui_locked_block()) return;
-    const char *tok = (const char *)lv_event_get_user_data(e);
-    if (tok[0] == 'H') { app_state_post_cmd_n(PP_CMD_HOME, 0, 0, 0); return; }
-    int axis = (tok[0] == 'X') ? 0 : (tok[0] == 'Y') ? 1 : 2;
-    int dist = (tok[1] == '-') ? -10 : 10;          /* mm */
-    int feed = (axis == 2) ? 600 : 3000;            /* Z slower */
-    app_state_post_cmd_n(PP_CMD_MOVE, axis, dist * 100, feed);   /* i32a = dist*100 */
-}
-
-static void on_snapshot_clicked(lv_event_t *e)
-{
-    (void)e;
-    if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING));
-    app_state_fetch_snapshot();   /* -> prusa_connect_fetch_snapshot -> ui_apply_snapshot */
-}
-
-static void build_control_screen(void)
-{
-    s_scr_control = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_control, PP_BG, 0);
-
-    lv_obj_t *bar = make_header(s_scr_control, "Control");
-    lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_control_back, NULL, 100);
-    lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
-
-    /* Temperatures Card */
-    lv_obj_t *temp_card = make_card(s_scr_control, 380, 180);
-    lv_obj_align(temp_card, LV_ALIGN_TOP_LEFT, 16, 72);
-    lv_obj_t *tl = lv_label_create(temp_card);
-    lv_label_set_text(tl, tr(STR_PREHEAT));
-    lv_obj_set_style_text_color(tl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(tl, PP_F14, 0);
-
-    const char *mats[] = { "PLA", "PETG", "ASA", "Cooldown" };
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *b = make_button(temp_card, mats[i], on_preheat_clicked, (void *)(intptr_t)i, NULL);
-        lv_obj_set_size(b, 160, 50);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 2) * 180, 30 + (i / 2) * 60);
-    }
-
-    /* Jog Card — landscape: top-right beside PREHEAT; portrait: stacked below the Z controls. */
-    lv_obj_t *jog_card = make_card(s_scr_control, 380, 240);
-    if (ui_portrait()) lv_obj_align(jog_card, LV_ALIGN_TOP_LEFT, 16, 326);
-    else               lv_obj_align(jog_card, LV_ALIGN_TOP_RIGHT, -16, 72);
-    lv_obj_set_style_pad_all(jog_card, 0, 0);   /* predictable absolute coords */
-    lv_obj_t *jl = lv_label_create(jog_card);
-    lv_label_set_text(jl, tr(STR_MOVE));
-    lv_obj_set_style_text_color(jl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(jl, PP_F14, 0);
-    lv_obj_align(jl, LV_ALIGN_TOP_LEFT, 12, 8);
-
-    /* X / Y / home jog pad — clean 3x3 cross with gaps so outlines never touch */
-    lv_obj_t *byp  = make_button(jog_card, LV_SYMBOL_UP   " Y+", on_jog_clicked, "Y+", NULL);
-    lv_obj_t *bxm  = make_button(jog_card, LV_SYMBOL_LEFT " X-", on_jog_clicked, "X-", NULL);
-    lv_obj_t *home = make_button(jog_card, LV_SYMBOL_HOME,       on_jog_clicked, "HM", NULL);
-    lv_obj_t *bxp  = make_button(jog_card, LV_SYMBOL_RIGHT " X+",on_jog_clicked, "X+", NULL);
-    lv_obj_t *bym  = make_button(jog_card, LV_SYMBOL_DOWN " Y-", on_jog_clicked, "Y-", NULL);
-    lv_obj_set_size(byp, 76, 52); lv_obj_set_size(bxm, 76, 52); lv_obj_set_size(home, 76, 52);
-    lv_obj_set_size(bxp, 76, 52); lv_obj_set_size(bym, 76, 52);
-    lv_obj_align(byp,  LV_ALIGN_TOP_LEFT, 152, 40);
-    lv_obj_align(bxm,  LV_ALIGN_TOP_LEFT, 66,  96);
-    lv_obj_align(home, LV_ALIGN_TOP_LEFT, 152, 96);
-    lv_obj_align(bxp,  LV_ALIGN_TOP_LEFT, 238, 96);
-    lv_obj_align(bym,  LV_ALIGN_TOP_LEFT, 152, 152);
-
-    /* Z controls */
-    lv_obj_t *bzp = make_button(s_scr_control, "Z+ 10", on_jog_clicked, "Z+", NULL);
-    lv_obj_t *bzm = make_button(s_scr_control, "Z- 10", on_jog_clicked, "Z-", NULL);
-    lv_obj_set_size(bzp, 120, 50); lv_obj_set_size(bzm, 120, 50);
-    lv_obj_align(bzp, LV_ALIGN_TOP_LEFT, 16, 260);
-    lv_obj_align(bzm, LV_ALIGN_TOP_LEFT, 150, 260);
-
-    /* Webcam card — live snapshot from Connect, JPEG-decoded on-device (CONFIG_LV_USE_TJPGD).
-     * Landscape: bottom-centre free area. Portrait: directly under the MOVE card (which ends
-     * ~y566) and grown to fill the slack, so there's no dead band and the preview has presence. */
-    lv_obj_t *cam_card;
-    if (ui_portrait()) {
-        cam_card = make_card(s_scr_control, 380, 196);
-        lv_obj_align(cam_card, LV_ALIGN_TOP_LEFT, 16, 582);
+    if (!s_afc_chip || !a) return;
+    if (a->present && a->current[0]) {
+        char buf[48];
+        const char *mat = "";
+        for (int i = 0; i < a->n; i++) {
+            if (!strcmp(a->lanes[i].name, a->current)) { mat = a->lanes[i].material; break; }
+        }
+        if (mat && mat[0]) snprintf(buf, sizeof(buf), "AFC: %s (%s)", a->current, mat);
+        else snprintf(buf, sizeof(buf), tr(STR_AFC_LANE_FMT), a->current);
+        lv_label_set_text(s_afc_chip, buf);
+        lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
+    } else if (a->present) {
+        lv_label_set_text_fmt(s_afc_chip, tr(STR_AFC_LANE_FMT), a->state[0] ? a->state : "-");
+        lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     } else {
-        cam_card = make_card(s_scr_control, 372, 150);
-        lv_obj_align(cam_card, LV_ALIGN_BOTTOM_MID, 0, -10);
+        lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_t *caml = lv_label_create(cam_card);
-    lv_label_set_text(caml, tr(STR_WEBCAM));
-    lv_obj_set_style_text_color(caml, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(caml, PP_F14, 0);
-    lv_obj_align(caml, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_t *cam_btn = make_button(cam_card, "Load", on_snapshot_clicked, NULL, NULL);
-    lv_obj_set_size(cam_btn, 84, 34);
-    lv_obj_align(cam_btn, LV_ALIGN_TOP_RIGHT, 0, -4);
-
-    s_snap_ph = lv_label_create(cam_card);
-    lv_label_set_text(s_snap_ph, tr(STR_TAP_LOAD_CAM));
-    lv_obj_set_style_text_color(s_snap_ph, PP_TEXT_MUTED, 0);
-    lv_obj_align(s_snap_ph, LV_ALIGN_BOTTOM_MID, 0, -8);
-
-    s_snap_img = lv_image_create(cam_card);
-    /* Shown 1:1 — Connect's camera thumbnail is ~250x140, which fits this card. TJPGD is a
-     * partial/line decoder and does NOT support lv_image_set_scale (transform needs a full
-     * buffer), so we must not scale it. */
-    lv_obj_align(s_snap_img, LV_ALIGN_CENTER, 0, 8);
-    lv_obj_add_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* ---------- Custom layout (issue #6): the web designer emits a pp_layout_t. The device no longer
@@ -2278,7 +2212,7 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         /* bind the sample status inline (folded-in layout_bind) */
         switch (t->type) {
         case LT_NAME:  if (val) lv_label_set_text(val, st->printer_name[0] ? st->printer_name : "Printer"); break;
-        case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : "Prusa printer"); break;
+        case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : "Printer"); break;
         case LT_JOB:   if (val) lv_label_set_text(val, st->job_name[0] ? st->job_name : "--"); break;
         case LT_STATE: if (val) { lv_label_set_text(val, st->state[0] ? st->state : "...");
                                   lv_obj_set_style_bg_color(val, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0); } break;
@@ -2406,13 +2340,13 @@ static void build_about_screen(void)
 
     /* ---- product + license text ---- */
     lv_obj_t *title = lv_label_create(s_scr_about);
-    lv_label_set_text(title, "Prusa Touch");
+    lv_label_set_text(title, "Klipper Touch");
     lv_obj_set_style_text_color(title, PP_ORANGE, 0);
     lv_obj_set_style_text_font(title, PP_F28, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 16, 74);
 
     lv_obj_t *by = lv_label_create(s_scr_about);
-    lv_label_set_text(by, "by NomadsGalaxy");
+    lv_label_set_text(by, "Klipper / Moonraker first");
     lv_obj_set_style_text_color(by, PP_TEXT, 0);
     lv_obj_set_style_text_font(by, PP_F16, 0);
     lv_obj_align(by, LV_ALIGN_TOP_LEFT, 16, 108);
@@ -2422,17 +2356,18 @@ static void build_about_screen(void)
     lv_obj_set_width(body, P ? scr_w() - 32 : 470);
     lv_label_set_text(body,
         "Firmware " PP_FW_VERSION "\n"
-        "Open-firmware touchscreen for Prusa printers (PrusaLink).\n\n"
+        "Open-firmware touchscreen for Klipper (Moonraker),\n"
+        "with optional PrusaLink, Prusa Connect, and Bambu.\n\n"
         "License: OCL v1.1 + SWAtt v1\n"
         "Built on PandaTouch_IDF (BigTreeTech, MIT).\n\n"
-        "Independent community project - not affiliated with\n"
-        "or endorsed by Prusa Research. \"Prusa\" and \"Prusa\n"
-        "Connect\" are trademarks of Prusa Research.");
+        "Fork of Prusa Touch / community firmware. Not affiliated\n"
+        "with Prusa Research. \"Prusa\" and \"Prusa Connect\" are\n"
+        "trademarks of Prusa Research.");
     lv_obj_set_style_text_color(body, PP_TEXT_MUTED, 0);
     lv_obj_align(body, LV_ALIGN_TOP_LEFT, 16, 140);
 
     /* ---- right column: GitHub QR + URL ---- */
-    static const char *repo = "https://github.com/nomadsgalaxy/Prusa-Connect-Touch";
+    static const char *repo = "https://github.com/mon5termatt/Custom-K-Touch";
     lv_obj_t *qr = lv_qrcode_create(s_scr_about);
     lv_qrcode_set_size(qr, 170);
     lv_qrcode_set_dark_color(qr, PP_BLACK);
@@ -2451,7 +2386,7 @@ static void build_about_screen(void)
     else   lv_obj_align(qcap, LV_ALIGN_TOP_RIGHT, -40, 292);
 
     lv_obj_t *url = lv_label_create(s_scr_about);
-    lv_label_set_text(url, "github.com/nomadsgalaxy/\nPrusa-Connect-Touch");
+    lv_label_set_text(url, "github.com/mon5termatt/\nCustom-K-Touch");
     lv_obj_set_style_text_color(url, PP_TEXT, 0);
     lv_obj_set_style_text_font(url, PP_F14, 0);
     lv_obj_set_style_text_align(url, LV_TEXT_ALIGN_CENTER, 0);
@@ -2685,7 +2620,7 @@ static void build_prefs_screen(void)
     /* Header logo */
     pref_label(s_scr_prefs, "Header logo", 290);
     s_pref_logo_dd = lv_dropdown_create(s_scr_prefs);
-    lv_dropdown_set_options(s_pref_logo_dd, "PRUSA|TOUCH + byline\nPRUSA|TOUCH (single line)");
+    lv_dropdown_set_options(s_pref_logo_dd, "KLIPPER|TOUCH + byline\nKLIPPER|TOUCH (single line)");
     lv_obj_set_width(s_pref_logo_dd, 320);
     lv_obj_align(s_pref_logo_dd, LV_ALIGN_TOP_LEFT, 24, 318);
     dropdown_dark(s_pref_logo_dd);
@@ -2757,7 +2692,7 @@ static void build_boot_screen(void)
 
     /* brand (the skin's wordmark, "|" shown literally here) */
     lv_obj_t *l1 = lv_label_create(s_scr_boot);
-    lv_label_set_text(l1, g_skin.brand[0] ? g_skin.brand : "PRUSA | TOUCH");
+    lv_label_set_text(l1, g_skin.brand[0] ? g_skin.brand : "KLIPPER | TOUCH");
     lv_obj_set_style_text_font(l1, PP_F40, 0);
     lv_obj_set_style_text_color(l1, PP_TEXT, 0);
     lv_obj_align(l1, LV_ALIGN_CENTER, 0, -40);
@@ -2797,7 +2732,7 @@ void ui_boot_update(int progress, const char *status)
 static void webcam_refresh_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    if (lv_screen_active() == s_scr_control) app_state_fetch_snapshot();
+    if (ui_tools_is_webcam_active()) app_state_fetch_snapshot();
 }
 
 void ui_init(void)
@@ -2828,7 +2763,7 @@ void ui_init(void)
     build_filedetail_screen();
     build_printers_screen();
     build_addpick_screen();
-    build_control_screen();
+    ui_tools_init();
     build_wifi_screen();
     build_about_screen();
     build_prefs_screen();
@@ -2843,7 +2778,7 @@ void ui_init(void)
     build_lock_overlay();    /* PIN-entry overlay on the top layer (hidden until locked) */
     ui_apply_lock_cfg(NULL); /* arm the idle-lock timer if the opt-in is configured */
 
-    lv_timer_create(webcam_refresh_timer_cb, 7000, NULL);   /* live webcam on Control screen */
+    lv_timer_create(webcam_refresh_timer_cb, 7000, NULL);   /* live webcam on Webcam screen */
 }
 
 /* ---------- test/automation nav API ----------
@@ -2855,7 +2790,7 @@ static void ui_apply_nav(void *arg)
     if (name) {
         if      (!strcmp(name, "dash")   || !strcmp(name, "fleet"))   lv_screen_load(s_scr_dash);
         else if (!strcmp(name, "status") || !strcmp(name, "printer")) lv_screen_load(s_scr_status);
-        else if (!strcmp(name, "control"))                            lv_screen_load(s_scr_control);
+        else if (!strcmp(name, "control") || !strcmp(name, "tools")) ui_tools_open();
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }
         else if (!strcmp(name, "addpick"))                            lv_screen_load(s_scr_addpick);
@@ -2881,7 +2816,7 @@ const char *ui_current_screen(void)
     lv_obj_t *s = lv_screen_active();
     if (s == s_scr_dash)       return "dash";
     if (s == s_scr_status)     return "status";
-    if (s == s_scr_control)    return "control";
+    if (ui_tools_is_hub_active()) return "control";
     if (s == s_scr_files)      return "files";
     if (s == s_scr_filedetail) return "filedetail";
     if (s == s_scr_printers)   return "printers";
@@ -2964,6 +2899,9 @@ void ui_apply_status(void *arg)
     /* CONTROL button visibility based on capability probe. */
     if (s->has_control) lv_obj_remove_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
+
+    ui_tools_refresh_menu();
+    if (s->online) ui_tools_show_fault_if_needed(s->state);
 
     /* Attention dialog banner: when the printer has an active Connect dialog, surface its
      * title/text + action buttons over the (empty) job card and wire each button to DIALOG_ACTION. */
@@ -3101,81 +3039,6 @@ void ui_apply_thumb(void *arg)
     lv_obj_add_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
     lv_image_set_src(s_thumb_img, &s_thumb_dsc);
     lv_image_set_scale(s_thumb_img, scale);
-}
-
-/* Webcam snapshot on the Control screen — same RAW-descriptor decode path as the gcode
- * thumbnail, but the bytes are JPEG (LVGL's TJPGD decoder, enabled via CONFIG_LV_USE_TJPGD).
- * Brings the touch to parity with the web's webcam modal. */
-static void snap_clear(void)
-{
-    if (!s_snap_img) return;
-    lv_image_set_src(s_snap_img, NULL);
-    lv_image_cache_drop(&s_snap_dsc);
-    if (s_snap_buf) { free(s_snap_buf); s_snap_buf = NULL; }
-    lv_memzero(&s_snap_dsc, sizeof(s_snap_dsc));
-    lv_obj_add_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
-    if (s_snap_ph) lv_obj_clear_flag(s_snap_ph, LV_OBJ_FLAG_HIDDEN);
-}
-
-/* Parse a JPEG's frame dimensions from its SOF marker. LVGL's TJPGD decoder reads w/h
- * from the image descriptor header for a memory source (it does NOT parse them itself),
- * so we must fill them in before handing the buffer over. Returns false if no SOF found. */
-static bool jpeg_dims(const uint8_t *d, int len, uint16_t *w, uint16_t *h)
-{
-    int i = 2;   /* skip SOI (FFD8) */
-    while (i + 9 < len) {
-        if (d[i] != 0xFF) { i++; continue; }
-        uint8_t m = d[i + 1];
-        if ((m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7) ||
-            (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF)) {   /* SOFn */
-            *h = (uint16_t)((d[i + 5] << 8) | d[i + 6]);
-            *w = (uint16_t)((d[i + 7] << 8) | d[i + 8]);
-            return (*w > 0 && *h > 0);
-        }
-        if (m == 0x01 || (m >= 0xD0 && m <= 0xD8)) { i += 2; continue; }   /* no length */
-        if (m == 0xD9) break;                                             /* EOI */
-        i += 2 + ((d[i + 2] << 8) | d[i + 3]);                            /* skip segment */
-    }
-    return false;
-}
-
-void ui_apply_snapshot(void *arg)
-{
-    pp_image_t *im = (pp_image_t *)arg;
-    if (!im) return;
-    if (!s_snap_img) { free(im->data); free(im); return; }   /* control screen not built */
-
-    snap_clear();
-
-    if (!im->data || im->len <= 0) {
-        free(im->data); free(im);
-        if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_NO_CAMERA));
-        return;
-    }
-
-    s_snap_buf = im->data;
-    int len = im->len;
-    free(im);
-
-    uint16_t jw = 0, jh = 0;
-    if (!jpeg_dims(s_snap_buf, len, &jw, &jh)) {
-        snap_clear();
-        if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_SNAPSHOT_UNREADABLE));
-        return;
-    }
-
-    s_snap_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
-    s_snap_dsc.header.cf     = LV_COLOR_FORMAT_RAW;   /* encoded (JPEG) source */
-    s_snap_dsc.header.w      = jw;                    /* TJPGD reads dims from here */
-    s_snap_dsc.header.h      = jh;
-    s_snap_dsc.header.stride = (uint32_t)jw * 3;
-    s_snap_dsc.data          = s_snap_buf;
-    s_snap_dsc.data_size     = (uint32_t)len;
-    (void)jw; (void)jh;   /* dims parsed for the header; displayed 1:1 (TJPGD can't be scaled) */
-
-    lv_obj_clear_flag(s_snap_img, LV_OBJ_FLAG_HIDDEN);
-    if (s_snap_ph) lv_obj_add_flag(s_snap_ph, LV_OBJ_FLAG_HIDDEN);
-    lv_image_set_src(s_snap_img, &s_snap_dsc);
 }
 
 void ui_apply_thumb_dash(void *arg)

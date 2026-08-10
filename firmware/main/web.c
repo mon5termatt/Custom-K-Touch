@@ -3,6 +3,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,6 +28,8 @@
 #include "ui.h"
 #include "wc_test_jpg.h"   /* embedded camera frame for the /api/test/webcam decode self-test */
 #include "prusa_connect.h"
+#include "moonraker.h"
+#include "bambu.h"
 #include "bambu_cloud.h"
 #include "netlog.h"
 #include "prefs.h"
@@ -40,7 +44,7 @@ static const char *TAG = "web";
 static const char INDEX_HTML[] =
 "<!doctype html><html><head><meta charset=utf-8>"
 "<meta name=viewport content='width=device-width,initial-scale=1'>"
-"<title>Prusa Connect Touch</title><style>"
+"<title>Klipper Touch</title><style>"
 ":root{--o:#FD5000}*{box-sizing:border-box;font-family:system-ui,Arial}"
 "body{margin:0;background:#1c1e21;color:#f2f2f2}"
 "header{background:#111316;color:#fff;padding:14px 18px;font-size:20px;font-weight:700;border-bottom:2px solid var(--o)}"
@@ -83,22 +87,22 @@ static const char INDEX_HTML[] =
 ".pthead{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#a7a7a7;margin:16px 0 2px}"
 ".pthead small{font-weight:400;text-transform:none;letter-spacing:0}"
 "@media(max-width:560px){.ptgrid{grid-template-columns:1fr}}</style></head><body>"
-"<header>PRUSA CONNECT TOUCH</header>"
+"<header>KLIPPER TOUCH</header>"
 "<nav><a id=nvst class=on onclick=\"t(0)\">Status</a><a id=nvpr onclick=\"t(1)\">Printers</a><a id=nvse onclick=\"t(9)\">Settings</a></nav>"
 "<div class=\"tab on\" id=t0><div id=stlist></div><div class=card id=dev></div></div>"
 "<div class=tab id=t1>"
-/* Type-first picker: choose how to add, then only the relevant fields appear. */
+/* Type-first picker: Klipper first; Prusa/Bambu kept but demoted. */
 "<div class=card id=ppick><b>Add a printer</b>"
-"<div class=pthead>Cloud accounts <small>&mdash; sign in once, your whole fleet appears</small></div>"
-"<div class=ptgrid>"
-"<div class=ptile onclick=pick('connect')><span class=ptag>Easiest</span><b>&#9729; Prusa</b><small>Sign in to Prusa Connect and pull in every printer on your account.</small></div>"
-"<div class=ptile onclick=pick('bcloud')><span class=ptag>Alpha</span><b>&#9729; Bambu</b><small>Sign in to your Bambu Lab account (or paste an access token).</small></div>"
-"</div>"
 "<div class=pthead>Local printer <small>&mdash; connect directly over your LAN</small></div>"
 "<div class=ptgrid>"
+"<div class=ptile onclick=pick('klipper')><span class=ptag>Recommended</span><b>&#9881; Klipper (Moonraker)</b><small>Fluidd / Mainsail printers. Use host:7125 (or just the IP).</small></div>"
 "<div class=ptile onclick=pick('link')><b>&#9635; Prusa (PrusaLink)</b><small>MK4 &middot; MK3.5/3.9 &middot; MINI &middot; CORE One &middot; XL, by IP + API key.</small></div>"
-"<div class=ptile onclick=pick('klipper')><b>&#9881; Klipper (Moonraker)</b><small>Fluidd / Mainsail printers, at host:7125.</small></div>"
 "<div class=ptile onclick=pick('bambu')><b>&#9635; Bambu (LAN)</b><small>X1 &middot; P1 &middot; A1 in LAN + Developer Mode, by IP + Access Code.</small></div>"
+"</div>"
+"<div class=pthead>Cloud accounts <small>&mdash; optional; sign in to pull a fleet</small></div>"
+"<div class=ptgrid>"
+"<div class=ptile onclick=pick('connect')><span class=ptag s>Optional</span><b>&#9729; Prusa Connect</b><small>Sign in to Prusa Connect and pull in every printer on your account.</small></div>"
+"<div class=ptile onclick=pick('bcloud')><span class=ptag>Alpha</span><b>&#9729; Bambu Cloud</b><small>Sign in to your Bambu Lab account (or paste an access token).</small></div>"
 "</div></div>"
 /* The reveal-on-select form (one set of fields, relabeled per type). */
 "<div class=card id=pform style=display:none><b id=pftitle>Add printer</b><span class=ptback onclick=pcancel()>&#8592; Back</span>"
@@ -150,7 +154,7 @@ static const char INDEX_HTML[] =
 "<button onclick=chk()>Check for updates</button>"
 "<button class=p id=ub style=display:none onclick=applyu()>Update now</button></div>"
 "<div class=card><b>Manual firmware upload</b>"
-"<p class=muted>Upload the <b>prusa-touch-app.bin</b> (the OTA image, ~2 MB). The device reboots into it. Don't upload the full 16 MB image here &mdash; that's for a USB flash.</p>"
+"<p class=muted>Upload the <b>klipper-touch-app.bin</b> (the OTA image, ~2 MB). The device reboots into it. Don't upload the full 16 MB image here &mdash; that's for a USB flash.</p>"
 "<input type=file id=fw accept=.bin><button class=p onclick=ota()>Flash</button>"
 "<div id=otalog class=muted></div></div>"
 "<div class=card><b>Scheduled reboot</b>"
@@ -176,7 +180,7 @@ static const char INDEX_HTML[] =
 "<div id=tfseeds style='display:flex;flex-wrap:wrap;gap:14px;margin:12px 0'></div>"
 "<label>Variant <select id=tfvar onchange=tf_render()><option value=dark>Dark</option><option value=light>Light</option></select></label>"
 "<label style='margin-left:16px'>Font <select id=tffont onchange=tf_render()><option value=0>Montserrat</option><option value=1>Inter</option></select></label>"
-"<div style='margin-top:10px;display:flex;gap:14px;flex-wrap:wrap'><label style='font-size:12px'>Wordmark<br><input id=tfbrand value='PRUSA | TOUCH' style='width:150px' oninput=tf_render()></label><label style='font-size:12px'>Byline<br><input id=tfbyline value='by NomadsGalaxy' style='width:150px' oninput=tf_render()></label></div>"
+"<div style='margin-top:10px;display:flex;gap:14px;flex-wrap:wrap'><label style='font-size:12px'>Wordmark<br><input id=tfbrand value='KLIPPER | TOUCH' style='width:150px' oninput=tf_render()></label><label style='font-size:12px'>Byline<br><input id=tfbyline value='Klipper first' style='width:150px' oninput=tf_render()></label></div>"
 "<div style='display:flex;gap:20px;flex-wrap:wrap;margin-top:14px'>"
 "<div><div class=muted>Preview</div><div id=tfprev></div></div>"
 "<div style='flex:1;min-width:220px'><div class=muted>Derived palette (click a chip to copy)</div>"
@@ -204,15 +208,27 @@ static const char INDEX_HTML[] =
 "<div class=ptile onclick=\"t(4)\"><b>&#128241; Screen &amp; Language</b><small>Live screen view and UI language.</small></div>"
 "<div class=ptile onclick=\"t(7)\"><b>&#127912; Theme</b><small>Colors, fonts, wordmark.</small></div>"
 "<div class=ptile onclick=\"t(8)\"><b>&#9783; Layout</b><small>Arrange the status tiles.</small></div>"
+"<div class=ptile onclick=\"t(10)\"><b>&#9881; Advanced</b><small>Multi-camera index, LED notes (touch stays simple).</small></div>"
 "</div></div></div>"
+"<div class=tab id=t10><div class=card><b>Advanced setup</b>"
+"<p class=muted>Dense printer configuration lives here. The touchscreen only uses the defaults you pick.</p>"
+"<label style='display:block;margin:8px 0 2px'>Default webcam index (Moonraker /server/webcams/list)</label>"
+"<input id=advcam type=number min=0 max=15 value=0 style=width:100px>"
+"<label style='display:block;margin:12px 0 2px'>LED / neopixel assignment notes</label>"
+"<textarea id=advled rows=5 style='width:100%;background:#2a2a2a;color:#f2f2f2;border:1px solid #4e4e4e;border-radius:6px;padding:8px'></textarea>"
+"<button class=p onclick=advsave() style=margin-top:10px>Save advanced</button>"
+"<div id=advmsg class=muted style=margin-top:8px></div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
 "<div style='background:#1c1e21;padding:14px;border-radius:10px;max-width:92%'>"
 "<div style='display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:10px'><b id=snapt>Snapshot</b><span><button onclick=snapr()>Refresh</button><button onclick=snapx()>Close</button></span></div>"
 "<img id=snapi style='max-width:84vw;max-height:70vh;border-radius:6px;background:#000;min-width:200px;min-height:120px' onerror=\"this.alt='No snapshot available for this printer'\"></div></div>"
 "<script>"
-"var FL=[];var SNAPU='';"
-"function t(i){for(let n=0;n<10;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load()}"
+"var FL=[];var SNAPU='';var SNAPIDX=0;"
+"function t(i){for(let n=0;n<11;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
+"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload()}"
+"async function advload(){try{let a=await fetch('/api/advanced').then(x=>x.json());document.getElementById('advcam').value=a.webcam_index||0;document.getElementById('advled').value=a.led_notes||'';document.getElementById('advmsg').textContent=''}catch(e){}}"
+"async function advsave(){let body=JSON.stringify({webcam_index:+document.getElementById('advcam').value||0,led_notes:document.getElementById('advled').value||''});"
+"await fetch('/api/advanced',{method:'POST',headers:{'Content-Type':'application/json'},body:body});document.getElementById('advmsg').textContent='Saved.';}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -228,25 +244,45 @@ static const char INDEX_HTML[] =
 "'</div>'+"
 "(r.printing?('<p class=muted style=margin:12px 0 4px 0>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'):'')+"
 "(r.ctl?cp(r,i):'')+"
-"'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';wapply();"
+"'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';wapply();restoreAfc();loadAllAfc();"
 "try{let d=await fetch('/api/info').then(x=>x.json());document.getElementById('dev').innerHTML="
 "'<span class=muted>'+d.name+' '+d.fw+' &middot; heap '+Math.round(d.heap_free/1024)+'KB &middot; up '+d.uptime_s+'s</span>'}catch(e){}}"
 /* Per-printer control panel on each fleet card — mirrors the touchscreen Control screen.
    All onclick args are numeric (printer index, axis 0/1/2, signed distance, feedrate) so
    nothing needs quote-escaping inside these C string literals. */
-"function csnap(i){var p=FL[i];if(!p||!p.uuid)return;SNAPU=p.uuid;document.getElementById('snapt').textContent=p.name+' \\u2014 webcam';snapr();document.getElementById('snapm').style.display='flex';}"
-"function snapr(){document.getElementById('snapi').src='/api/connect/snapshot?uuid='+SNAPU+'&t='+Date.now();}"
+"function csnap(i){var p=FL[i];if(!p)return;SNAPU=p.uuid||'';SNAPIDX=i;document.getElementById('snapt').textContent=p.name+' \\u2014 webcam';snapr();document.getElementById('snapm').style.display='flex';}"
+"function snapr(){var src=SNAPU?('/api/connect/snapshot?uuid='+SNAPU+'&t='+Date.now()):('/api/printer/snapshot?i='+SNAPIDX+'&t='+Date.now());document.getElementById('snapi').src=src;}"
 "function snapx(){document.getElementById('snapm').style.display='none';document.getElementById('snapi').src='';}"
 "function cp(r,i){return '<div class=ctlp>'+'<button onclick=csnap('+i+')>&#128247; Webcam</button>'+(r.printing?"
-"'<div class=lbl>JOB</div><button onclick=cpause('+i+')>Pause</button><button onclick=cstop('+i+')>Stop</button>':"
-"'<div class=lbl>PREHEAT</div><div><button onclick=cpre('+i+',215,60)>PLA</button><button onclick=cpre('+i+',230,85)>PETG</button><button onclick=cpre('+i+',260,100)>ASA</button><button onclick=cpre('+i+',0,0)>Cooldown</button></div>'+"
-"'<div class=lbl style=margin-top:8px>MOVE</div><div><button onclick=chome('+i+')>&#8962; Home</button><button onclick=cjog('+i+',0,-10,3000)>X-</button><button onclick=cjog('+i+',0,10,3000)>X+</button><button onclick=cjog('+i+',1,-10,3000)>Y-</button><button onclick=cjog('+i+',1,10,3000)>Y+</button><button onclick=cjog('+i+',2,-10,600)>Z-</button><button onclick=cjog('+i+',2,10,600)>Z+</button></div>')+'</div>';}"
-"function cgo(i,op,qs){let u=FL[i]&&FL[i].uuid;if(!u)return;return fetch('/api/connect/control?uuid='+u+'&op='+op+(qs||''),{method:'POST'}).then(()=>setTimeout(st,1200)).catch(()=>{});}"
+"'<div class=lbl>JOB</div><button onclick=cpause('+i+')>Pause</button><button onclick=cresume('+i+')>Resume</button><button onclick=cstop('+i+')>Stop</button>':"
+"'<div class=lbl>PREHEAT</div><div><button onclick=cpre('+i+',0)>PLA</button><button onclick=cpre('+i+',1)>PETG</button><button onclick=cpre('+i+',2)>ASA</button><button onclick=cpre('+i+',3)>Cooldown</button></div>'+"
+"'<div class=lbl style=margin-top:8px>MOVE</div><div><button onclick=chome('+i+')>&#8962; Home</button><button onclick=cjog('+i+',0,-10,3000)>X-</button><button onclick=cjog('+i+',0,10,3000)>X+</button><button onclick=cjog('+i+',1,-10,3000)>Y-</button><button onclick=cjog('+i+',1,10,3000)>Y+</button><button onclick=cjog('+i+',2,-10,600)>Z-</button><button onclick=cjog('+i+',2,10,600)>Z+</button></div>')+"
+"'<div id=afc'+i+'></div></div>';}"
+"function cgo(i,op,qs){return fetch('/api/printer/control?i='+i+'&op='+op+(qs||''),{method:'POST'}).then(()=>setTimeout(st,1200)).catch(()=>{});}"
 "function cpause(i){cgo(i,'pause')}"
+"function cresume(i){cgo(i,'resume')}"
 "function cstop(i){if(confirm('Stop the print on '+(FL[i]&&FL[i].name)+'?'))cgo(i,'stop')}"
-"function cpre(i,n,b){cgo(i,'preheat','&n='+n+'&b='+b)}"
+"function cpre(i,m){cgo(i,'preheat','&m='+m)}"
 "function chome(i){cgo(i,'home')}"
-"function cjog(i,a,d,f){if(a==2)cgo(i,'movez','&z='+d+'&f='+f);else cgo(i,'move','&'+(a==0?'x':'y')+'='+d+'&f='+f)}"
+"function cjog(i,a,d,f){cgo(i,'move','&a='+a+'&d='+d+'&f='+f)}"
+"function cafc(i,lane){cgo(i,'afc_change','&lane='+lane)}"
+"function cafcu(i){cgo(i,'afc_unload')}"
+"function cafcp(i){cgo(i,'afc_prep')}"
+"function cafcr(i){cgo(i,'afc_resume')}"
+"function cafcc(i){cgo(i,'afc_clear')}"
+"function cestop(i){if(confirm('Emergency stop?'))cgo(i,'estop')}"
+"var AFCC={};"
+"async function loadAfc(i){try{let a=await fetch('/api/printer/afc?i='+i).then(x=>x.json());var el=document.getElementById('afc'+i);if(!el)return;"
+"if(!a.present){if(AFCC[i]){delete AFCC[i];el.innerHTML=''}return;}"
+"var sig=JSON.stringify(a);if(AFCC[i]&&AFCC[i].sig===sig){if(el.innerHTML!==AFCC[i].html)el.innerHTML=AFCC[i].html;return;}"
+"el.innerHTML='<div class=lbl style=margin-top:8px>AFC '+(a.current?('· '+a.current):'')+(a.state&&a.state!=='Idle'?(' · '+a.state):'')+'</div><div>'+"
+"a.lanes.map(function(L){var sty=L.tool_loaded||L.name===a.current?'border-color:var(--o);border-width:2px':'';"
+"var sw=L.color?'<span style=\"display:inline-block;width:10px;height:10px;border-radius:50%;background:'+L.color+';margin-right:4px\"></span>':'';"
+"return '<button style=\"'+sty+'\" onclick=cafc('+i+','+L.num+')>'+sw+'L'+L.num+(L.material?(' '+L.material):'')+'</button>'}).join('')+"
+"'<button onclick=cafcu('+i+')>Unload</button><button onclick=cafcp('+i+')>Prep</button><button onclick=cafcr('+i+')>Resume</button><button onclick=cafcc('+i+')>Clear</button><button onclick=cestop('+i+')>E-STOP</button></div>';"
+"AFCC[i]={sig:sig,html:el.innerHTML}}catch(e){}}"
+"function loadAllAfc(){FL.forEach(function(p,i){if(p&&p.ctl)loadAfc(i)})}"
+"function restoreAfc(){FL.forEach(function(p,i){var el=document.getElementById('afc'+i);if(el&&AFCC[i])el.innerHTML=AFCC[i].html})}"
 "async function logout(){if(!confirm('Log out of Prusa Connect? This clears the saved account.'))return;await fetch('/api/connect/logout',{method:'POST'});acclist.innerHTML='';la()}"
 "async function la(){let r=await fetch('/api/connect/info').then(x=>x.json());"
 "acstat.textContent=r.auth?'Linked':'Not linked.';"
@@ -290,29 +326,29 @@ static const char INDEX_HTML[] =
 "if((await r.json()).res=='ok')la();else alert(tr('Verification failed'))}"
 "async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert(tr('Added!'))}"
 "let PL=[],EI=-1;"
-"var CT='link';"  /* current add type */
+"var CT='klipper';"  /* current add type — Klipper-first */
 "function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
 "let b=ty=='bambu';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
-"ph.placeholder=b?'Printer IP':(ty=='klipper'?'host:7125 (e.g. 192.168.1.50:7125)':'IP / host');"
+"ph.placeholder=b?'Printer IP':(ty=='klipper'?'host or host:7125':'IP / host');"
 "pk.placeholder=b?'LAN Access Code':(ty=='klipper'?'API key (usually blank)':'API key');"
 "pftitle.textContent=({link:'Add a Prusa printer',klipper:'Add a Klipper printer',bambu:'Add a Bambu Lab printer'}[ty]||'Add printer');"
 "ppick.style.display='none';pform.style.display='block'}"
 "function pcancel(){pform.style.display='none';ppick.style.display='block';EI=-1}"
 "async function lp(){PL=await fetch('/api/printers').then(x=>x.json());"
-"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):p.host+(p.haskey?'':' (no key)'))+'</span> '"
+"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):(p.port==7125?'Klipper ':'')+p.host+(p.port&&p.port!=80&&p.port!=7125?(':'+p.port):'')+(p.haskey?'':' (no key)'))+'</span> '"
 "+'<button class=p onclick=usep('+p.i+')>Use</button> <button onclick=editp('+p.i+')>Edit</button> <button onclick=delp('+p.i+')>Remove</button></div>').join('')}"
-"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;let b=p.host.indexOf('bambu:')==0;CT=b?'bambu':'link';"
+"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;let b=p.host.indexOf('bambu:')==0;CT=b?'bambu':(p.port==7125?'klipper':'link');"
 "pn.value=p.name;pk.value='';ph.value=b?p.host.slice(6):p.host;ps.value=p.serial||'';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
-"ph.placeholder=b?'Printer IP':'IP / host';pk.placeholder=b?'LAN Access Code (blank = keep)':'API key (blank = keep)';"
+"ph.placeholder=b?'Printer IP':(CT=='klipper'?'host or host:7125':'IP / host');pk.placeholder=b?'LAN Access Code (blank = keep)':(CT=='klipper'?'API key (blank = keep)':'API key (blank = keep)');"
 "pftitle.textContent='Edit '+p.name;ppick.style.display='none';pform.style.display='block'}"
-"async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value};if(EI>=0)m.i=EI;"
+"async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value,type:CT};if(EI>=0)m.i=EI;"
 "let r=await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});"
 "if(r.status>=400)alert(await r.text());else{pcancel();lp()}}"
 "async function delp(i){if(!confirm('Remove this printer?'))return;await fetch('/api/printers/remove',{method:'POST',body:JSON.stringify({i:i})});if(EI==i)pcancel();lp()}"
 "async function usep(i){await fetch('/api/printers/active',{method:'POST',body:JSON.stringify({i:i})});lp()}"
 "async function expc(){let r=await fetch('/api/config/export').then(x=>x.json());"
 "let b=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});"
-"let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch-config.json';a.click()}"
+"let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='klipper-touch-config.json';a.click()}"
 "async function impc(){let f=icf.files[0];if(!f)return;if(!confirm(tr('Replace the printers and settings on this device with the backup file?')))return;"
 "let r=await fetch('/api/config/import',{method:'POST',body:f});"
 "if(r.status>=400){alert(await r.text());return}if((await r.text())=='ok-reboot')alert(tr('Restored. The device is restarting.'));else{lp();alert(tr('Import success!'))}}"
@@ -384,13 +420,13 @@ static const char INDEX_HTML[] =
 "async function tf_preset_apply(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx}),nm=p?p.name:'theme';var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});alert(r.ok?'Applying '+nm+' - the device is restarting.':'Failed (HTTP '+r.status+')')}"
 "async function tf_default(){var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:0})});alert(r.ok?'Resetting to the default theme - the device is restarting.':'Failed (HTTP '+r.status+')')}"
 "function tf_si(){var h='';TFSL.forEach(function(p){h+=`<label style='font-size:12px;text-align:center'>${p[1]}<br><input type=color value='${TFS[p[0]]}' style='width:58px;height:42px;padding:2px;border:1px solid #4e4e4e;border-radius:6px;cursor:pointer' oninput='TFS.${p[0]}=this.value;tf_render()'><br><span id='tfsl_${p[0]}' style='font-family:monospace;font-size:11px;color:#a7a7a7'>${TFS[p[0]]}</span></label>`});document.getElementById('tfseeds').innerHTML=h}"
-"function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38),BR=(document.getElementById('tfbrand').value||'PRUSA | TOUCH');document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>${BR}</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
+"function tf_prev(){var C=TFC,bd=mix(C.state_orange,C.surface,.54),sp=mix(C.state_orange,C.bg,.38),BR=(document.getElementById('tfbrand').value||'KLIPPER | TOUCH');document.getElementById('tfprev').innerHTML=`<div style='width:300px;border-radius:8px;overflow:hidden;background:${C.bg};font-size:12px;border:1px solid ${C.border}'><div style='background:${C.header};color:${C.text};padding:8px 10px;display:flex;justify-content:space-between'><b>${BR}</b><span style='width:10px;height:10px;border-radius:50%;background:${C.state_green};align-self:center'></span></div><div style='padding:10px'><div style='background:${sp};height:6px;border-radius:3px 3px 0 0'></div><div style='background:${C.surface};border:1px solid ${C.border};border-top:none;padding:10px'><div style='display:flex;justify-content:space-between'><b style='color:${C.text}'>Apollo</b><span style='background:${bd};color:${C.text};padding:2px 8px;border-radius:4px;font-size:10px'>PRINTING</span></div><div style='color:${C.text_muted};margin:2px 0 8px'>Prusa CORE One</div><div style='background:${C.surface_hi};height:8px;border-radius:4px'><div style='background:${C.orange};width:62%;height:8px;border-radius:4px'></div></div><div style='display:flex;gap:14px;margin-top:8px;color:${C.text_muted}'><span><span style='color:${C.temp_hot}'>&#9679;</span> 215&deg;C</span><span><span style='color:${C.temp_cold}'>&#9679;</span> 60&deg;C</span></div><div style='margin-top:10px'><button style='background:${C.orange};color:${C.text_inverse};border:none;padding:6px 12px;border-radius:6px'>Pause</button> <button style='background:${C.surface_hi};color:${C.text};border:none;padding:6px 12px;border-radius:6px'>Control</button></div></div></div></div>`}"
 "function tf_render(){TFV=document.getElementById('tfvar').value;TFC=derive(TFS,TFV);var C=TFC;"
 "TFSL.forEach(function(p){var s=document.getElementById('tfsl_'+p[0]);if(s)s.textContent=TFS[p[0]]});"
 "var sw='';TFTOK.forEach(function(k){sw+=`<div title='${k} ${C[k]}' style='width:32px;height:32px;border-radius:5px;border:1px solid #0006;background:${C[k]}'></div>`});document.getElementById('tfsw').innerHTML=sw;"
 "var wc='',wn='';TFPR.forEach(function(p){var r=_cr(C[p[0]],C[p[1]]),t=_ct(r),cc=t=='FAIL'?'#f8795f':t=='AA-L'?'#fddc71':'#a1ea70';wc+=`<span style='font-size:11px'>${p[0]}/${p[1]} <b style='color:${cc}'>${r.toFixed(1)} ${t}</b></span>`;if(t=='FAIL'&&(p[1]=='surface'||p[1]=='bg'))wn=`Low contrast: ${p[0]} on ${p[1]} may be hard to read.`});document.getElementById('tfwc').innerHTML=wc;document.getElementById('tfwarn').textContent=wn;tf_prev()}"
 "async function tf_save(){var b={colors:TFC,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value};var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});alert(r.ok?'Saved - the device is restarting into your theme.':'Save failed (HTTP '+r.status+')')}"
-"function tf_export(){var o={name:document.getElementById('tfbrand').value||'Custom',variant:TFV,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='prusa-touch.skin.json';a.click()}"
+"function tf_export(){var o={name:document.getElementById('tfbrand').value||'Custom',variant:TFV,font:parseInt(document.getElementById('tffont').value),brand:document.getElementById('tfbrand').value,byline:document.getElementById('tfbyline').value,seeds:TFS,colors:TFC},b=new Blob([JSON.stringify(o,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='klipper-touch.skin.json';a.click()}"
 "function tf_pick(){document.getElementById('tfimp').click()}"
 "function tf_import(e){var f=e.target.files[0];if(!f)return;var rd=new FileReader();rd.onload=function(){try{var o=JSON.parse(rd.result);TFS=o.seeds||exS(o.colors);if(o.variant)TFV=o.variant;if(o.font!=null)document.getElementById('tffont').value=o.font;if(o.brand)document.getElementById('tfbrand').value=o.brand;if('byline' in o)document.getElementById('tfbyline').value=o.byline;document.getElementById('tfvar').value=TFV;tf_si();tf_render()}catch(x){alert(tr('Invalid skin file'))}};rd.readAsText(f)}"
 /* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
@@ -516,6 +552,7 @@ static esp_err_t printers_get(httpd_req_t *req)
         cJSON_AddNumberToObject(e, "i", i);
         cJSON_AddStringToObject(e, "name", p.name);
         cJSON_AddStringToObject(e, "host", p.host);   /* key intentionally omitted */
+        cJSON_AddNumberToObject(e, "port", p.port);
         cJSON_AddBoolToObject(e, "active", i == active);
         cJSON_AddBoolToObject(e, "haskey", p.api_key[0] != '\0');
         if (strncmp(p.host, "bambu:", 6) == 0) cJSON_AddStringToObject(e, "serial", p.uuid);  /* Bambu serial for edit prefill */
@@ -547,6 +584,56 @@ static char *recv_body(httpd_req_t *req)
     return buf;
 }
 
+/* Split a trailing :port from host (IPv4/hostname, or [IPv6]:port). Returns true and
+ * mutates host when a port was present. cloud:/bambu: prefixes are left alone. */
+static bool split_host_port(char *host, int *port_out)
+{
+    if (!host || !host[0] || !port_out) return false;
+    if (strncmp(host, "cloud:", 6) == 0 || strncmp(host, "bambu:", 6) == 0 ||
+        strncmp(host, "bambucloud:", 11) == 0) return false;
+    if (host[0] == '[') {
+        char *rb = strchr(host, ']');
+        if (!rb || rb[1] != ':' || !rb[2]) return false;
+        int p = atoi(rb + 2);
+        if (p <= 0 || p >= 65536) return false;
+        size_t n = (size_t)(rb - host - 1);
+        memmove(host, host + 1, n);
+        host[n] = '\0';
+        *port_out = p;
+        return true;
+    }
+    char *colon = strrchr(host, ':');
+    if (!colon || colon == host || strchr(host, ':') != colon) return false;
+    for (const char *d = colon + 1; *d; d++)
+        if (*d < '0' || *d > '9') return false;
+    if (!colon[1]) return false;
+    int p = atoi(colon + 1);
+    if (p <= 0 || p >= 65536) return false;
+    *colon = '\0';
+    *port_out = p;
+    return true;
+}
+
+/* Apply type / explicit port / host:port into p->host + p->port. */
+static void normalize_printer_endpoint(pp_printer_t *p, const char *type_str, const cJSON *port_j)
+{
+    if (!p) return;
+    if (strncmp(p->host, "cloud:", 6) == 0 || strncmp(p->host, "bambu:", 6) == 0 ||
+        strncmp(p->host, "bambucloud:", 11) == 0) {
+        p->port = 0;
+        return;
+    }
+    int def = (type_str && strcmp(type_str, "klipper") == 0) ? 7125 : 80;
+    int from_host = 0;
+    bool has_host_port = split_host_port(p->host, &from_host);
+    if (cJSON_IsNumber(port_j) && port_j->valuedouble > 0)
+        p->port = (int)port_j->valuedouble;
+    else if (has_host_port)
+        p->port = from_host;
+    else
+        p->port = def;
+}
+
 static esp_err_t printers_post(httpd_req_t *req)
 {
     char *body = recv_body(req);
@@ -559,11 +646,13 @@ static esp_err_t printers_post(httpd_req_t *req)
             const cJSON *h = cJSON_GetObjectItem(j, "host");
             const cJSON *k = cJSON_GetObjectItem(j, "key");
             const cJSON *s = cJSON_GetObjectItem(j, "serial");   /* Bambu device serial -> uuid */
+            const cJSON *ty = cJSON_GetObjectItem(j, "type");
+            const cJSON *po = cJSON_GetObjectItem(j, "port");
             if (cJSON_IsString(h)) strlcpy(p.host, h->valuestring, sizeof(p.host));
             strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
             if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
             if (cJSON_IsString(s)) strlcpy(p.uuid, s->valuestring, sizeof(p.uuid));
-            p.port = 80;
+            normalize_printer_endpoint(&p, cJSON_IsString(ty) ? ty->valuestring : NULL, po);
             if (p.host[0]) {
                 if (printer_store_add(&p) < 0) {
                     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Printer limit reached");
@@ -596,10 +685,18 @@ static esp_err_t printers_update_post(httpd_req_t *req)
             const cJSON *h = cJSON_GetObjectItem(j, "host");
             const cJSON *k = cJSON_GetObjectItem(j, "key");
             const cJSON *s = cJSON_GetObjectItem(j, "serial");
+            const cJSON *ty = cJSON_GetObjectItem(j, "type");
+            const cJSON *po = cJSON_GetObjectItem(j, "port");
             if (cJSON_IsString(n) && n->valuestring[0]) strlcpy(p.name, n->valuestring, sizeof(p.name));
             if (cJSON_IsString(h) && h->valuestring[0]) strlcpy(p.host, h->valuestring, sizeof(p.host));
             if (cJSON_IsString(k) && k->valuestring[0]) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
             if (cJSON_IsString(s)) strlcpy(p.uuid, s->valuestring, sizeof(p.uuid));   /* Bambu serial */
+            /* Preserve stored port when editing without type/port/host:port; re-normalize when host changes. */
+            if ((cJSON_IsString(h) && h->valuestring[0]) || cJSON_IsString(ty) || cJSON_IsNumber(po)) {
+                const char *type_str = cJSON_IsString(ty) ? ty->valuestring : NULL;
+                if (!type_str && p.port == 7125) type_str = "klipper";
+                normalize_printer_endpoint(&p, type_str, po);
+            }
             printer_store_update(idx, &p);
             app_state_printers_changed();
         }
@@ -770,7 +867,7 @@ static esp_err_t update_apply_post(httpd_req_t *req)
 static esp_err_t info_get(httpd_req_t *req)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "name", "Prusa Connect Touch");
+    cJSON_AddStringToObject(o, "name", "Klipper Touch");
     cJSON_AddStringToObject(o, "fw", PP_FW_VERSION);
     cJSON_AddNumberToObject(o, "heap_free", (double)esp_get_free_heap_size());
     /* Internal RAM is the scarce resource (TLS/mbedTLS allocates here, not PSRAM). Surface
@@ -895,8 +992,8 @@ static esp_err_t config_import_post(httpd_req_t *req)
             const cJSON *k = cJSON_GetObjectItem(e, "key");
             if (cJSON_IsString(h)) strlcpy(p.host, h->valuestring, sizeof(p.host));
             strlcpy(p.name, cJSON_IsString(n) && n->valuestring[0] ? n->valuestring : p.host, sizeof(p.name));
-            p.port = cJSON_IsNumber(po) ? (int)po->valuedouble : 80;
             if (cJSON_IsString(k)) strlcpy(p.api_key, k->valuestring, sizeof(p.api_key));
+            normalize_printer_endpoint(&p, NULL, po);
             if (p.host[0]) printer_store_add(&p);
         }
         app_state_printers_changed();
@@ -1117,10 +1214,126 @@ static esp_err_t connect_ctrlprobe_get(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Printer control from the web UI (mirrors the touchscreen Control screen). uuid +
- * op are query params (no spaces); for op=gcode/jog the G-code line is the POST body.
- * jog wraps the move in G91/G90 (relative) and restores absolute, exactly like the
- * touch's on_jog_clicked, so the web and device drive the printer identically. */
+/* Backend-aware printer control for the web Status cards (Klipper / PrusaLink / Bambu /
+ * Connect). Selects the fleet index as active, then posts through app_state so the same
+ * path as the touchscreen Control screen is used. */
+static esp_err_t printer_control_post(httpd_req_t *req)
+{
+    char q[200], op[16] = {0}, v[16];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK)
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing query");
+    if (httpd_query_key_value(q, "op", op, sizeof(op)) != ESP_OK)
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing op");
+    int idx = (httpd_query_key_value(q, "i", v, sizeof(v)) == ESP_OK) ? atoi(v) : -1;
+    if (idx < 0 || idx >= printer_store_count())
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad index");
+
+    app_state_select_printer(idx);
+
+    int m = (httpd_query_key_value(q, "m", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+    int a = (httpd_query_key_value(q, "a", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+    int d = (httpd_query_key_value(q, "d", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+    int f = (httpd_query_key_value(q, "f", v, sizeof(v)) == ESP_OK) ? atoi(v) : 3000;
+
+    int lane = (httpd_query_key_value(q, "lane", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+
+    if (!strcmp(op, "pause"))        app_state_post_cmd(PP_CMD_PAUSE, NULL);
+    else if (!strcmp(op, "resume"))  app_state_post_cmd(PP_CMD_RESUME, NULL);
+    else if (!strcmp(op, "stop"))    app_state_post_cmd(PP_CMD_STOP, NULL);
+    else if (!strcmp(op, "preheat")) app_state_post_cmd_n(PP_CMD_PREHEAT, m, 0, 0);
+    else if (!strcmp(op, "home"))    app_state_post_cmd_n(PP_CMD_HOME, 0, 0, 0);
+    else if (!strcmp(op, "move"))    app_state_post_cmd_n(PP_CMD_MOVE, a, d * 100, f);
+    else if (!strcmp(op, "afc_change")) app_state_post_cmd_n(PP_CMD_AFC_CHANGE, lane, 0, 0);
+    else if (!strcmp(op, "afc_unload")) app_state_post_cmd(PP_CMD_AFC_UNLOAD, NULL);
+    else if (!strcmp(op, "afc_eject"))  app_state_post_cmd_n(PP_CMD_AFC_EJECT, lane, 0, 0);
+    else if (!strcmp(op, "afc_move"))   app_state_post_cmd_n(PP_CMD_AFC_MOVE, lane, d, 0);
+    else if (!strcmp(op, "afc_prep"))   app_state_post_cmd(PP_CMD_AFC_PREP, NULL);
+    else if (!strcmp(op, "afc_resume")) app_state_post_cmd(PP_CMD_AFC_RESUME, NULL);
+    else if (!strcmp(op, "afc_clear"))  app_state_post_cmd(PP_CMD_AFC_CLEAR, NULL);
+    else if (!strcmp(op, "estop"))      app_state_post_cmd(PP_CMD_ESTOP, NULL);
+    else return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad op");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+/* AFC lane status for a fleet index (Moonraker BoxTurtle etc.). */
+static esp_err_t printer_afc_get(httpd_req_t *req)
+{
+    char q[64] = {0}, v[16];
+    int idx = 0;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+        httpd_query_key_value(q, "i", v, sizeof(v)) == ESP_OK)
+        idx = atoi(v);
+
+    pp_printer_t pr;
+    if (!printer_store_get(idx, &pr))
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no printer");
+
+    pp_afc_t afc;
+    memset(&afc, 0, sizeof(afc));
+    /* Only Moonraker hosts speak AFC; probe/port avoids hammering PrusaLink/Bambu. */
+    if (pr.port == 7125 || moonraker_probe(&pr))
+        moonraker_get_afc(&pr, &afc);
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "present", afc.present);
+    cJSON_AddBoolToObject(o, "error", afc.error);
+    cJSON_AddStringToObject(o, "state", afc.state);
+    cJSON_AddStringToObject(o, "current", afc.current);
+    cJSON *arr = cJSON_AddArrayToObject(o, "lanes");
+    for (int i = 0; i < afc.n; i++) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", afc.lanes[i].name);
+        cJSON_AddNumberToObject(e, "num", afc.lanes[i].num);
+        cJSON_AddStringToObject(e, "map", afc.lanes[i].map);
+        cJSON_AddStringToObject(e, "material", afc.lanes[i].material);
+        cJSON_AddStringToObject(e, "color", afc.lanes[i].color);
+        cJSON_AddStringToObject(e, "status", afc.lanes[i].status);
+        cJSON_AddBoolToObject(e, "ready", afc.lanes[i].ready);
+        cJSON_AddBoolToObject(e, "tool_loaded", afc.lanes[i].tool_loaded);
+        cJSON_AddItemToArray(arr, e);
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js ? js : "{}");
+    free(js);
+    cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static esp_err_t advanced_get(httpd_req_t *req)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "webcam_index", prefs_webcam_index());
+    cJSON_AddStringToObject(o, "led_notes", prefs_led_notes());
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js ? js : "{}");
+    free(js);
+    cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static esp_err_t advanced_post(httpd_req_t *req)
+{
+    char *body = recv_body(req);
+    if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    free(body);
+    if (!j) return ESP_FAIL;
+    cJSON *w = cJSON_GetObjectItem(j, "webcam_index");
+    cJSON *l = cJSON_GetObjectItem(j, "led_notes");
+    if (cJSON_IsNumber(w)) prefs_set_webcam_index(w->valueint);
+    if (cJSON_IsString(l)) prefs_set_led_notes(l->valuestring);
+    cJSON_Delete(j);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+/* Legacy Connect-only control (kept for older bookmarks / scripts). */
 static esp_err_t connect_control_post(httpd_req_t *req)
 {
     char q[200], uuid[48] = {0}, op[16] = {0};
@@ -1129,17 +1342,14 @@ static esp_err_t connect_control_post(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing uuid");
     httpd_query_key_value(q, "op", op, sizeof(op));
 
-    /* Numeric params (optional, per op). */
     char v[16];
-    int n = (httpd_query_key_value(q, "n", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;   /* nozzle °C */
-    int b = (httpd_query_key_value(q, "b", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;   /* bed °C    */
-    int f = (httpd_query_key_value(q, "f", v, sizeof(v)) == ESP_OK) ? atoi(v) : 3000;/* feedrate  */
+    int n = (httpd_query_key_value(q, "n", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+    int b = (httpd_query_key_value(q, "b", v, sizeof(v)) == ESP_OK) ? atoi(v) : 0;
+    int f = (httpd_query_key_value(q, "f", v, sizeof(v)) == ESP_OK) ? atoi(v) : 3000;
     float dx = (httpd_query_key_value(q, "x", v, sizeof(v)) == ESP_OK) ? atof(v) : 0;
     float dy = (httpd_query_key_value(q, "y", v, sizeof(v)) == ESP_OK) ? atof(v) : 0;
     float dz = (httpd_query_key_value(q, "z", v, sizeof(v)) == ESP_OK) ? atof(v) : 0;
 
-    /* Modern Connect cloud printers use dedicated commands (the web fleet is all cloud).
-     * Klipper/Moonraker control stays on the touchscreen's backend-aware gcode path. */
     esp_err_t rc = ESP_FAIL;
     if (!strcmp(op, "pause"))        rc = prusa_connect_pause(uuid);
     else if (!strcmp(op, "resume"))  rc = prusa_connect_resume(uuid);
@@ -1168,6 +1378,41 @@ static esp_err_t connect_snapshot_get(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing uuid");
     uint8_t *buf = NULL; int len = 0;
     if (prusa_connect_fetch_snapshot(uuid, &buf, &len) != ESP_OK || !buf || len <= 0) {
+        if (buf) free(buf);
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_send(req, "", 0);
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_send(req, (const char *)buf, len);
+    free(buf);
+    return ESP_OK;
+}
+
+/* Webcam snapshot for a fleet index — Connect / Moonraker / Bambu LAN. */
+static esp_err_t printer_snapshot_get(httpd_req_t *req)
+{
+    char q[64], v[16];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK ||
+        httpd_query_key_value(q, "i", v, sizeof(v)) != ESP_OK)
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing i");
+    int idx = atoi(v);
+    pp_printer_t pr;
+    if (!printer_store_get(idx, &pr)) {
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_send(req, "", 0);
+        return ESP_OK;
+    }
+    uint8_t *buf = NULL; int len = 0;
+    esp_err_t rc = ESP_FAIL;
+    if (strncmp(pr.host, "cloud:", 6) == 0)
+        rc = prusa_connect_fetch_snapshot(pr.host + 6, &buf, &len);
+    else if (strncmp(pr.host, "bambu:", 6) == 0 || strncmp(pr.host, "bambucloud:", 11) == 0)
+        rc = bambu_fetch_snapshot(&pr, &buf, &len);
+    else
+        rc = moonraker_fetch_snapshot(&pr, &buf, &len);
+    if (rc != ESP_OK || !buf || len <= 0) {
         if (buf) free(buf);
         httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_send(req, "", 0);
@@ -1459,7 +1704,7 @@ static bool web_authed(httpd_req_t *req)
 static esp_err_t web_unauth(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "401 Unauthorized");
-    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Prusa Touch\"");
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"Klipper Touch\"");
     httpd_resp_sendstr(req, "Authentication required");
     return ESP_OK;
 }
@@ -1776,7 +2021,7 @@ void web_start(void)
     s_upd_mtx = xSemaphoreCreateMutex();
     s_preview_mtx = xSemaphoreCreateMutex();
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 58; cfg.stack_size = 20480;
+    cfg.uri_match_fn = httpd_uri_match_wildcard; cfg.max_uri_handlers = 60; cfg.stack_size = 20480;
     httpd_handle_t srv = NULL;
     if (httpd_start(&srv, &cfg) != ESP_OK) return;
     httpd_uri_t rs[] = {
@@ -1792,7 +2037,12 @@ void web_start(void)
         { "/api/connect/farmprobe", HTTP_GET, connect_farmprobe_get },
         { "/api/connect/ctrlprobe", HTTP_GET, connect_ctrlprobe_get },
         { "/api/connect/control", HTTP_POST, connect_control_post },
+        { "/api/printer/control", HTTP_POST, printer_control_post },
+        { "/api/printer/afc", HTTP_GET, printer_afc_get },
+        { "/api/advanced", HTTP_GET, advanced_get },
+        { "/api/advanced", HTTP_POST, advanced_post },
         { "/api/connect/snapshot", HTTP_GET, connect_snapshot_get },
+        { "/api/printer/snapshot", HTTP_GET, printer_snapshot_get },
         { "/api/test/webcam", HTTP_GET, test_webcam_get },
         { "/api/test/farm", HTTP_GET, test_farm_get },
         { "/api/test/gql", HTTP_POST, test_gql_post },

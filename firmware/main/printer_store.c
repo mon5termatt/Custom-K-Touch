@@ -2,6 +2,9 @@
 #include "printer_store.h"
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
@@ -25,6 +28,36 @@ static SemaphoreHandle_t s_mtx;
 
 #define LOCK()   do { if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY); } while (0)
 #define UNLOCK() do { if (s_mtx) xSemaphoreGive(s_mtx); } while (0)
+
+/* Legacy entries often stored "host:7125" in host with port left at 80. Split that
+ * into host + port so HTTP clients don't DNS-lookup "10.0.0.x:7125". */
+static bool migrate_host_port(pp_printer_t *p)
+{
+    if (!p || !p->host[0]) return false;
+    if (strncmp(p->host, "cloud:", 6) == 0 || strncmp(p->host, "bambu:", 6) == 0 ||
+        strncmp(p->host, "bambucloud:", 11) == 0) return false;
+    if (p->host[0] == '[') {
+        char *rb = strchr(p->host, ']');
+        if (!rb || rb[1] != ':' || !rb[2]) return false;
+        int port = atoi(rb + 2);
+        if (port <= 0 || port >= 65536) return false;
+        size_t n = (size_t)(rb - p->host - 1);
+        memmove(p->host, p->host + 1, n);
+        p->host[n] = '\0';
+        p->port = port;
+        return true;
+    }
+    char *colon = strrchr(p->host, ':');
+    if (!colon || colon == p->host || strchr(p->host, ':') != colon) return false;
+    for (const char *d = colon + 1; *d; d++)
+        if (*d < '0' || *d > '9') return false;
+    if (!colon[1]) return false;
+    int port = atoi(colon + 1);
+    if (port <= 0 || port >= 65536) return false;
+    *colon = '\0';
+    p->port = port;
+    return true;
+}
 
 /* Persist current state. Caller must hold s_mtx. */
 static void save_locked(void)
@@ -98,6 +131,13 @@ static void load_locked(void)
         }
         if (w != s_count) { s_count = w; need_save = true; }
         if (s_active >= s_count) s_active = s_count ? 0 : -1;
+
+        for (int i = 0; i < s_count; i++) {
+            if (migrate_host_port(&s_list[i])) {
+                ESP_LOGI(TAG, "migrated printer[%d] host/port -> %s:%d", i, s_list[i].host, s_list[i].port);
+                need_save = true;
+            }
+        }
     }
     nvs_close(h);
     if (need_save) save_locked();
@@ -173,7 +213,7 @@ int printer_store_add(const pp_printer_t *p)
         }
         if (idx < 0 && s_count < PP_MAX_PRINTERS) {
             s_list[s_count] = *p;
-            if (s_list[s_count].port == 0) s_list[s_count].port = 80;
+            /* port 0 = backend default (Moonraker 7125 / PrusaLink 80) */
             idx = s_count++;
             if (s_active < 0) s_active = idx;
             save_locked();
@@ -188,9 +228,7 @@ bool printer_store_update(int idx, const pp_printer_t *p)
     bool ok = false;
     LOCK();
     if (p && idx >= 0 && idx < s_count) {
-        pp_printer_t e = *p;
-        if (e.port == 0) e.port = 80;
-        s_list[idx] = e;
+        s_list[idx] = *p;
         save_locked();
         ok = true;
     }

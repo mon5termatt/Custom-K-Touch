@@ -79,7 +79,7 @@ bool ota_update_check(ota_check_t *out)
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) { ESP_LOGW(TAG, "http init failed"); free(r.buf); return false; }
-    esp_http_client_set_header(c, "User-Agent", "Prusa-Touch");
+    esp_http_client_set_header(c, "User-Agent", "Klipper-Touch");
     esp_http_client_set_header(c, "Accept", "application/vnd.github+json");
     esp_err_t err = esp_http_client_perform(c);
     int sc = esp_http_client_get_status_code(c);
@@ -100,7 +100,7 @@ bool ota_update_check(ota_check_t *out)
                 const cJSON *dl = cJSON_GetObjectItem(a, "browser_download_url");
                 if (!cJSON_IsString(name) || !cJSON_IsString(dl)) continue;
                 /* esp_https_ota writes ONLY the app partition, so we need the
-                 * standalone app image (prusa-touch-app.bin) — never the merged
+                 * standalone app image (klipper-touch-app.bin) — never the merged
                  * full image (bootloader@0x0), the bootloader, or the partition
                  * table, all of which also end in ".bin". Match "app.bin" only. */
                 if (strstr(name->valuestring, "app.bin")) {

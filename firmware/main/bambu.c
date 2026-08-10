@@ -9,6 +9,7 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -102,17 +103,20 @@ static bool parse_report(const char *json, int len, pp_status_t *out)
     return true;
 }
 
-/* Rough model name from the serial prefix (best-effort; Bambu doesn't put it in the report). */
+/* Rough model name from the serial prefix (best-effort; Bambu doesn't put it in the report).
+ * Prefixes from https://wiki.bambulab.com/en/general/find-sn */
 static const char *model_from_serial(const char *serial)
 {
     if (!serial || strlen(serial) < 3) return "Bambu Lab";
-    if (!strncmp(serial, "00M", 3)) return "Bambu Lab X1";
-    if (!strncmp(serial, "00W", 3)) return "Bambu Lab X1C";
+    if (!strncmp(serial, "00M", 3)) return "Bambu Lab X1C";
     if (!strncmp(serial, "03W", 3)) return "Bambu Lab X1E";
-    if (!strncmp(serial, "01S", 3)) return "Bambu Lab P1S";
-    if (!strncmp(serial, "01P", 3)) return "Bambu Lab P1P";
+    if (!strncmp(serial, "20P", 3)) return "Bambu Lab X2D";
+    if (!strncmp(serial, "01P", 3)) return "Bambu Lab P1S";
+    if (!strncmp(serial, "01S", 3)) return "Bambu Lab P1P";
+    if (!strncmp(serial, "22E", 3)) return "Bambu Lab P2S";
     if (!strncmp(serial, "039", 3)) return "Bambu Lab A1";
     if (!strncmp(serial, "030", 3)) return "Bambu Lab A1 mini";
+    if (!strncmp(serial, "26A", 3)) return "Bambu Lab A2L";
     return "Bambu Lab";
 }
 
@@ -263,4 +267,94 @@ esp_err_t bambu_gcode(const pp_printer_t *pr, const char *gcode)
     snprintf(payload, sizeof(payload),
         "{\"print\":{\"sequence_id\":\"1\",\"command\":\"gcode_line\",\"param\":\"%s\\n\"}}", gcode);
     return bambu_cmd(pr, payload);
+}
+
+/* Write exactly n bytes (or fail). */
+static esp_err_t tls_write_all(esp_tls_t *tls, const void *data, size_t n)
+{
+    const uint8_t *p = data;
+    size_t left = n;
+    while (left) {
+        int w = esp_tls_conn_write(tls, p, left);
+        if (w == ESP_TLS_ERR_SSL_WANT_READ || w == ESP_TLS_ERR_SSL_WANT_WRITE) continue;
+        if (w <= 0) return ESP_FAIL;
+        p += w; left -= (size_t)w;
+    }
+    return ESP_OK;
+}
+
+/* Read exactly n bytes (or fail). */
+static esp_err_t tls_read_all(esp_tls_t *tls, void *data, size_t n)
+{
+    uint8_t *p = data;
+    size_t left = n;
+    while (left) {
+        int r = esp_tls_conn_read(tls, p, left);
+        if (r == ESP_TLS_ERR_SSL_WANT_READ || r == ESP_TLS_ERR_SSL_WANT_WRITE) continue;
+        if (r <= 0) return ESP_FAIL;
+        p += r; left -= (size_t)r;
+    }
+    return ESP_OK;
+}
+
+esp_err_t bambu_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *out_len)
+{
+    if (out) *out = NULL;
+    if (out_len) *out_len = 0;
+    /* LAN only — cloud camera uses a different (TUTK) path we don't implement. */
+    if (!pr || !bambu_is(pr) || bambu_is_cloud(pr) || !pr->api_key[0]) return ESP_FAIL;
+    if (strncmp(pr->host, "bambu:", 6) != 0) return ESP_FAIL;
+    const char *ip = pr->host + 6;
+    if (!ip[0]) return ESP_FAIL;
+
+    /* OpenBambuAPI video.md — P1/A1 JPEG stream on TLS :6000. */
+    esp_tls_cfg_t cfg = {0};
+    cfg.skip_common_name = true;   /* printer self-signed; sdkconfig skips verify */
+    cfg.timeout_ms = 8000;
+
+    esp_tls_t *tls = esp_tls_init();
+    if (!tls) return ESP_FAIL;
+    if (esp_tls_conn_new_sync(ip, (int)strlen(ip), 6000, &cfg, tls) != 1) {
+        ESP_LOGW(TAG, "camera TLS connect to %s:6000 failed", ip);
+        esp_tls_conn_destroy(tls);
+        return ESP_FAIL;
+    }
+
+    /* Auth packet: 16-byte header + 32-byte user + 32-byte pass. */
+    uint8_t auth[80];
+    memset(auth, 0, sizeof(auth));
+    auth[0] = 0x40;                         /* payload size 0x40 (LE) */
+    auth[4] = 0x00; auth[5] = 0x30;         /* type 0x3000 (LE) */
+    strlcpy((char *)(auth + 16), "bblp", 32);
+    strlcpy((char *)(auth + 48), pr->api_key, 32);
+
+    esp_err_t rc = ESP_FAIL;
+    if (tls_write_all(tls, auth, sizeof(auth)) != ESP_OK) goto done;
+
+    uint8_t hdr[16];
+    if (tls_read_all(tls, hdr, sizeof(hdr)) != ESP_OK) goto done;
+    uint32_t payload = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) |
+                       ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+    /* Sanity: JPEG frames are typically 20 KB..400 KB. */
+    if (payload < 1000 || payload > 512 * 1024) {
+        ESP_LOGW(TAG, "camera bad payload size %lu", (unsigned long)payload);
+        goto done;
+    }
+
+    uint8_t *buf = heap_caps_malloc(payload, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = malloc(payload);
+    if (!buf) goto done;
+    if (tls_read_all(tls, buf, payload) != ESP_OK) { free(buf); goto done; }
+    if (payload < 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
+        ESP_LOGW(TAG, "camera payload is not JPEG");
+        free(buf);
+        goto done;
+    }
+    if (out) *out = buf; else free(buf);
+    if (out_len) *out_len = (int)payload;
+    rc = ESP_OK;
+
+done:
+    esp_tls_conn_destroy(tls);
+    return rc;
 }

@@ -62,8 +62,30 @@ void ui_apply_logo(void *unused);
  * thread by app_state after the NVS write, and once at boot. arg unused. */
 void ui_apply_orient(void *unused);
 
-/* Apply a fetched webcam snapshot (JPEG) to the Control screen. arg: pp_image_t* (owned). */
+/* Apply a fetched webcam snapshot (JPEG) to the Webcam screen. arg: pp_image_t* (owned). */
 void ui_apply_snapshot(void *arg);
+
+/* Apply AFC lane status (Moonraker BoxTurtle etc.). arg: pp_afc_t* (owned). */
+void ui_apply_afc(void *arg);
+
+/* Tools submenu appliers (owned args freed here). */
+void ui_apply_gcode_log(void *arg);   /* pp_gcode_log_t* */
+void ui_apply_macros(void *arg);      /* pp_macro_list_t* */
+void ui_apply_endstops(void *arg);    /* pp_endstop_list_t* */
+
+/* Build Tools hub + child screens (called from ui_init). */
+void ui_tools_init(void);
+void ui_tools_open(void);
+void ui_tools_open_afc(void);
+bool ui_tools_is_hub_active(void);
+bool ui_tools_is_webcam_active(void);
+void ui_tools_refresh_menu(void);
+void ui_tools_estop(void);   /* confirm + ESTOP (Moonraker) */
+void ui_tools_show_fault_if_needed(const char *state);
+void ui_status_set_afc_chip(const pp_afc_t *a);
+
+/* For ui_tools.c — mirrors ui_locked_block. */
+bool ui_locked_block_public(void);
 
 /* Firmware update check result (arg: pp_upd_check_t*, owned -> freed here). Shows a dialog:
  * update available / up to date / check failed. */

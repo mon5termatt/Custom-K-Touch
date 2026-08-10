@@ -1,11 +1,10 @@
-# Prusa Touch — device HTTP API
+# Klipper Touch — device HTTP API
 
 The firmware runs a small HTTP server on the device (port 80) for status, configuration,
 OTA, and troubleshooting. All endpoints are also reachable over the Wi-Fi provisioning
 hotspot at `http://192.168.4.1` when no network is configured.
 
-Base URL: `http://<device-ip>/` (find the IP on the device, or use `prusatouch.local`
-if mDNS resolves on your network).
+Base URL: `http://<device-ip>/` (find the IP on the device).
 
 > These endpoints are unauthenticated and intended for a trusted LAN. Don't expose the
 > device to the internet.
@@ -15,7 +14,7 @@ if mDNS resolves on your network).
 ### `GET /api/info`
 Device + firmware health. Handy first stop when troubleshooting.
 ```json
-{ "name":"Prusa Connect Touch", "fw":"0.2.0-proto", "idf":"v5.3.1",
+{ "name":"Klipper Touch", "fw":"0.7.8", "idf":"v5.3.1",
   "model":"BTT K-Touch / Panda Touch (ESP32-S3)", "screen":"800x480",
   "heap_free":5700000, "psram_free":5600000, "uptime_s":1234 }
 ```
@@ -41,17 +40,24 @@ One entry per configured printer (drives the dashboard).
 
 ### `GET /api/printers`
 ```json
-[ { "i":0, "name":"Apollo", "host":"192.168.1.50", "active":true, "haskey":true }, ... ]
+[ { "i":0, "name":"Apollo", "host":"192.168.1.50", "port":7125, "active":true, "haskey":true }, ... ]
 ```
 `haskey:true` but `online:false` in `/api/status` → the stored API key is likely wrong
-(re-enter it). For Klipper/Moonraker printers set the host with port `7125`
-(e.g. `192.168.1.50:7125`); the backend is auto-detected.
+(re-enter it). For Klipper/Moonraker printers use port `7125` (host may be `192.168.1.50`
+or `192.168.1.50:7125`); the backend is auto-detected.
 
 ### `POST /api/printers`  — add a printer
-Body: `{ "name":"Apollo", "host":"192.168.1.50", "key":"<api-key>" }`
+Body: `{ "name":"Apollo", "host":"192.168.1.50", "key":"<api-key>", "type":"klipper" }`
+`type` may be `klipper` (default port 7125), `link` (PrusaLink, port 80), or omit and put
+`host:7125` in the host string. Optional `port` overrides.
 
 ### `POST /api/printers/update`  — edit (key blank = keep existing)
-Body: `{ "i":0, "name":"...", "host":"...", "key":"..." }`
+Body: `{ "i":0, "name":"...", "host":"...", "key":"...", "type":"klipper" }`
+
+### `POST /api/printer/control`  — pause / resume / stop / preheat / home / move
+Query: `i=<fleet-index>&op=pause|resume|stop|preheat|home|move` plus op-specific args
+(`m` for preheat material 0–3, `a`/`d`/`f` for jog axis/distance/feedrate). Routes through
+the same backend-aware path as the touchscreen (works for Klipper, PrusaLink, Bambu, Connect).
 
 ### `POST /api/printers/remove`
 Body: `{ "i":0 }`
@@ -63,7 +69,7 @@ Body: `{ "i":0 }`
 
 ### `POST /api/wifi`
 Body: `{ "ssid":"MyNetwork", "pass":"secret" }` — saves to NVS and (re)connects. If no
-known network is found at boot, the device opens an open `PrusaTouch-XXXX` SoftAP at
+known network is found at boot, the device opens an open `KlipperTouch-XXXX` SoftAP at
 `192.168.4.1` so you can post here.
 
 ## UI / screen (debug + automated testing)
@@ -103,7 +109,7 @@ history to disk — handy for watching the Prusa Connect auth/token lifecycle ov
 
 ## Firmware update (OTA)
 
-Updates pull the standalone **app** image (`prusa-touch-app.bin`) from the latest GitHub
+Updates pull the standalone **app** image (`klipper-touch-app.bin`) from the latest GitHub
 Release and flash it into the inactive OTA slot via `esp_https_ota`, with an app-identity
 check and a bootloader rollback safety net. Manual updates (below) work regardless of the
 auto-update setting; **automatic** updates are opt-in (off by default) — enable
@@ -111,15 +117,15 @@ auto-update setting; **automatic** updates are opt-in (off by default) — enabl
 GitHub roughly every 6 hours and applies any release with a newer version tag.
 
 ### `GET /api/update/check`
-Checks the GitHub Releases of `nomadsgalaxy/Prusa-Connect-Touch` for a newer build.
+Checks the GitHub Releases of `mon5termatt/Custom-K-Touch` for a newer build.
 
 ### `POST /api/update/apply`
 Triggers the self-update (download + flash via `esp_https_ota`, with an app-identity check
 and rollback safety net). Unaffected by the auto-update opt-in.
 
 ### `POST /update`
-Manual firmware upload — POST a raw `prusa-touch.bin` app image (multipart/binary) to flash
-the inactive OTA slot. Always keep the USB-C recovery path available.
+Manual firmware upload — POST a raw `klipper-touch.bin` / `klipper-touch-app.bin` app image
+(multipart/binary) to flash the inactive OTA slot. Always keep the USB-C recovery path available.
 
 ## Troubleshooting checklist
 
@@ -127,6 +133,6 @@ the inactive OTA slot. Always keep the USB-C recovery path available.
 |---|---|
 | Printer shows offline | `GET /api/status` → `online:false`; verify IP/port and API key; for Klipper use `:7125` |
 | CONTROL button missing | Expected on PrusaLink (Buddy doesn't run remote gcode); shown for Klipper/Moonraker |
-| No thumbnails | PrusaLink large thumbnails are PNG at `refs.thumbnail`; Moonraker thumbnails aren't wired yet |
+| No thumbnails | PrusaLink uses `refs.thumbnail`; Moonraker uses `/server/files/metadata` then gcodes thumbs |
 | Screen frozen / reboots | `GET /api/info` for `uptime_s` resets + `heap_free`; capture serial @115200 for the panic backtrace |
-| Can't reach the device | Join the `PrusaTouch-XXXX` hotspot and open `http://192.168.4.1` |
+| Can't reach the device | Join the `KlipperTouch-XXXX` hotspot and open `http://192.168.4.1` |

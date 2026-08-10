@@ -14,7 +14,7 @@ bool wifi_has_creds(void);
 /* Provisioning hotspot (SoftAP) state — raised automatically when no network is
  * reachable, so the web UI is available at http://192.168.4.1 to set up WiFi. */
 bool wifi_is_ap_active(void);
-const char *wifi_ap_ssid(void);   /* "PrusaTouch-XXXX" once the hotspot is up */
+const char *wifi_ap_ssid(void);   /* "KlipperTouch-XXXX" once the hotspot is up */
 
 /* Device's dotted IPv4 once connected (e.g. "192.168.1.42"), else "". Use it to
  * tell the user where to reach the web UI from a computer on the same network. */

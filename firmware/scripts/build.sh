@@ -4,4 +4,4 @@
 set -e
 FW="$(cd "$(dirname "$0")/.." && pwd)"
 docker run --rm -v "$FW:/project" -w /project espressif/idf:v5.3.1 idf.py build
-echo "Build artifacts in $FW/build/ (prusa-touch.bin)."
+echo "Build artifacts in $FW/build/ (klipper-touch.bin)."
