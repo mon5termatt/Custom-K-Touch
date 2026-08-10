@@ -55,6 +55,8 @@ void ui_request_screen(const char *name);
 const char *ui_current_screen(void);          /* active screen name (test verify) */
 /* Fleet hotkey 1..9 — call on LVGL thread (or via usb_hid_kb). */
 void ui_kb_dash_select(int one_based);
+/* AFC lane hotkey 1..n — select lane for Move; LVGL thread. */
+void ui_kb_afc_select(int one_based);
 
 /* Apply the logo preference (show/hide wordmark bylines). Scheduled on the LVGL
  * thread by app_state after the NVS write. arg unused. */
@@ -81,6 +83,7 @@ void ui_tools_open(void);
 void ui_tools_open_afc(void);
 bool ui_tools_is_hub_active(void);
 bool ui_tools_is_webcam_active(void);
+bool ui_tools_is_afc_active(void);
 void ui_tools_refresh_menu(void);
 void ui_tools_estop(void);   /* confirm + ESTOP (Moonraker) */
 void ui_tools_show_fault_if_needed(const char *state);

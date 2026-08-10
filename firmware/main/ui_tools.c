@@ -52,14 +52,25 @@ static uint16_t *s_snap_px;
 static int s_snap_w, s_snap_h;
 static bool s_snap_want_fs;
 
-/* AFC */
+/* AFC — KS-inspired lane cards (main panel only; no sensors/filament config) */
 static lv_obj_t *s_afc_state_lbl;
-static lv_obj_t *s_afc_lane_btns[PP_AFC_MAX_LANES];
-static lv_obj_t *s_afc_lane_lbls[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_loaded_lbl;
+static lv_obj_t *s_afc_lane_grid;
+static lv_obj_t *s_afc_cards[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_name_lbl[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_map_lbl[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_mat_lbl[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_stat_lbl[PP_AFC_MAX_LANES];
 static lv_obj_t *s_afc_swatch[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_load_btn[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_load_lbl[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_eject_btn[PP_AFC_MAX_LANES];
+static lv_obj_t *s_afc_dist_btns[3];
 static int s_afc_lane_nums[PP_AFC_MAX_LANES];
+static bool s_afc_lane_active[PP_AFC_MAX_LANES];
 static int s_afc_sel_lane;
 static int s_afc_move_mm = 50;
+static int s_afc_n_shown;
 static int s_jog_step = 10;
 static int s_extrude_mm = 15;
 
@@ -902,7 +913,7 @@ void ui_apply_snapshot(void *arg)
     if (want_fs || fs_was) snap_fs_show();
 }
 
-/* ---- AFC ---- */
+/* ---- AFC (inspired by ArmoredTurtle AFC-Klipper-Screen main panel) ---- */
 static lv_color_t afc_parse_color(const char *hex)
 {
     if (!hex || hex[0] != '#' || strlen(hex) < 7) return PP_SURFACE_HI;
@@ -911,24 +922,69 @@ static lv_color_t afc_parse_color(const char *hex)
     return lv_color_make((uint8_t)r, (uint8_t)g, (uint8_t)b);
 }
 
-static void on_afc_lane(lv_event_t *e)
+static void afc_refresh_sel_style(void)
+{
+    for (int i = 0; i < PP_AFC_MAX_LANES; i++) {
+        if (!s_afc_cards[i] || lv_obj_has_flag(s_afc_cards[i], LV_OBJ_FLAG_HIDDEN)) continue;
+        bool sel = (s_afc_lane_nums[i] > 0 && s_afc_lane_nums[i] == s_afc_sel_lane);
+        bool act = s_afc_lane_active[i];
+        lv_obj_set_style_border_color(s_afc_cards[i],
+            sel ? PP_ORANGE : (act ? PP_OK : PP_BORDER), 0);
+        lv_obj_set_style_border_width(s_afc_cards[i], sel || act ? 2 : 1, 0);
+        lv_obj_set_style_bg_color(s_afc_cards[i],
+            sel ? PP_SURFACE_HI : PP_SURFACE, 0);
+    }
+    for (int i = 0; i < 3; i++) {
+        if (!s_afc_dist_btns[i]) continue;
+        int mm = (int)(intptr_t)lv_obj_get_user_data(s_afc_dist_btns[i]);
+        bool on = (mm == s_afc_move_mm);
+        lv_obj_set_style_border_color(s_afc_dist_btns[i], on ? PP_ORANGE : PP_BORDER, 0);
+        lv_obj_set_style_border_width(s_afc_dist_btns[i], on ? 2 : 1, 0);
+    }
+}
+
+static void on_afc_select(lv_event_t *e)
+{
+    int slot = (int)(intptr_t)lv_event_get_user_data(e);
+    if (slot < 0 || slot >= PP_AFC_MAX_LANES) return;
+    if (s_afc_lane_nums[slot] <= 0) return;
+    s_afc_sel_lane = s_afc_lane_nums[slot];
+    afc_refresh_sel_style();
+}
+
+static void on_afc_load_unload(lv_event_t *e)
 {
     if (ui_locked_block_public()) return;
     int slot = (int)(intptr_t)lv_event_get_user_data(e);
     if (slot < 0 || slot >= PP_AFC_MAX_LANES) return;
-    s_afc_sel_lane = s_afc_lane_nums[slot];
-    if (s_afc_sel_lane > 0) app_state_post_cmd_n(PP_CMD_AFC_CHANGE, s_afc_sel_lane, 0, 0);
+    int num = s_afc_lane_nums[slot];
+    if (num <= 0) return;
+    s_afc_sel_lane = num;
+    afc_refresh_sel_style();
+    if (s_afc_lane_active[slot])
+        app_state_post_cmd(PP_CMD_AFC_UNLOAD, NULL);
+    else
+        app_state_post_cmd_n(PP_CMD_AFC_CHANGE, num, 0, 0);
 }
+
+static void on_afc_eject_lane(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    int slot = (int)(intptr_t)lv_event_get_user_data(e);
+    if (slot < 0 || slot >= PP_AFC_MAX_LANES) return;
+    int num = s_afc_lane_nums[slot];
+    if (num <= 0) return;
+    s_afc_sel_lane = num;
+    afc_refresh_sel_style();
+    app_state_post_cmd_n(PP_CMD_AFC_EJECT, num, 0, 0);
+}
+
 static void on_afc_unload(lv_event_t *e)
 {
     (void)e; if (ui_locked_block_public()) return;
     app_state_post_cmd(PP_CMD_AFC_UNLOAD, NULL);
 }
-static void on_afc_eject(lv_event_t *e)
-{
-    (void)e; if (ui_locked_block_public()) return;
-    if (s_afc_sel_lane > 0) app_state_post_cmd_n(PP_CMD_AFC_EJECT, s_afc_sel_lane, 0, 0);
-}
+
 static void on_afc_move(lv_event_t *e)
 {
     if (ui_locked_block_public()) return;
@@ -936,16 +992,42 @@ static void on_afc_move(lv_event_t *e)
     if (s_afc_sel_lane > 0)
         app_state_post_cmd_n(PP_CMD_AFC_MOVE, s_afc_sel_lane, sign * s_afc_move_mm, 0);
 }
+
 static void on_afc_dist(lv_event_t *e)
 {
     s_afc_move_mm = (int)(intptr_t)lv_event_get_user_data(e);
+    afc_refresh_sel_style();
 }
+
 static void on_afc_prep(lv_event_t *e)
 { (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_PREP, NULL); }
 static void on_afc_resume(lv_event_t *e)
 { (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_RESUME, NULL); }
 static void on_afc_clear(lv_event_t *e)
 { (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_CLEAR, NULL); }
+
+static lv_obj_t *afc_mini_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
+                              void *ud, lv_obj_t **out_lbl)
+{
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_size(b, LV_PCT(48), 36);
+    lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(b, PP_SURFACE_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(b, PP_BORDER, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 4, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    ui_kb_focus_add(b);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, text ? text : "");
+    lv_obj_set_style_text_color(l, PP_TEXT, 0);
+    lv_obj_set_style_text_font(l, PP_F14, 0);
+    lv_obj_center(l);
+    if (out_lbl) *out_lbl = l;
+    return b;
+}
 
 static void build_afc(void)
 {
@@ -954,54 +1036,143 @@ static void build_afc(void)
     lv_obj_add_flag(s_afc, LV_OBJ_FLAG_SCROLLABLE);
     make_hdr(s_afc, tr(STR_AFC), go_hub);
 
-    s_afc_state_lbl = lv_label_create(s_afc);
+    /* Status strip — KS “Loaded: laneN” + AFC state */
+    lv_obj_t *strip = lv_obj_create(s_afc);
+    lv_obj_set_size(strip, tw() - 32, 40);
+    lv_obj_align(strip, LV_ALIGN_TOP_MID, 0, 58);
+    lv_obj_set_style_bg_color(strip, PP_SURFACE, 0);
+    lv_obj_set_style_border_width(strip, 0, 0);
+    lv_obj_set_style_radius(strip, 6, 0);
+    lv_obj_set_style_pad_hor(strip, 12, 0);
+    lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_afc_state_lbl = lv_label_create(strip);
     lv_label_set_text(s_afc_state_lbl, "");
     lv_obj_set_style_text_color(s_afc_state_lbl, PP_ORANGE, 0);
-    lv_obj_align(s_afc_state_lbl, LV_ALIGN_TOP_LEFT, 16, 64);
+    lv_obj_set_style_text_font(s_afc_state_lbl, PP_F14, 0);
+    lv_obj_align(s_afc_state_lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
-    lv_obj_t *unl = make_button(s_afc, tr(STR_AFC_UNLOAD), on_afc_unload, NULL, NULL);
-    lv_obj_set_size(unl, 100, 40);
-    lv_obj_align(unl, LV_ALIGN_TOP_RIGHT, -16, 60);
+    s_afc_loaded_lbl = lv_label_create(strip);
+    lv_label_set_text(s_afc_loaded_lbl, "");
+    lv_obj_set_style_text_color(s_afc_loaded_lbl, PP_TEXT, 0);
+    lv_obj_set_style_text_font(s_afc_loaded_lbl, PP_F14, 0);
+    lv_obj_align(s_afc_loaded_lbl, LV_ALIGN_LEFT_MID, 120, 0);
+
+    lv_obj_t *gunl = make_button(strip, tr(STR_AFC_UNLOAD), on_afc_unload, NULL, NULL);
+    lv_obj_set_size(gunl, 88, 32);
+    lv_obj_align(gunl, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    /* Lane card grid */
+    s_afc_lane_grid = lv_obj_create(s_afc);
+    lv_obj_set_size(s_afc_lane_grid, tw() - 24, th() - 230);
+    lv_obj_align(s_afc_lane_grid, LV_ALIGN_TOP_MID, 0, 108);
+    lv_obj_set_style_bg_opa(s_afc_lane_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_afc_lane_grid, 0, 0);
+    lv_obj_set_style_pad_all(s_afc_lane_grid, 4, 0);
+    lv_obj_set_style_pad_row(s_afc_lane_grid, 10, 0);
+    lv_obj_set_style_pad_column(s_afc_lane_grid, 10, 0);
+    lv_obj_set_flex_flow(s_afc_lane_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(s_afc_lane_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_add_flag(s_afc_lane_grid, LV_OBJ_FLAG_SCROLLABLE);
+
+    const int cols = t_portrait() ? 2 : 4;
+    const int card_w = (tw() - 24 - 8 - 10 * (cols - 1)) / cols;
+    const int card_h = 148;
 
     for (int i = 0; i < PP_AFC_MAX_LANES; i++) {
         s_afc_lane_nums[i] = 0;
-        s_afc_lane_btns[i] = make_button(s_afc, "", on_afc_lane, (void *)(intptr_t)i, &s_afc_lane_lbls[i]);
-        lv_obj_set_size(s_afc_lane_btns[i], 84, 56);
-        lv_obj_align(s_afc_lane_btns[i], LV_ALIGN_TOP_LEFT, 16 + (i % 4) * 92, 110 + (i / 4) * 66);
-        lv_obj_add_flag(s_afc_lane_btns[i], LV_OBJ_FLAG_HIDDEN);
-        s_afc_swatch[i] = lv_obj_create(s_afc_lane_btns[i]);
-        lv_obj_set_size(s_afc_swatch[i], 10, 10);
+        s_afc_lane_active[i] = false;
+
+        lv_obj_t *c = lv_obj_create(s_afc_lane_grid);
+        s_afc_cards[i] = c;
+        lv_obj_set_size(c, card_w, card_h);
+        lv_obj_set_style_bg_color(c, PP_SURFACE, 0);
+        lv_obj_set_style_border_color(c, PP_BORDER, 0);
+        lv_obj_set_style_border_width(c, 1, 0);
+        lv_obj_set_style_radius(c, 8, 0);
+        lv_obj_set_style_pad_all(c, 8, 0);
+        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(c, on_afc_select, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        ui_kb_focus_add(c);
+        lv_obj_add_flag(c, LV_OBJ_FLAG_HIDDEN);
+
+        s_afc_swatch[i] = lv_obj_create(c);
+        lv_obj_set_size(s_afc_swatch[i], 28, 28);
         lv_obj_set_style_radius(s_afc_swatch[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(s_afc_swatch[i], 0, 0);
         lv_obj_set_style_pad_all(s_afc_swatch[i], 0, 0);
-        lv_obj_align(s_afc_swatch[i], LV_ALIGN_TOP_RIGHT, -4, 4);
+        lv_obj_align(s_afc_swatch[i], LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_clear_flag(s_afc_swatch[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(s_afc_swatch[i], LV_OBJ_FLAG_HIDDEN);
+
+        s_afc_name_lbl[i] = lv_label_create(c);
+        lv_label_set_text(s_afc_name_lbl[i], "");
+        lv_obj_set_style_text_color(s_afc_name_lbl[i], PP_OK, 0);
+        lv_obj_set_style_text_font(s_afc_name_lbl[i], PP_F16, 0);
+        lv_obj_align(s_afc_name_lbl[i], LV_ALIGN_TOP_LEFT, 36, 2);
+
+        s_afc_map_lbl[i] = lv_label_create(c);
+        lv_label_set_text(s_afc_map_lbl[i], "");
+        lv_obj_set_style_text_color(s_afc_map_lbl[i], PP_ORANGE, 0);
+        lv_obj_set_style_text_font(s_afc_map_lbl[i], PP_F14, 0);
+        lv_obj_align(s_afc_map_lbl[i], LV_ALIGN_TOP_RIGHT, 0, 4);
+
+        s_afc_mat_lbl[i] = lv_label_create(c);
+        lv_label_set_text(s_afc_mat_lbl[i], "");
+        lv_obj_set_style_text_color(s_afc_mat_lbl[i], PP_TEXT, 0);
+        lv_obj_set_style_text_font(s_afc_mat_lbl[i], PP_F14, 0);
+        lv_label_set_long_mode(s_afc_mat_lbl[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_afc_mat_lbl[i], card_w - 20);
+        lv_obj_align(s_afc_mat_lbl[i], LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_afc_stat_lbl[i] = lv_label_create(c);
+        lv_label_set_text(s_afc_stat_lbl[i], "");
+        lv_obj_set_style_text_color(s_afc_stat_lbl[i], PP_TEXT_MUTED, 0);
+        lv_obj_set_style_text_font(s_afc_stat_lbl[i], PP_F12, 0);
+        lv_obj_align(s_afc_stat_lbl[i], LV_ALIGN_TOP_LEFT, 0, 62);
+
+        lv_obj_t *row = lv_obj_create(c);
+        lv_obj_set_size(row, LV_PCT(100), 40);
+        lv_obj_align(row, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        s_afc_load_btn[i] = afc_mini_btn(row, tr(STR_AFC_LOAD), on_afc_load_unload,
+                                         (void *)(intptr_t)i, &s_afc_load_lbl[i]);
+        s_afc_eject_btn[i] = afc_mini_btn(row, tr(STR_AFC_EJECT), on_afc_eject_lane,
+                                          (void *)(intptr_t)i, NULL);
     }
 
-    int y = 250;
-    lv_obj_t *ej = make_button(s_afc, "Eject", on_afc_eject, NULL, NULL);
-    lv_obj_set_size(ej, 90, 40); lv_obj_align(ej, LV_ALIGN_TOP_LEFT, 16, y);
-    lv_obj_t *mp = make_button(s_afc, "Move+", on_afc_move, (void *)(intptr_t)1, NULL);
+    /* Lane move + system actions (footer) — KS “Lane Move” lite, no Sensors/More */
+    int fy = th() - 56;
     lv_obj_t *mm = make_button(s_afc, "Move-", on_afc_move, (void *)(intptr_t)-1, NULL);
-    lv_obj_set_size(mp, 90, 40); lv_obj_set_size(mm, 90, 40);
-    lv_obj_align(mp, LV_ALIGN_TOP_LEFT, 116, y); lv_obj_align(mm, LV_ALIGN_TOP_LEFT, 216, y);
+    lv_obj_t *mp = make_button(s_afc, "Move+", on_afc_move, (void *)(intptr_t)1, NULL);
+    lv_obj_set_size(mm, 72, 36); lv_obj_set_size(mp, 72, 36);
+    lv_obj_align(mm, LV_ALIGN_TOP_LEFT, 16, fy);
+    lv_obj_align(mp, LV_ALIGN_TOP_LEFT, 96, fy);
 
     const int dists[] = {20, 50, 100};
     for (int i = 0; i < 3; i++) {
-        char buf[12]; snprintf(buf, sizeof(buf), "%dmm", dists[i]);
-        lv_obj_t *b = make_button(s_afc, buf, on_afc_dist, (void *)(intptr_t)dists[i], NULL);
-        lv_obj_set_size(b, 70, 36);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 80, y + 50);
+        char buf[12]; snprintf(buf, sizeof(buf), "%d", dists[i]);
+        s_afc_dist_btns[i] = make_button(s_afc, buf, on_afc_dist, (void *)(intptr_t)dists[i], NULL);
+        lv_obj_set_user_data(s_afc_dist_btns[i], (void *)(intptr_t)dists[i]);
+        lv_obj_set_size(s_afc_dist_btns[i], 48, 36);
+        lv_obj_align(s_afc_dist_btns[i], LV_ALIGN_TOP_LEFT, 180 + i * 56, fy);
     }
 
-    lv_obj_t *prep = make_button(s_afc, "Prep", on_afc_prep, NULL, NULL);
-    lv_obj_t *res = make_button(s_afc, "Resume", on_afc_resume, NULL, NULL);
-    lv_obj_t *clr = make_button(s_afc, "Clear", on_afc_clear, NULL, NULL);
-    lv_obj_set_size(prep, 90, 40); lv_obj_set_size(res, 90, 40); lv_obj_set_size(clr, 90, 40);
-    lv_obj_align(prep, LV_ALIGN_TOP_LEFT, 16, y + 100);
-    lv_obj_align(res, LV_ALIGN_TOP_LEFT, 116, y + 100);
-    lv_obj_align(clr, LV_ALIGN_TOP_LEFT, 216, y + 100);
+    lv_obj_t *prep = make_button(s_afc, tr(STR_AFC_PREP), on_afc_prep, NULL, NULL);
+    lv_obj_t *res = make_button(s_afc, tr(STR_RESUME), on_afc_resume, NULL, NULL);
+    lv_obj_t *clr = make_button(s_afc, tr(STR_AFC_CLEAR), on_afc_clear, NULL, NULL);
+    lv_obj_set_size(prep, 64, 36); lv_obj_set_size(res, 72, 36); lv_obj_set_size(clr, 64, 36);
+    lv_obj_align(prep, LV_ALIGN_TOP_RIGHT, -160, fy);
+    lv_obj_align(res, LV_ALIGN_TOP_RIGHT, -84, fy);
+    lv_obj_align(clr, LV_ALIGN_TOP_RIGHT, -16, fy);
+    afc_refresh_sel_style();
 }
 
 void ui_apply_afc(void *arg)
@@ -1016,40 +1187,83 @@ void ui_apply_afc(void *arg)
     ui_status_set_afc_chip(a);
 
     if (s_afc_state_lbl) {
-        if (a->error) lv_label_set_text(s_afc_state_lbl, "Error");
-        else if (a->state[0]) lv_label_set_text(s_afc_state_lbl, a->state);
-        else lv_label_set_text(s_afc_state_lbl, a->current);
+        if (a->error) {
+            lv_label_set_text(s_afc_state_lbl, "Error");
+            lv_obj_set_style_text_color(s_afc_state_lbl, PP_ERROR, 0);
+        } else {
+            lv_label_set_text(s_afc_state_lbl, a->state[0] ? a->state : "—");
+            lv_obj_set_style_text_color(s_afc_state_lbl, PP_ORANGE, 0);
+        }
+    }
+    if (s_afc_loaded_lbl) {
+        if (a->current[0])
+            lv_label_set_text_fmt(s_afc_loaded_lbl, tr(STR_AFC_LOADED_FMT), a->current);
+        else
+            lv_label_set_text(s_afc_loaded_lbl, "");
     }
 
+    s_afc_n_shown = 0;
     for (int i = 0; i < PP_AFC_MAX_LANES; i++) {
-        if (!s_afc_lane_btns[i]) continue;
+        if (!s_afc_cards[i]) continue;
         if (i >= a->n || !a->present) {
-            lv_obj_add_flag(s_afc_lane_btns[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_afc_cards[i], LV_OBJ_FLAG_HIDDEN);
             s_afc_lane_nums[i] = 0;
+            s_afc_lane_active[i] = false;
             continue;
         }
         const pp_afc_lane_t *L = &a->lanes[i];
         s_afc_lane_nums[i] = L->num > 0 ? L->num : (i + 1);
-        char lbl[24];
-        if (L->material[0]) snprintf(lbl, sizeof(lbl), "L%d\n%s", s_afc_lane_nums[i], L->material);
-        else snprintf(lbl, sizeof(lbl), "L%d", s_afc_lane_nums[i]);
-        if (s_afc_lane_lbls[i]) {
-            lv_label_set_text(s_afc_lane_lbls[i], lbl);
-            lv_obj_set_style_text_align(s_afc_lane_lbls[i], LV_TEXT_ALIGN_CENTER, 0);
-        }
         bool active = L->tool_loaded || (a->current[0] && !strcmp(a->current, L->name));
+        s_afc_lane_active[i] = active;
         if (active && s_afc_sel_lane <= 0) s_afc_sel_lane = s_afc_lane_nums[i];
-        lv_obj_set_style_border_color(s_afc_lane_btns[i], active ? PP_ORANGE : (L->ready ? PP_OK : PP_BORDER), 0);
-        lv_obj_set_style_border_width(s_afc_lane_btns[i], active ? 2 : 1, 0);
+        s_afc_n_shown++;
+
+        char name[20];
+        snprintf(name, sizeof(name), "%d  %s", s_afc_lane_nums[i],
+                 L->name[0] ? L->name : "lane");
+        if (s_afc_name_lbl[i]) {
+            lv_label_set_text(s_afc_name_lbl[i], name);
+            lv_obj_set_style_text_color(s_afc_name_lbl[i], active ? PP_ORANGE : PP_OK, 0);
+        }
+        if (s_afc_map_lbl[i])
+            lv_label_set_text(s_afc_map_lbl[i], L->map[0] ? L->map : "");
+
+        if (s_afc_mat_lbl[i]) {
+            if (L->material[0]) lv_label_set_text(s_afc_mat_lbl[i], L->material);
+            else lv_label_set_text(s_afc_mat_lbl[i], tr(STR_AFC_EMPTY));
+        }
+        if (s_afc_stat_lbl[i]) {
+            const char *st = L->status[0] ? L->status : (L->ready ? tr(STR_AFC_READY) : tr(STR_AFC_EMPTY));
+            lv_label_set_text(s_afc_stat_lbl[i], st);
+        }
+        if (s_afc_load_lbl[i])
+            lv_label_set_text(s_afc_load_lbl[i], active ? tr(STR_AFC_UNLOAD) : tr(STR_AFC_LOAD));
+
         if (s_afc_swatch[i]) {
             if (L->color[0] == '#') {
                 lv_obj_set_style_bg_color(s_afc_swatch[i], afc_parse_color(L->color), 0);
                 lv_obj_clear_flag(s_afc_swatch[i], LV_OBJ_FLAG_HIDDEN);
-            } else lv_obj_add_flag(s_afc_swatch[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_set_style_bg_color(s_afc_swatch[i], PP_SURFACE_HI, 0);
+                lv_obj_clear_flag(s_afc_swatch[i], LV_OBJ_FLAG_HIDDEN);
+            }
         }
-        lv_obj_clear_flag(s_afc_lane_btns[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_afc_cards[i], LV_OBJ_FLAG_HIDDEN);
     }
+    afc_refresh_sel_style();
     free(a);
+}
+
+/* Select AFC lane by on-screen number 1..n (USB keyboard). LVGL thread. */
+void ui_kb_afc_select(int one_based)
+{
+    if (!s_afc || lv_screen_active() != s_afc) return;
+    if (one_based < 1 || one_based > PP_AFC_MAX_LANES) return;
+    int slot = one_based - 1;
+    if (s_afc_lane_nums[slot] <= 0) return;
+    s_afc_sel_lane = s_afc_lane_nums[slot];
+    afc_refresh_sel_style();
+    if (s_afc_cards[slot]) ui_kb_focus_set(s_afc_cards[slot]);
 }
 
 /* ---- Console (USB-A HID keyboard for gcode entry when plugged in) ---- */
@@ -1713,4 +1927,9 @@ bool ui_tools_is_hub_active(void)
 bool ui_tools_is_webcam_active(void)
 {
     return lv_screen_active() == s_webcam;
+}
+
+bool ui_tools_is_afc_active(void)
+{
+    return s_afc && lv_screen_active() == s_afc;
 }

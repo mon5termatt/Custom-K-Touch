@@ -219,9 +219,13 @@ static void apply_digit(void *arg)
 {
     int d = (int)(intptr_t)arg;
     if (d < 1 || d > 9) return;
-    /* Fleet: jump to printer N. Elsewhere: type the digit (console, etc.). */
+    /* Fleet: jump to printer N. AFC: select lane N. Elsewhere: type the digit. */
     if (!strcmp(ui_current_screen(), "dash")) {
         ui_kb_dash_select(d);
+        return;
+    }
+    if (!strcmp(ui_current_screen(), "afc")) {
+        ui_kb_afc_select(d);
         return;
     }
     uint32_t ch = (uint32_t)('0' + d);

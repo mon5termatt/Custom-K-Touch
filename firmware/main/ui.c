@@ -2882,6 +2882,8 @@ const char *ui_current_screen(void)
     if (s == s_scr_dash)       return "dash";
     if (s == s_scr_status)     return "status";
     if (ui_tools_is_hub_active()) return "control";
+    if (ui_tools_is_afc_active()) return "afc";
+    if (ui_tools_is_webcam_active()) return "webcam";
     if (s == s_scr_files)      return "files";
     if (s == s_scr_filedetail) return "filedetail";
     if (s == s_scr_printers)   return "printers";
