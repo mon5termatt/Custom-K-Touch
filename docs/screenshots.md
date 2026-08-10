@@ -2,30 +2,31 @@
 
 These are rendered straight from the firmware's own UI code with the desktop
 [simulator](../firmware/sim/) (`firmware/sim/`), so they match what the device draws on its
-800×480 panel. The fleet shown is mock data for illustration.
+800×480 panel. The fleet shown is mock / live data for illustration.
 
 ## Fleet dashboard
 
-Every printer at a glance — state, temperatures, progress, the model render, and the live job
-thumbnail while a print runs. Cards refresh in place as values change.
+Home screen — every printer at a glance (numbered for USB keyboard 1–9), state, temperatures,
+progress, and model / job thumbnails. Settings is the header gear; tap a card to open that
+printer.
 
 ![Fleet dashboard](img/fleet-dashboard.png)
 
 ## Printer detail
 
-Tap a printer for the detail view: status badge, nozzle / heatbed / speed / Z, the current job,
-and any needs-attention dialog (here, a heater-timeout warning) with the same buttons you'd see
-in Prusa Connect.
+Status badge, nozzle / heatbed / speed / Z, current job, centered **E-STOP**, plus **Files** and
+**Tools**. AFC lane chip appears when BoxTurtle lanes are detected.
 
 ![Printer detail](img/printer-detail.png)
 
-## Control
+## Tools
 
-Preheat presets, jog and home, and the live webcam slot. Controls a backend doesn't expose hide
-themselves.
+From printer detail, **Tools** opens the Klipper hub — Move, Temperature, Webcam, AFC,
+Macros, Console, Tune, Calibration.
 
-![Control](img/control.png)
+![Tools hub](img/control.png)
 
+<!-- Guided add-printer flow (screenshots kept for later)
 ## Add a printer (guided)
 
 One place to add machines: pick a **Cloud account** (Prusa or Bambu) or a **Local printer**
@@ -36,6 +37,7 @@ One place to add machines: pick a **Cloud account** (Prusa or Bambu) or a **Loca
 Choosing **Bambu (LAN)** asks for the IP, LAN Access Code, and serial:
 
 ![Add a Bambu printer](img/add-bambu.png)
+-->
 
 ## Screen lock (opt-in)
 
@@ -60,7 +62,8 @@ On-device network onboarding, with the web-UI address once connected.
 
 ## Portrait
 
-The UI reflows for a portrait mount — the fleet drops to a single column and forms stack.
+The UI reflows for a portrait mount — the fleet drops to a single column.
 
 ![Fleet dashboard (portrait)](img/fleet-dashboard-portrait.png)
-![Add a printer (portrait)](img/add-printer-portrait.png)
+
+<!-- ![Add a printer (portrait)](img/add-printer-portrait.png) -->

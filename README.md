@@ -10,9 +10,8 @@ add-printer list if you need them.
 
 <img src="docs/img/fleet-dashboard.png" alt="Fleet dashboard" width="640">
 
-More in the **[screenshot gallery](docs/screenshots.md)** — printer detail, control, the guided
-add-a-printer flow, screen lock, and portrait layouts. (All rendered from the firmware's own UI
-with the desktop simulator.)
+More in the **[screenshot gallery](docs/screenshots.md)** — printer detail, Tools, screen lock,
+Wi-Fi, and portrait layouts.
 
 ## What it does
 
@@ -35,8 +34,8 @@ with the desktop simulator.)
   (e.g. OpenCentauri); optional API key. Status, files, print control, thumbnails, webcam,
   and console when Moonraker exposes them.
 - **Bambu Lab (optional).** LAN or cloud Bambu printers alongside Klipper.
-- **Guided "Add a printer".** Klipper first, then Bambu LAN / optional cloud accounts.
-  Works the same on the touchscreen and the web UI.
+<!-- - **Guided "Add a printer".** Klipper first, then Bambu LAN / optional cloud accounts.
+  Works the same on the touchscreen and the web UI. -->
 - **Optional security.** Off by default: set a **web password** to put the web interface behind
   a login, and/or a **screen lock** that asks for a PIN before actions after a few idle minutes
   (you can still browse the fleet while locked).
