@@ -945,6 +945,10 @@ static void run_command(const pp_cmd_t *cmd)
                 pt_display_schedule_ui(ui_apply_orient, NULL);   /* same class: rotate live */
             }
         }
+        else if (pref == PP_PREF_DIM_MIN) {
+            prefs_set_dim_min((uint8_t)val);
+            pt_display_schedule_ui(ui_apply_dim_cfg, NULL);
+        }
         else if (pref == PP_PREF_SKIN) {
             /* Colors bake into widgets at build time, so a skin change reboots to rebuild every
              * screen (like an orientation class change) — and the boot screen comes up themed too. */

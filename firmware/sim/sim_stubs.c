@@ -81,6 +81,7 @@ bool        prefs_hide_offline(void){ return false; }
 pp_logo_t   prefs_logo(void)        { return PP_LOGO_STACKED; }
 pp_orient_t prefs_orient(void)      { return PP_ORIENT_LANDSCAPE; }
 bool        prefs_auto_update(void) { return false; }
+uint8_t     prefs_dim_min(void)     { return 0; }
 /* Security opt-ins: sim hooks let sim_main force the lock overlay for a layout render. */
 static uint8_t s_sim_lockmin = 0;
 static char    s_sim_pin[12] = "";

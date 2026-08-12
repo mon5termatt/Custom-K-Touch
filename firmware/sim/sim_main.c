@@ -44,6 +44,14 @@ static void mk(pp_status_t *s, const char *name, const char *model, const char *
     s->temp_nozzle=tn; s->target_nozzle=ttn; s->temp_bed=tb; s->target_bed=ttb;
     s->speed=spd; s->axis_z=z; s->time_remaining = job ? eta : -1;
     s->has_job=job; s->progress=prog;
+    if (job) {
+        s->total_layer = 300;
+        s->current_layer = (int)((prog / 100.0f) * s->total_layer);
+        if (s->current_layer < 0) s->current_layer = 0;
+    } else {
+        s->current_layer = -1;
+        s->total_layer = -1;
+    }
     if (job && jobname) strncpy(s->job_name, jobname, sizeof(s->job_name)-1);
 }
 

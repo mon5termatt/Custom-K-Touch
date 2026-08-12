@@ -48,6 +48,10 @@ void        prefs_set_orient(pp_orient_t o);   /* persists */
 uint8_t prefs_lang(void);
 void    prefs_set_lang(uint8_t l);             /* persists */
 
+/* Dim the backlight after N idle minutes (0 = off). Touch restores full brightness. */
+uint8_t     prefs_dim_min(void);
+void        prefs_set_dim_min(uint8_t m);
+
 /* --- security opt-ins (all off/empty by default) --- */
 /* Auto-lock the touchscreen after N idle minutes (0 = off). While locked, browsing is allowed
  * but actions need the screen PIN. */

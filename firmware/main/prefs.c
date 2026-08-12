@@ -12,6 +12,7 @@ static pp_logo_t s_logo = PP_LOGO_STACKED;
 static bool      s_auto_update = false;   /* opt-in: off by default */
 static pp_orient_t s_orient = PP_ORIENT_LANDSCAPE;
 static uint8_t   s_lang = 0;              /* UI language index (0 = English) */
+static uint8_t   s_dim_min = 0;           /* dim backlight after N idle minutes (0 = off) */
 /* Security opt-ins (all off/empty by default). */
 static uint8_t   s_lock_min = 0;          /* auto-lock the screen after N idle minutes (0 = off) */
 static char      s_scrpin[12] = "";       /* PIN to unlock on-device actions while locked        */
@@ -55,6 +56,7 @@ void prefs_load(void)
     if (nvs_get_u8(h, "autoupd", &v) == ESP_OK) s_auto_update = (v != 0);
     if (nvs_get_u8(h, "orient", &v) == ESP_OK && v <= PP_ORIENT_PORTRAIT_FLIPPED) s_orient = (pp_orient_t)v;
     if (nvs_get_u8(h, "lang", &v) == ESP_OK) s_lang = v;
+    if (nvs_get_u8(h, "dimmin", &v) == ESP_OK) s_dim_min = v;
     if (nvs_get_u8(h, "lockmin", &v) == ESP_OK) s_lock_min = v;
     if (nvs_get_u8(h, "rbthr", &v) == ESP_OK) s_reboot_hour = v;
     if (nvs_get_u8(h, "tzoff", &v) == ESP_OK) s_tz_offset = (int8_t)v;
@@ -90,6 +92,9 @@ void prefs_set_orient(pp_orient_t o) { if (o <= PP_ORIENT_PORTRAIT_FLIPPED) { s_
 
 uint8_t prefs_lang(void) { return s_lang; }
 void prefs_set_lang(uint8_t l) { s_lang = l; save_u8("lang", l); }
+
+uint8_t prefs_dim_min(void) { return s_dim_min; }
+void prefs_set_dim_min(uint8_t m) { s_dim_min = m; save_u8("dimmin", m); }
 
 /* --- security opt-ins --- */
 uint8_t prefs_lock_min(void) { return s_lock_min; }

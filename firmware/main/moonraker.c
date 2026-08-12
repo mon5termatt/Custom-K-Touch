@@ -169,6 +169,8 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
 {
     memset(out, 0, sizeof(*out));
     out->time_remaining = -1;
+    out->current_layer  = -1;
+    out->total_layer    = -1;
 
     const char *path = "/printer/objects/query?extruder&heater_bed&print_stats"
                        "&toolhead&gcode_move&virtual_sdcard&display_status&webhooks";
@@ -225,9 +227,16 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
         if (out->has_job && out->job_name[0])
             strlcpy(out->job_thumb, out->job_name, sizeof(out->job_thumb));
 
+        /* Progress normalization:
+         * - virtual_sdcard.progress is usually 0..1
+         * - display_status.progress is often 0..100
+         * Mixing these makes derived ETA go negative/blank. */
         float prog = 0;
         if (vsd) prog = jnum(vsd, "progress", 0);
         if (prog <= 0 && ds) prog = jnum(ds, "progress", 0);
+        if (prog > 1.0f) prog /= 100.0f;      /* accept 0..100 -> 0..1 */
+        if (prog < 0.0f) prog = 0.0f;
+        if (prog > 1.0f) prog = 1.0f;
         out->progress = prog * 100.0f;
 
         /* Estimate remaining from elapsed print time + progress (Moonraker gives no ETA). */
@@ -235,6 +244,15 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
             float dur = jnum(ps, "print_duration", 0);
             if (prog > 0.01f && dur > 0) out->time_remaining = (int)(dur * (1.0f - prog) / prog);
             out->time_printing = (int)dur;
+
+            /* Layer progress (if virtual_sdcard + slicer emit SET_PRINT_STATS_INFO). */
+            cJSON *info = cJSON_GetObjectItemCaseSensitive(ps, "info");
+            if (info) {
+                cJSON *cl = cJSON_GetObjectItemCaseSensitive(info, "current_layer");
+                cJSON *tl = cJSON_GetObjectItemCaseSensitive(info, "total_layer");
+                if (cJSON_IsNumber(cl)) out->current_layer = (int)cl->valueint;
+                if (cJSON_IsNumber(tl)) out->total_layer = (int)tl->valueint;
+            }
         }
         out->has_control = true;   /* Klipper always accepts gcode/print control */
         out->online = true;

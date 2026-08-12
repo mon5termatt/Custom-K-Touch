@@ -123,6 +123,8 @@ static esp_err_t fetch_status(const pp_printer_t *pr, pp_status_t *out, bool upd
 {
     memset(out, 0, sizeof(*out));
     out->time_remaining = -1;
+    out->current_layer = -1;
+    out->total_layer   = -1;
 
     resp_t r = {0};
     int sc = 0;

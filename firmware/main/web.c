@@ -167,6 +167,12 @@ static const char INDEX_HTML[] =
 "<button onclick=shot()>Refresh</button>"
 "<div class=muted>What the touchscreen is showing right now.</div>"
 "<img id=shot class=pt-screen style='margin-top:8px'></div>"
+"<div class=card><b>Screen dim</b>"
+"<div class=muted>Dim the backlight after idle time. Touch restores full brightness. Off by default.</div>"
+"<div style='margin-top:8px'><label>Dim after </label>"
+"<select id=dimmin><option value=0>Off</option><option value=1>1 min</option><option value=2>2 min</option><option value=5>5 min</option><option value=10>10 min</option><option value=30>30 min</option></select>"
+" <button class=p onclick=dimsave()>Save</button></div>"
+"<div id=dimmsg class=muted style='margin-top:6px'></div></div>"
 "<div class=card><b>Language</b>"
 "<div class=muted>UI language for the device screen and this web page. Saving reboots the device.</div>"
 "<div style='margin-top:8px'><select id=lgsel></select> <button class=p onclick=lgsave()>Save &amp; reboot</button></div></div></div>"
@@ -209,7 +215,7 @@ static const char INDEX_HTML[] =
 "<div class=ptile onclick=\"t(5)\"><b>&#128100; Accounts &amp; Security</b><small>Prusa Connect, Bambu Cloud, web password &amp; screen lock.</small></div>"
 "<div class=ptile onclick=\"t(6)\"><b>&#127981; Prusa Farm</b><small>Org-wide printer &amp; order status.</small></div>"
 "<div class=ptile onclick=\"t(3)\"><b>&#11014; Firmware &amp; Updates</b><small>Auto-update, manual flash, scheduled reboot.</small></div>"
-"<div class=ptile onclick=\"t(4)\"><b>&#128241; Screen &amp; Language</b><small>Live screen view and UI language.</small></div>"
+"<div class=ptile onclick=\"t(4)\"><b>&#128241; Screen &amp; Language</b><small>Live screen, dim timeout, and UI language.</small></div>"
 "<div class=ptile onclick=\"t(7)\"><b>&#127912; Theme</b><small>Colors, fonts, wordmark.</small></div>"
 "<div class=ptile onclick=\"t(8)\"><b>&#9783; Layout</b><small>Arrange the status tiles.</small></div>"
 "<div class=ptile onclick=\"t(10)\"><b>&#9881; Advanced</b><small>Multi-camera index, LED notes (touch stays simple).</small></div>"
@@ -229,7 +235,7 @@ static const char INDEX_HTML[] =
 "<script>"
 "var FL=[];var SNAPU='';var SNAPIDX=0;"
 "function t(i){for(let n=0;n<11;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload()}"
+"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload();dimload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload()}"
 "async function advload(){try{let a=await fetch('/api/advanced').then(x=>x.json());document.getElementById('advcam').value=a.webcam_index||0;document.getElementById('advled').value=a.led_notes||'';document.getElementById('advmsg').textContent=''}catch(e){}}"
 "async function advsave(){let body=JSON.stringify({webcam_index:+document.getElementById('advcam').value||0,led_notes:document.getElementById('advled').value||''});"
 "await fetch('/api/advanced',{method:'POST',headers:{'Content-Type':'application/json'},body:body});document.getElementById('advmsg').textContent='Saved.';}"
@@ -419,6 +425,8 @@ static const char INDEX_HTML[] =
 "var r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hour:hr,tz:tz})});document.getElementById('rbmsg').textContent=r.ok?'Saved.':'Save failed (HTTP '+r.status+')'}"
 "async function lgload(){var r=await fetch('/api/info').then(x=>x.json()),s=document.getElementById('lgsel');s.innerHTML=(r.langs||[{id:0,name:'English'}]).map(function(l){return `<option value='${l.id}'${l.id==r.lang?' selected':''}>${l.name}</option>`}).join('')}"
 "async function lgsave(){var l=parseInt(document.getElementById('lgsel').value);var r=await fetch('/api/lang',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:l})});alert(r.ok?'Saved - the device is restarting in the selected language.':'Failed (HTTP '+r.status+')')}"
+"async function dimload(){var r=await fetch('/api/info').then(x=>x.json());document.getElementById('dimmin').value=r.dimmin||0}"
+"async function dimsave(){var m=parseInt(document.getElementById('dimmin').value)||0;var r=await fetch('/api/dim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dimmin:m})});document.getElementById('dimmsg').textContent=r.ok?'Saved.':'Save failed (HTTP '+r.status+')'}"
 "async function tf_load(){try{var r=await fetch('/api/skin').then(x=>x.json());TFS=exS(r.colors);TFPRESETS=r.presets||[];if(r.font!=null)document.getElementById('tffont').value=r.font;if(r.brand)document.getElementById('tfbrand').value=r.brand;if('byline' in r)document.getElementById('tfbyline').value=r.byline}catch(e){}document.getElementById('tfpreset').innerHTML=TFPRESETS.map(function(p){return `<option value='${p.index}'>${p.name}</option>`}).join('');document.getElementById('tfvar').value=TFV;tf_si();tf_render()}"
 "function tf_preset_load(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx});if(!p)return;TFS=exS(p.colors);TFV='dark';document.getElementById('tfvar').value='dark';if(p.font!=null)document.getElementById('tffont').value=p.font;if(p.brand)document.getElementById('tfbrand').value=p.brand;if('byline' in p)document.getElementById('tfbyline').value=p.byline;tf_si();tf_render()}"
 "async function tf_preset_apply(){var idx=parseInt(document.getElementById('tfpreset').value),p=TFPRESETS.find(function(x){return x.index==idx}),nm=p?p.name:'theme';var r=await fetch('/api/skin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})});alert(r.ok?'Applying '+nm+' - the device is restarting.':'Failed (HTTP '+r.status+')')}"
@@ -436,10 +444,10 @@ static const char INDEX_HTML[] =
 /* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
  * + data-attributes only, so it embeds with no escaping. ---- */
 "var LAY={cols:6,rows:0,tiles:[]},LYTYPES=[],LYSEL=-1;"
-"var LYMIN={name:[1,1],model:[1,1],state:[1,1],nozzle:[1,1],bed:[1,1],speed:[1,1],z:[1,1],progress:[1,1],eta:[1,1],thumb:[1,1],header:[1,1],job:[1,1],pause:[1,1],stop:[1,1],files:[1,1],tools:[1,1],move:[1,1],temp:[1,1],webcam:[1,1],macros:[1,1],console:[1,1],tune:[1,1],calib:[1,1],afc:[1,1]};"
-"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview',header:'Header',job:'File',pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC'};"
+"var LYMIN={name:[1,1],model:[1,1],state:[1,1],nozzle:[1,1],bed:[1,1],speed:[1,1],z:[1,1],progress:[1,1],eta:[1,1],thumb:[1,1],header:[1,1],job:[1,1],pause:[1,1],stop:[1,1],files:[1,1],tools:[1,1],move:[1,1],temp:[1,1],webcam:[1,1],macros:[1,1],console:[1,1],tune:[1,1],calib:[1,1],afc:[1,1],layer_progress:[1,1]};"
+"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview',header:'Header',job:'File',pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC',layer_progress:'Layer'};"
 "var LYBTN={pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC'};"
-"var LYSAMPLE={name:'Apollo',model:'CORE One',state:'PRINTING',nozzle:'215\\u00b0',bed:'60\\u00b0',speed:'100%',z:'12.4',progress:'64%',eta:'1h 04m',thumb:'',header:'Apollo',job:'benchy.gcode'};"
+"var LYSAMPLE={name:'Apollo',model:'CORE One',state:'PRINTING',nozzle:'215\\u00b0',bed:'60\\u00b0',speed:'100%',z:'12.4',progress:'64%',eta:'1h 04m',layer_progress:'L 120/300',thumb:'',header:'Apollo',job:'benchy.gcode'};"
 "function ly_setcols(v){var c=parseInt(v);if(c>=1&&c<=12){LAY.cols=c;ly_render()}}"
 "function ly_setrows(v){var r=parseInt(v);if(r<1||r>16)return;var need=ly_tilerows();if(r<need){alert('Need at least '+need+' rows for existing tiles.');var re=document.getElementById('lyrows');if(re)re.value=LAY.rows||need;return}LAY.rows=r;ly_render()}"
 "async function ly_load(){try{var r=await fetch('/api/layout').then(x=>x.json());LAY={cols:r.cols||6,rows:r.rows||0,tiles:r.tiles||[]};LYTYPES=r.types||[]}catch(e){}var ce=document.getElementById('lycols');if(ce)ce.value=LAY.cols;var re=document.getElementById('lyrows');if(re)re.value=LAY.rows||ly_tilerows();ly_pal();ly_render()}"
@@ -457,6 +465,7 @@ static const char INDEX_HTML[] =
 "else if(LYBTN[t.type]){inner=`<div style='position:absolute;inset:4px;display:flex;align-items:center;justify-content:center;border:1px solid #4e4e4e;border-radius:4px;color:#fff;font-size:10px;font-weight:600'>${LYBTN[t.type]}</div>`;cap='';bg=gp?'transparent':'#1c1e21'}"
 "else if(t.type=='thumb'){inner=`<div style='width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:${sy==2?'#fa6831':'#4e4e4e'};border-radius:3px;color:${sy==2?'#b35021':'#9a9a9a'};font-size:9px;letter-spacing:1px'>PREVIEW</div>`}"
 "else if(t.type=='progress'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;right:6px;bottom:6px;height:8px;background:#4e4e4e;border-radius:4px;overflow:hidden'><div style='width:64%;height:100%;background:#fa6831'></div></div>`}"
+"else if(t.type=='layer_progress'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;right:6px;top:3px;color:${fg};font-size:10px;font-weight:600'>${sv}</div><div style='position:absolute;left:6px;right:6px;bottom:6px;height:8px;background:#4e4e4e;border-radius:4px;overflow:hidden'><div style='width:40%;height:100%;background:#fa6831'></div></div>`}"
 "else if(t.type=='state'){inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;bottom:6px;background:#464646;color:#fff;font-size:10px;padding:1px 7px;border-radius:3px'>${sv}</div>`}"
 "else if(t.type=='name'){inner=`<div style='position:absolute;left:7px;top:0;bottom:0;display:flex;align-items:center;color:${fg};font-size:14px;font-weight:600'>${sv}</div>`}"
 "else{var vp=sy==1?'top:0;bottom:0;display:flex;align-items:center':'bottom:3px';inner=`<div style='color:${cc};font-size:9px'>${cap}</div><div style='position:absolute;left:6px;${vp};color:${fg};font-size:14px'>${sv}</div>`}"
@@ -890,6 +899,7 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON_AddBoolToObject(o, "webauth", prefs_web_pass()[0] != '\0');
     cJSON_AddBoolToObject(o, "scrlock", prefs_scrpin()[0] != '\0');
     cJSON_AddNumberToObject(o, "lockmin", prefs_lock_min());
+    cJSON_AddNumberToObject(o, "dimmin", prefs_dim_min());
     cJSON_AddNumberToObject(o, "reboot_hour", prefs_reboot_hour());   /* 0..23 or 255 = off */
     cJSON_AddNumberToObject(o, "tz_offset", prefs_tz_offset());
     cJSON_AddNumberToObject(o, "lang", prefs_lang());
@@ -970,6 +980,7 @@ static esp_err_t config_export_get(httpd_req_t *req)
     cJSON_AddBoolToObject(s, "autoupd", prefs_auto_update());
     cJSON_AddNumberToObject(s, "orient", prefs_orient());
     cJSON_AddNumberToObject(s, "lockmin", prefs_lock_min());
+    cJSON_AddNumberToObject(s, "dimmin", prefs_dim_min());
     cJSON_AddNumberToObject(s, "reboot_hour", prefs_reboot_hour());
     cJSON_AddNumberToObject(s, "tz_offset", prefs_tz_offset());
     cJSON_AddNumberToObject(s, "lang", prefs_lang());
@@ -1019,6 +1030,7 @@ static esp_err_t config_import_post(httpd_req_t *req)
         if ((v = cJSON_GetObjectItem(settings, "autoupd")))    prefs_set_auto_update(cJSON_IsTrue(v));
         if ((v = cJSON_GetObjectItem(settings, "orient"))      && cJSON_IsNumber(v)) prefs_set_orient((pp_orient_t)v->valueint);
         if ((v = cJSON_GetObjectItem(settings, "lockmin"))     && cJSON_IsNumber(v)) prefs_set_lock_min((uint8_t)v->valueint);
+        if ((v = cJSON_GetObjectItem(settings, "dimmin"))      && cJSON_IsNumber(v)) prefs_set_dim_min((uint8_t)v->valueint);
         if ((v = cJSON_GetObjectItem(settings, "reboot_hour")) && cJSON_IsNumber(v)) prefs_set_reboot_hour((uint8_t)v->valueint);
         if ((v = cJSON_GetObjectItem(settings, "tz_offset"))   && cJSON_IsNumber(v)) prefs_set_tz_offset((int8_t)v->valueint);
         if ((v = cJSON_GetObjectItem(settings, "lang"))        && cJSON_IsNumber(v)) prefs_set_lang((uint8_t)v->valueint);
@@ -1781,6 +1793,25 @@ static esp_err_t lang_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Set idle backlight dim minutes {dimmin:N}. 0 = off. Applies immediately. */
+static esp_err_t dim_post(httpd_req_t *req)
+{
+    char *body = recv_body(req); if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    if (j) {
+        cJSON *m = cJSON_GetObjectItem(j, "dimmin");
+        if (cJSON_IsNumber(m)) {
+            int v = m->valueint;
+            prefs_set_dim_min(v < 0 ? 0 : v > 240 ? 240 : (uint8_t)v);
+            pt_display_schedule_ui(ui_apply_dim_cfg, NULL);
+        }
+        cJSON_Delete(j);
+    }
+    free(body);
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
 /* ---- Skins (issue #6 Phase 1b: the ThemeForge web editor) ---- */
 static bool parse_hex_color(const char *s, uint8_t out[3])   /* "#rrggbb" -> 3 bytes */
 {
@@ -2085,6 +2116,7 @@ void web_start(void)
         { "/api/security", HTTP_POST, security_post },
         { "/api/reboot", HTTP_POST, reboot_post },
         { "/api/lang", HTTP_POST, lang_post },
+        { "/api/dim", HTTP_POST, dim_post },
         { "/api/bambu/info", HTTP_GET, bambu_info_get },
         { "/api/bambu/login", HTTP_POST, bambu_login_post },
         { "/api/bambu/code", HTTP_POST, bambu_code_post },

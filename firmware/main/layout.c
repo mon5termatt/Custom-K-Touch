@@ -12,23 +12,25 @@ typedef struct { uint8_t cols, n; pp_tile_t tiles[PP_LAYOUT_MAX]; } pp_layout_v0
 
 const char *const PP_TILE_KEYS[LT_COUNT] = {
     "", "name", "model", "state", "nozzle", "bed", "speed", "z", "progress", "eta", "thumb", "header", "job",
-    "pause", "stop", "files", "tools", "move", "temp", "webcam", "macros", "console", "tune", "calib", "afc"
+    "pause", "stop", "files", "tools", "move", "temp", "webcam", "macros", "console", "tune", "calib", "afc",
+    "layer_progress"
 };
 const char *const PP_TILE_LABELS[LT_COUNT] = {
     "", "PRINTER", "MODEL", "STATE", "NOZZLE", "BED", "SPEED", "Z AXIS", "PROGRESS", "ETA", "", "", "FILE",
-    "", "", "", "", "", "", "", "", "", "", "", ""
+    "", "", "", "", "", "", "", "", "", "", "", "", "LAYER"
 };
 
 /* Landscape default (cols=6): hero, telemetry 4-across, job card, action buttons on the bottom row. */
 static const pp_layout_t DEFAULT_LAYOUT_LANDSCAPE = {
-    .cols = 6, .rows = 6, .n = 14, .tiles = {
+    .cols = 6, .rows = 6, .n = 15, .tiles = {
         { LT_THUMB,    0, 0, 1, 2, LS_ACCENT, 0 },
         { LT_HEADER,   1, 0, 5, 1, LS_CARD,   0 },
         { LT_MODEL,    1, 1, 5, 1, LS_BARE,   0 },
         { LT_NOZZLE,   0, 2, 1, 1, LS_CARD,   0 }, { LT_BED,   1, 2, 1, 1, LS_CARD, 0 },
         { LT_SPEED,    2, 2, 1, 1, LS_CARD,   0 }, { LT_ZAXIS, 3, 2, 1, 1, LS_CARD, 0 },
         { LT_JOB,      0, 3, 6, 1, LS_BARE,   1 },
-        { LT_PROGRESS, 0, 4, 4, 1, LS_BARE,   1 }, { LT_ETA, 4, 4, 2, 1, LS_BARE, 1 },
+        { LT_PROGRESS, 0, 4, 3, 1, LS_BARE,   1 }, { LT_LAYER_PROGRESS, 3, 4, 1, 1, LS_BARE, 1 },
+        { LT_ETA, 4, 4, 2, 1, LS_BARE, 1 },
         { LT_PAUSE,    0, 5, 1, 1, LS_CARD,   0 }, { LT_STOP,  1, 5, 1, 1, LS_CARD, 0 },
         { LT_FILES,    2, 5, 1, 1, LS_CARD,   0 }, { LT_TOOLS, 3, 5, 1, 1, LS_CARD, 0 },
     }
@@ -36,14 +38,15 @@ static const pp_layout_t DEFAULT_LAYOUT_LANDSCAPE = {
 
 /* Portrait default: telemetry 2×2, same job card + action row. */
 static const pp_layout_t DEFAULT_LAYOUT_PORTRAIT = {
-    .cols = 6, .rows = 7, .n = 14, .tiles = {
+    .cols = 6, .rows = 7, .n = 15, .tiles = {
         { LT_THUMB,    0, 0, 1, 2, LS_ACCENT, 0 },
         { LT_HEADER,   1, 0, 5, 1, LS_CARD,   0 },
         { LT_MODEL,    1, 1, 5, 1, LS_BARE,   0 },
         { LT_NOZZLE,   0, 2, 3, 1, LS_CARD,   0 }, { LT_BED,   3, 2, 3, 1, LS_CARD, 0 },
         { LT_SPEED,    0, 3, 3, 1, LS_CARD,   0 }, { LT_ZAXIS, 3, 3, 3, 1, LS_CARD, 0 },
         { LT_JOB,      0, 4, 6, 1, LS_BARE,   1 },
-        { LT_PROGRESS, 0, 5, 4, 1, LS_BARE,   1 }, { LT_ETA, 4, 5, 2, 1, LS_BARE, 1 },
+        { LT_PROGRESS, 0, 5, 3, 1, LS_BARE,   1 }, { LT_LAYER_PROGRESS, 3, 5, 1, 1, LS_BARE, 1 },
+        { LT_ETA, 4, 5, 2, 1, LS_BARE, 1 },
         { LT_PAUSE,    0, 6, 1, 1, LS_CARD,   0 }, { LT_STOP,  1, 6, 1, 1, LS_CARD, 0 },
         { LT_FILES,    2, 6, 1, 1, LS_CARD,   0 }, { LT_TOOLS, 3, 6, 1, 1, LS_CARD, 0 },
     }

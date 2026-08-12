@@ -72,6 +72,7 @@ static lv_obj_t *s_pref_hideoff_sw;
 static lv_obj_t *s_pref_autoupd_sw;
 static lv_obj_t *s_pref_orient_dd;
 static lv_obj_t *s_pref_theme_dd;
+static lv_obj_t *s_pref_dim_dd;
 
 static lv_obj_t *s_pr_list;           /* the "Settings" tab list (device settings + web escort) */
 
@@ -473,6 +474,9 @@ static void status_thumb_clear(void)
 
 static void status_thumb_adopt(uint8_t *buf, int len)
 {
+    /* Preserve url: ui_apply_thumb sets it from pending before adopt; clear() must not wipe it. */
+    char keep_url[sizeof(s_status_thumb.url)];
+    strlcpy(keep_url, s_status_thumb.url, sizeof(keep_url));
     status_thumb_clear();
     if (!buf || len <= 0) { free(buf); return; }
     s_status_thumb.buf = buf;
@@ -482,7 +486,7 @@ static void status_thumb_adopt(uint8_t *buf, int len)
     s_status_thumb.dsc.header.h     = 0;
     s_status_thumb.dsc.data         = s_status_thumb.buf;
     s_status_thumb.dsc.data_size    = (uint32_t)len;
-    s_status_thumb.pending[0] = '\0';
+    strlcpy(s_status_thumb.url, keep_url, sizeof(s_status_thumb.url));
 }
 
 /* Uniform scale so the image fits inside box_w x box_h (may upscale or downscale). */
@@ -1924,6 +1928,52 @@ void ui_lock_now(void)
 }
 void ui_show_lock_prompt(void) { lock_show_prompt(); }
 
+/* ---------- screen dim (opt-in) ----------
+ * After N idle minutes, drop the backlight to a low level. Any touch (or other input that
+ * resets LVGL's inactive timer) restores full brightness. Independent of the PIN lock. */
+#define PP_DIM_BRIGHT 100
+#define PP_DIM_LEVEL    8
+static bool        s_dimmed;
+static lv_timer_t *s_dim_timer;
+static const uint8_t s_dim_opts[] = { 0, 1, 2, 5, 10, 30 };
+
+static void dim_set(bool dim)
+{
+    if (dim == s_dimmed) return;
+    s_dimmed = dim;
+#ifndef PP_HOST_SIM
+    pt_backlight_set(dim ? PP_DIM_LEVEL : PP_DIM_BRIGHT);
+#endif
+}
+
+static void dim_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    uint8_t m = prefs_dim_min();
+    if (m == 0) { dim_set(false); return; }
+    if (lv_display_get_inactive_time(NULL) > (uint32_t)m * 60000u) dim_set(true);
+    else dim_set(false);
+}
+
+void ui_apply_dim_cfg(void *unused)
+{
+    (void)unused;
+    bool want = prefs_dim_min() > 0;
+    if (want && !s_dim_timer) s_dim_timer = lv_timer_create(dim_timer_cb, 1000, NULL);
+    else if (!want && s_dim_timer) {
+        lv_timer_delete(s_dim_timer);
+        s_dim_timer = NULL;
+        dim_set(false);
+    }
+}
+
+static int dim_opt_index(uint8_t m)
+{
+    for (int i = 0; i < (int)(sizeof(s_dim_opts) / sizeof(s_dim_opts[0])); i++)
+        if (s_dim_opts[i] == m) return i;
+    return 0;
+}
+
 static void build_lock_overlay(void)
 {
     lv_obj_t *top = lv_layer_top();
@@ -2363,6 +2413,18 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_text_color(val, vcol, 0);
             lv_obj_set_style_text_font(val, PP_F20, 0);
             lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 0);
+        } else if (t->type == LT_LAYER_PROGRESS) {
+            barw = lv_bar_create(card);
+            lv_obj_set_size(barw, tw - 12, 10);
+            lv_obj_align(barw, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+            lv_bar_set_range(barw, 0, 100);
+            lv_bar_set_value(barw, 0, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(barw, PP_SURFACE_HI, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(barw, PP_ORANGE, LV_PART_INDICATOR);
+            val = lv_label_create(card);
+            lv_obj_set_style_text_color(val, vcol, 0);
+            lv_obj_set_style_text_font(val, PP_F14, 0);
+            lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -2, 0);
         } else if (t->type == LT_THUMB) {
             if (!accent && !grouped) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);
             lv_obj_set_style_pad_all(card, 0, 0);
@@ -2433,6 +2495,25 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             int pct = (int)st->progress;
             if (barw) lv_bar_set_value(barw, pct, LV_ANIM_OFF);
             if (val) { snprintf(buf, sizeof(buf), "%d%%", pct); lv_label_set_text(val, buf); }
+        } break;
+        case LT_LAYER_PROGRESS: {
+            /* Preview/sample path: fill from status when layer counts exist (live bind overwrites). */
+            int cur = st->current_layer, tot = st->total_layer, pct = 0;
+            if (st->has_job && cur >= 0 && tot > 0) {
+                pct = (int)((cur * 100.0f) / (float)tot + 0.5f);
+                if (pct < 0) pct = 0;
+                if (pct > 100) pct = 100;
+            }
+            if (barw) lv_bar_set_value(barw, pct, LV_ANIM_OFF);
+            if (val) {
+                if (st->has_job && cur >= 0 && tot > 0) {
+                    snprintf(buf, sizeof(buf), "L %d/%d", cur, tot);
+                    lv_label_set_text(val, buf);
+                } else if (st->has_job && cur >= 0) {
+                    snprintf(buf, sizeof(buf), "L %d", cur);
+                    lv_label_set_text(val, buf);
+                } else lv_label_set_text(val, "");
+            }
         } break;
         case LT_ETA:
             if (val) {
@@ -2525,6 +2606,25 @@ static void layout_bind(const pp_status_t *s)
             if (v) {
                 if (s->has_job) { snprintf(buf, sizeof(buf), "%d%%", pct); lv_label_set_text(v, buf); }
                 else lv_label_set_text(v, "");
+            }
+        } break;
+        case LT_LAYER_PROGRESS: {
+            /* Layer progress is available only for Moonraker/Klipper jobs that expose
+             * SET_PRINT_STATS_INFO layer counts via ps.info.{current_layer,total_layer}. */
+            int cur = s->current_layer;
+            int tot = s->total_layer;
+            int pct = 0;
+            if (s->has_job && cur >= 0 && tot > 0) {
+                pct = (int)((cur * 100.0f) / (float)tot + 0.5f);
+                if (pct < 0) pct = 0;
+                if (pct > 100) pct = 100;
+            }
+            if (s_lay[i].bar) lv_bar_set_value(s_lay[i].bar, pct, LV_ANIM_ON);
+            if (v) {
+                if (s->has_job && cur >= 0 && tot > 0) snprintf(buf, sizeof(buf), "L %d/%d", cur, tot);
+                else if (s->has_job && cur >= 0)           snprintf(buf, sizeof(buf), "L %d", cur);
+                else                                         lv_label_set_text(v, "");
+                if (s->has_job && cur >= 0) lv_label_set_text(v, buf);
             }
         } break;
         case LT_ETA:
@@ -2636,6 +2736,8 @@ void ui_layout_preview_render(void *arg)
         st.speed = 100;    st.axis_z = 12.4f;
         st.progress = 64;  st.time_remaining = 64 * 60;
         st.has_job = true;
+        st.current_layer = 120;
+        st.total_layer = 300;
     }
 
     lv_display_t *disp = lv_display_get_default();
@@ -2858,6 +2960,12 @@ static void on_pref_autoupd_changed(lv_event_t *e)
     app_state_set_pref(PP_PREF_AUTOUPDATE,
                        lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0);
 }
+static void on_pref_dim_changed(lv_event_t *e)
+{
+    uint16_t sel = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (sel >= sizeof(s_dim_opts) / sizeof(s_dim_opts[0])) return;
+    app_state_set_pref(PP_PREF_DIM_MIN, (int)s_dim_opts[sel]);
+}
 /* Switching between a landscape class (0,1) and a portrait class (2,3) changes the screen
  * resolution, which needs a reboot to re-lay-out. Warn + confirm first; a same-class flip
  * (0<->1 / 2<->3) applies live with no reboot. */
@@ -3038,6 +3146,19 @@ static void build_prefs_screen(void)
     lv_obj_align(s_pref_theme_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 624 : 336);
     dropdown_dark(s_pref_theme_dd);
     lv_obj_add_event_cb(s_pref_theme_dd, on_pref_theme_changed, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* Screen dim after idle — landscape: right column under theme; portrait: stacked. */
+    lv_obj_t *dl = lv_label_create(s_scr_prefs);
+    lv_label_set_text(dl, "Screen dim after");
+    lv_obj_set_style_text_color(dl, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(dl, PP_F14, 0);
+    lv_obj_align(dl, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 708 : 392);
+    s_pref_dim_dd = lv_dropdown_create(s_scr_prefs);
+    lv_dropdown_set_options(s_pref_dim_dd, "Off\n1 min\n2 min\n5 min\n10 min\n30 min");
+    lv_obj_set_width(s_pref_dim_dd, 320);
+    lv_obj_align(s_pref_dim_dd, LV_ALIGN_TOP_LEFT, P ? 24 : 420, P ? 736 : 420);
+    dropdown_dark(s_pref_dim_dd);
+    lv_obj_add_event_cb(s_pref_dim_dd, on_pref_dim_changed, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 static void on_prefs_open(lv_event_t *e)
@@ -3050,6 +3171,7 @@ static void on_prefs_open(lv_event_t *e)
     if (prefs_auto_update()) lv_obj_add_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
     else                     lv_obj_remove_state(s_pref_autoupd_sw, LV_STATE_CHECKED);
     lv_dropdown_set_selected(s_pref_orient_dd, (uint16_t)prefs_orient());
+    lv_dropdown_set_selected(s_pref_dim_dd, (uint16_t)dim_opt_index(prefs_dim_min()));
     lv_screen_load(s_scr_prefs);
 }
 
@@ -3142,6 +3264,7 @@ void ui_init(void)
 
     build_lock_overlay();    /* PIN-entry overlay on the top layer (hidden until locked) */
     ui_apply_lock_cfg(NULL); /* arm the idle-lock timer if the opt-in is configured */
+    ui_apply_dim_cfg(NULL);  /* arm the idle backlight-dim timer if configured */
 
     lv_timer_create(webcam_refresh_timer_cb, 7000, NULL);   /* live webcam on Webcam screen */
 }

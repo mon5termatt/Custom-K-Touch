@@ -240,6 +240,8 @@ esp_err_t bambu_get_status_of(const pp_printer_t *pr, pp_status_t *out)
 {
     if (!bambu_is(pr) || !pr->uuid[0]) return ESP_FAIL;
     memset(out, 0, sizeof(*out));
+    out->current_layer = -1;
+    out->total_layer   = -1;
     char uri[64]; const char *user, *pass;
     if (!session_params(pr, uri, sizeof(uri), &user, &pass)) return ESP_FAIL;
 
