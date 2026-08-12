@@ -31,7 +31,8 @@ set(APP_SRC
   ${ROOT}/main/pt_mini.c
   ${ROOT}/main/pt_mk4s.c
   ${ROOT}/main/pt_xl.c
-  ${ROOT}/main/pt_fluidd.c
+  ${ROOT}/main/pt_klipper.c
+  ${ROOT}/main/pt_bambu_icons.c
 )
 
 add_executable(pt_sim ${APP_SRC} ${LVGL_SRC})

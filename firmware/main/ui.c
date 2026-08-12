@@ -20,7 +20,13 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"   /* PSRAM allocation for the fleet snapshot */
 
+#include "pt_bambu.h"
+
+extern const lv_image_dsc_t pt_klipper;
+
 static const char *TAG = "ui";
+
+static const lv_image_dsc_t *model_image(const char *model);
 
 /* ---- display geometry (orientation-aware) ----
  * Screens are built once at boot AFTER ui_apply_orient() sets the rotation, so these report the
@@ -55,9 +61,6 @@ static lv_obj_t *s_scr_farm;       /* Prusa Farm (org stats + orders) */
 static lv_obj_t *s_farm_stat;      /* farm printer-summary label */
 static lv_obj_t *s_farm_list;      /* farm orders container */
 
-/* header title (shows active printer name) */
-static lv_obj_t *s_title_lbl;
-
 /* Wordmark bylines across all headers — toggled by the logo preference. */
 static lv_obj_t *s_bylines[12];
 static int       s_byline_count;
@@ -85,23 +88,8 @@ static char      s_wifi_selected[33];
 
 /* ---- status / printer-detail widgets ---- */
 static lv_obj_t *s_conn_dot;
-static lv_obj_t *s_detail_img;     /* hero: model render on orange tile     */
-static lv_obj_t *s_badge;          /* hero: state badge chip                */
-static lv_obj_t *s_herotop;        /* hero: name+badge strip (state-tinted) */
-static lv_obj_t *s_state_lbl;      /* hero: state text (badge label)        */
-static lv_obj_t *s_model_lbl;      /* hero: model sub-line                  */
-static lv_obj_t *s_nozzle_lbl;
-static lv_obj_t *s_bed_lbl;
-static lv_obj_t *s_speed_lbl;
-static lv_obj_t *s_z_lbl;
-static lv_obj_t *s_job_lbl;
-static lv_obj_t *s_bar;
-static lv_obj_t *s_pct_lbl;
-static lv_obj_t *s_eta_lbl;
-static lv_obj_t *s_btn_pause_lbl;
-static lv_obj_t *s_btn_control;
+static lv_obj_t *s_status_content; /* layout tiles live here (below header bar) */
 /* ---- attention dialog banner (detail screen) ---- */
-static lv_obj_t *s_jobcard;        /* hidden while an attention dialog is shown */
 static lv_obj_t *s_attn_card;
 static lv_obj_t *s_attn_title;
 static lv_obj_t *s_attn_text;
@@ -109,6 +97,28 @@ static lv_obj_t *s_attn_btns[3];
 static lv_obj_t *s_attn_btn_lbls[3];
 static int       s_attn_dialog_id;            /* current dialog id (for the action) */
 static char      s_attn_btn_text[3][24];      /* current button labels (for the action) */
+
+/* Live bind slots for layout_render_into → layout_bind (ui_apply_status). */
+static struct {
+    uint8_t   type;
+    lv_obj_t *val;
+    lv_obj_t *bar;
+    lv_obj_t *img;
+    lv_obj_t *card;    /* HEADER strip / tile card */
+    lv_obj_t *badge;   /* HEADER state badge background */
+} s_lay[PP_LAYOUT_MAX];
+static int s_lay_n;
+static bool s_lay_bind;   /* true while building the live status content */
+static lv_obj_t *s_job_hide[PP_LAYOUT_MAX]; /* group-1 widgets hidden during attention */
+static int       s_job_hide_n;
+
+/* Active job gcode preview for LT_THUMB (separate from file-detail / dash caches). */
+static struct {
+    uint8_t       *buf;
+    lv_image_dsc_t dsc;
+    char           url[160];
+    char           pending[160];
+} s_status_thumb;
 
 /* ---- file screen ---- */
 static lv_obj_t *s_file_list;
@@ -124,7 +134,7 @@ static lv_obj_t      *s_scr_filedetail;
 static lv_obj_t      *s_fd_name;        /* header: file name        */
 static lv_obj_t      *s_thumb_img;      /* lv_image (PNG preview)   */
 static lv_obj_t      *s_thumb_ph;       /* placeholder label        */
-static lv_obj_t      *s_thumb_load;     /* indeterminate load bar   */
+static lv_obj_t      *s_thumb_spin;     /* loading spinner          */
 static lv_image_dsc_t s_thumb_dsc;      /* descriptor over s_thumb_buf */
 static uint8_t       *s_thumb_buf;      /* owned PNG bytes on display  */
 static char           s_sel_path[160];  /* file selected for printing  */
@@ -164,34 +174,17 @@ static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_coord_t w);
 static void make_wordmark(lv_obj_t *parent);
 
-static void thumb_load_anim_cb(void *bar, int32_t v)
-{
-    lv_bar_set_value((lv_obj_t *)bar, (int32_t)v, LV_ANIM_OFF);
-}
-
-/* Show/hide the indeterminate preview load bar + keep the placeholder label in sync. */
 static void thumb_show_loading(bool on)
 {
-    if (!s_thumb_load || !s_thumb_ph) return;
-    lv_anim_delete(s_thumb_load, thumb_load_anim_cb);
+    if (!s_thumb_spin || !s_thumb_ph) return;
     if (on) {
         lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_thumb_spin, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_thumb_ph, tr(STR_LOADING_PREVIEW));
-        lv_bar_set_value(s_thumb_load, 15, LV_ANIM_OFF);
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, s_thumb_load);
-        lv_anim_set_values(&a, 15, 85);
-        lv_anim_set_duration(&a, 750);
-        lv_anim_set_playback_duration(&a, 750);
-        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-        lv_anim_set_exec_cb(&a, thumb_load_anim_cb);
-        lv_anim_start(&a);
+        lv_obj_align(s_thumb_ph, LV_ALIGN_CENTER, 0, 36);
     } else {
-        lv_obj_add_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
-        lv_bar_set_value(s_thumb_load, 0, LV_ANIM_OFF);
+        lv_obj_add_flag(s_thumb_spin, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_thumb_ph, LV_ALIGN_CENTER, 0, 0);
     }
 }
 
@@ -225,14 +218,17 @@ static void card_thumbs_clear(void)
 /* ---------- event handlers (LVGL thread) ---------- */
 static void on_pause_clicked(lv_event_t *e)
 {
+    (void)e;
     if (ui_locked_block()) return;
-    /* The label text tells us which action applies. */
-    const char *txt = lv_label_get_text(s_btn_pause_lbl);
-    if (txt && strcmp(txt, tr(STR_RESUME)) == 0) {
-        app_state_post_cmd(PP_CMD_RESUME, NULL);
-    } else {
-        app_state_post_cmd(PP_CMD_PAUSE, NULL);
+    bool resume = false;
+    for (int i = 0; i < s_lay_n; i++) {
+        if (s_lay[i].type == LT_PAUSE && s_lay[i].val) {
+            resume = (strcmp(lv_label_get_text(s_lay[i].val), tr(STR_RESUME)) == 0);
+            break;
+        }
     }
+    if (resume) app_state_post_cmd(PP_CMD_RESUME, NULL);
+    else        app_state_post_cmd(PP_CMD_PAUSE, NULL);
 }
 
 static void on_stop_clicked(lv_event_t *e)
@@ -349,45 +345,231 @@ extern const lv_image_dsc_t pt_ic_nozzle;
 extern const lv_image_dsc_t pt_ic_bed;
 extern const lv_image_dsc_t pt_ic_speed;
 
-/* One Connect-style telemetry pill: muted label on top, then an orange icon + the
- * big white value. icon may be NULL. Returns the value label for the applier. */
-static lv_obj_t *detail_cell(lv_obj_t *parent, int x, int y, int w, const char *label,
-                             const lv_image_dsc_t *icon)
-{
-    lv_obj_t *cell = lv_obj_create(parent);
-    lv_obj_set_size(cell, w, 56);
-    lv_obj_align(cell, LV_ALIGN_TOP_LEFT, x, y);
-    lv_obj_set_style_bg_color(cell, PP_SURFACE, 0);
-    lv_obj_set_style_border_width(cell, 0, 0);
-    lv_obj_set_style_radius(cell, 6, 0);
-    lv_obj_set_style_pad_all(cell, 8, 0);
-    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *l = lv_label_create(cell);
-    lv_label_set_text(l, label);
-    lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(l, PP_F12, 0);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    int vx = 0;
-    if (icon) {
-        lv_obj_t *ic = lv_image_create(cell);
-        lv_image_set_src(ic, icon);
-        lv_obj_align(ic, LV_ALIGN_BOTTOM_LEFT, 0, 2);
-        vx = 34;   /* value sits to the right of the 28px icon */
-    }
-    lv_obj_t *v = lv_label_create(cell);
-    lv_label_set_text(v, "--");
-    lv_obj_set_style_text_color(v, PP_TEXT, 0);
-    lv_obj_set_style_text_font(v, PP_F20, 0);
-    lv_obj_align(v, LV_ALIGN_BOTTOM_LEFT, vx, 0);
-    return v;
-}
-
 static void on_afc_chip_clicked(lv_event_t *e)
 {
     (void)e;
+    ui_tools_set_back_to_status();
     ui_tools_open_afc();
+}
+
+/* Content area below the status header bar — shared by live status + web layout preview. */
+static void status_content_geom_for(int screen_h, int *y, int *h)
+{
+    *y = 64;   /* 56px header + 8px gap */
+    *h = screen_h - *y - 16;
+    if (*h < 120) *h = 120;
+}
+
+static void status_content_geom(int *y, int *h)
+{
+    status_content_geom_for((int)scr_h(), y, h);
+}
+
+static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_status_t *st, int w, int h);
+static void layout_bind(const pp_status_t *s);
+static void status_layout_sync(void);
+
+static bool layout_is_button(uint8_t type)
+{
+    return type >= LT_PAUSE && type <= LT_AFC;
+}
+
+static const char *layout_button_label(uint8_t type)
+{
+    switch (type) {
+    case LT_PAUSE:   return tr(STR_PAUSE);
+    case LT_STOP:    return "Stop";
+    case LT_FILES:   return tr(STR_FILES);
+    case LT_TOOLS:   return tr(STR_TOOLS);
+    case LT_MOVE:    return tr(STR_MOVE);
+    case LT_TEMP:    return tr(STR_TEMPERATURE);
+    case LT_WEBCAM:  return tr(STR_WEBCAM);
+    case LT_MACROS:  return tr(STR_MACROS);
+    case LT_CONSOLE: return tr(STR_CONSOLE);
+    case LT_TUNE:    return tr(STR_TUNE);
+    case LT_CALIB:   return tr(STR_CALIBRATION);
+    case LT_AFC:     return tr(STR_AFC);
+    default:         return "";
+    }
+}
+
+static void on_lbtn_pause(lv_event_t *e)   { (void)e; on_pause_clicked(NULL); }
+static void on_lbtn_stop(lv_event_t *e)    { (void)e; on_stop_clicked(NULL); }
+static void on_lbtn_files(lv_event_t *e)   { (void)e; on_files_clicked(NULL); }
+static void on_lbtn_tools(lv_event_t *e)   { (void)e; on_control_clicked(NULL); }
+static void on_lbtn_move(lv_event_t *e)    { (void)e; ui_tools_set_back_to_status(); ui_tools_open_move(); }
+static void on_lbtn_temp(lv_event_t *e)    { (void)e; ui_tools_set_back_to_status(); ui_tools_open_temp(); }
+static void on_lbtn_webcam(lv_event_t *e)  { (void)e; ui_tools_set_back_to_status(); ui_tools_open_webcam(); }
+static void on_lbtn_macros(lv_event_t *e)  { (void)e; ui_tools_set_back_to_status(); ui_tools_open_macros(); }
+static void on_lbtn_console(lv_event_t *e){ (void)e; ui_tools_set_back_to_status(); ui_tools_open_console(); }
+static void on_lbtn_tune(lv_event_t *e)    { (void)e; ui_tools_set_back_to_status(); ui_tools_open_tune(); }
+static void on_lbtn_calib(lv_event_t *e)   { (void)e; ui_tools_set_back_to_status(); ui_tools_open_calib(); }
+static void on_lbtn_afc(lv_event_t *e)     { (void)e; ui_tools_set_back_to_status(); ui_tools_open_afc(); }
+
+static lv_event_cb_t layout_button_cb(uint8_t type)
+{
+    switch (type) {
+    case LT_PAUSE:   return on_lbtn_pause;
+    case LT_STOP:    return on_lbtn_stop;
+    case LT_FILES:   return on_lbtn_files;
+    case LT_TOOLS:   return on_lbtn_tools;
+    case LT_MOVE:    return on_lbtn_move;
+    case LT_TEMP:    return on_lbtn_temp;
+    case LT_WEBCAM:  return on_lbtn_webcam;
+    case LT_MACROS:  return on_lbtn_macros;
+    case LT_CONSOLE: return on_lbtn_console;
+    case LT_TUNE:    return on_lbtn_tune;
+    case LT_CALIB:   return on_lbtn_calib;
+    case LT_AFC:     return on_lbtn_afc;
+    default:         return NULL;
+    }
+}
+
+/** Scroll horizontally when text is wider than the label (static when it fits). */
+static void layout_label_scroll(lv_obj_t *lbl, lv_coord_t w)
+{
+    const lv_font_t *f = lv_obj_get_style_text_font(lbl, LV_PART_MAIN);
+    lv_coord_t lh = f ? lv_font_get_line_height(f) : lv_font_get_line_height(PP_F16);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL);
+    if (w > 0) lv_obj_set_width(lbl, w);
+    lv_obj_set_height(lbl, lh);
+}
+
+static lv_obj_t *make_layout_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
+                                    int w, int h, lv_obj_t **out_lbl)
+{
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_size(b, w, h);
+    lv_obj_center(b);
+    lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(b, PP_SURFACE_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(b, PP_BORDER, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 4, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    ui_kb_focus_add(b);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_color(l, PP_TEXT, 0);
+    lv_obj_set_style_text_font(l, PP_F16, 0);
+    lv_obj_center(l);
+    if (out_lbl) *out_lbl = l;
+    return b;
+}
+
+static void status_thumb_clear(void)
+{
+    if (s_status_thumb.buf) {
+        lv_image_cache_drop(&s_status_thumb.dsc);
+        free(s_status_thumb.buf);
+        s_status_thumb.buf = NULL;
+    }
+    s_status_thumb.url[0] = '\0';
+    s_status_thumb.pending[0] = '\0';
+    lv_memzero(&s_status_thumb.dsc, sizeof(s_status_thumb.dsc));
+}
+
+static void status_thumb_adopt(uint8_t *buf, int len)
+{
+    status_thumb_clear();
+    if (!buf || len <= 0) { free(buf); return; }
+    s_status_thumb.buf = buf;
+    s_status_thumb.dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_status_thumb.dsc.header.cf    = LV_COLOR_FORMAT_RAW;
+    s_status_thumb.dsc.header.w     = 0;
+    s_status_thumb.dsc.header.h     = 0;
+    s_status_thumb.dsc.data         = s_status_thumb.buf;
+    s_status_thumb.dsc.data_size    = (uint32_t)len;
+    s_status_thumb.pending[0] = '\0';
+}
+
+/* Uniform scale so the image fits inside box_w x box_h (may upscale or downscale). */
+static void image_scale_to_fit(lv_obj_t *img, int box_w, int box_h)
+{
+    if (!img || box_w < 1 || box_h < 1) return;
+    const void *src = lv_image_get_src(img);
+    if (!src) return;
+    lv_image_header_t hdr;
+    if (lv_image_decoder_get_info(src, &hdr) != LV_RESULT_OK || hdr.w < 1 || hdr.h < 1)
+        return;
+    int inset = 4;
+    int fit_w = box_w - inset * 2;
+    int fit_h = box_h - inset * 2;
+    if (fit_w < 8) fit_w = box_w;
+    if (fit_h < 8) fit_h = box_h;
+    uint32_t sx = (uint32_t)fit_w * 256u / (uint32_t)hdr.w;
+    uint32_t sy = (uint32_t)fit_h * 256u / (uint32_t)hdr.h;
+    uint32_t scale = sx < sy ? sx : sy;
+    if (scale < 8) scale = 8;
+    lv_image_set_scale(img, scale);
+    lv_obj_center(img);
+}
+
+static void layout_thumb_scale(lv_obj_t *img, int tw, int th)
+{
+    image_scale_to_fit(img, tw, th);
+}
+
+static const lv_image_dsc_t *thumb_fallback_icon(const pp_status_t *st)
+{
+    const lv_image_dsc_t *m = model_image(st ? st->model : NULL);
+    if (m) return m;
+    if (app_state_active_is_moonraker()) return &pt_klipper;
+    if (app_state_active_is_bambu()) return &pt_bambu_default;
+    return NULL;
+}
+
+static void layout_thumb_bind_img(lv_obj_t *img, const pp_status_t *st, int tw, int th)
+{
+    if (!img || !st) return;
+    const char *ref = NULL;
+    if (st->has_job)
+        ref = st->job_thumb[0] ? st->job_thumb : (st->job_name[0] ? st->job_name : NULL);
+    if (ref && s_status_thumb.buf && s_status_thumb.url[0]
+        && !strcmp(ref, s_status_thumb.url)) {
+        lv_image_set_src(img, &s_status_thumb.dsc);
+        layout_thumb_scale(img, tw, th);
+        lv_obj_remove_flag(img, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const lv_image_dsc_t *fb = thumb_fallback_icon(st);
+    if (fb) {
+        lv_image_set_src(img, fb);
+        layout_thumb_scale(img, tw, th);
+        lv_obj_remove_flag(img, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(img, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void layout_status_thumb_apply(void)
+{
+    pp_status_t st;
+    app_state_get(&st);
+    for (int i = 0; i < s_lay_n; i++) {
+        if (s_lay[i].type != LT_THUMB || !s_lay[i].img || !s_lay[i].card) continue;
+        int tw = (int)lv_obj_get_width(s_lay[i].card);
+        int th = (int)lv_obj_get_height(s_lay[i].card);
+        layout_thumb_bind_img(s_lay[i].img, &st, tw, th);
+    }
+}
+
+static void status_thumb_request(const pp_status_t *s)
+{
+    const char *ref = NULL;
+    if (s && s->has_job)
+        ref = s->job_thumb[0] ? s->job_thumb : (s->job_name[0] ? s->job_name : NULL);
+    if (!ref || !ref[0]) {
+        if (s_status_thumb.url[0] || s_status_thumb.pending[0]) status_thumb_clear();
+        return;
+    }
+    if (s_status_thumb.buf && !strcmp(ref, s_status_thumb.url)) return;
+    if (s_status_thumb.pending[0] && !strcmp(ref, s_status_thumb.pending)) return;
+    if (s_status_thumb.url[0] && strcmp(ref, s_status_thumb.url)) status_thumb_clear();
+    strlcpy(s_status_thumb.pending, ref, sizeof(s_status_thumb.pending));
+    app_state_fetch_thumb(ref);
 }
 
 static void build_status_screen(void)
@@ -429,136 +611,36 @@ static void build_status_screen(void)
     lv_obj_set_style_text_font(estop_lbl, PP_F16, 0);
     lv_obj_center(estop_lbl);
 
-    /* Portrait (480x800) lays the detail screen out single-column: hero across the top,
-     * 2x2 telemetry, full-width job/attention card, 2x2 action buttons. Landscape keeps the
-     * wide single-row layout. CW = full-width card (16px side margins). */
     const bool P = ui_portrait();
     const int  CW = scr_w() - 32;
+    int cy, ch;
+    status_content_geom(&cy, &ch);
 
-    /* ---- hero: orange model tile + state badge + model line ---- */
-    lv_obj_t *tile = lv_obj_create(s_scr_status);
-    lv_obj_set_size(tile, 84, 84);
-    lv_obj_align(tile, LV_ALIGN_TOP_LEFT, 16, 64);
-    lv_obj_set_style_bg_color(tile, PP_ORANGE, 0);
-    lv_obj_set_style_border_width(tile, 0, 0);
-    lv_obj_set_style_radius(tile, 8, 0);
-    lv_obj_set_style_pad_all(tile, 0, 0);
-    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-    s_detail_img = lv_image_create(tile);
-    lv_obj_center(s_detail_img);
-
-    /* name + state badge on one row (Connect hero) */
-    lv_obj_t *herotop = lv_obj_create(s_scr_status);
-    lv_obj_set_size(herotop, P ? scr_w() - 128 : 660, 38);
-    lv_obj_align(herotop, LV_ALIGN_TOP_LEFT, 112, 66);
-    /* State-tinted strip behind name+badge — mirrors the dashboard card header (recolored
-     * per-state in ui_apply_status). */
-    lv_obj_set_style_bg_opa(herotop, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(herotop, PP_STRIP_GRAY, 0);
-    lv_obj_set_style_radius(herotop, 6, 0);
-    lv_obj_set_style_border_width(herotop, 0, 0);
-    lv_obj_set_style_pad_all(herotop, 0, 0);
-    lv_obj_set_style_pad_hor(herotop, 10, 0);
-    lv_obj_set_style_pad_column(herotop, 12, 0);
-    s_herotop = herotop;
-    lv_obj_clear_flag(herotop, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(herotop, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(herotop, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    s_title_lbl = lv_label_create(herotop);            /* printer name (was in the bar) */
-    lv_label_set_text(s_title_lbl, tr(STR_NAV_PRINTER));
-    lv_obj_set_style_text_color(s_title_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_title_lbl, PP_F28, 0);
-
-    s_badge = lv_obj_create(herotop);
-    lv_obj_set_size(s_badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_hor(s_badge, 12, 0);
-    lv_obj_set_style_pad_ver(s_badge, 4, 0);
-    lv_obj_set_style_radius(s_badge, 4, 0);
-    lv_obj_set_style_border_width(s_badge, 0, 0);
-    lv_obj_set_style_bg_color(s_badge, PP_BADGE_GRAY, 0);
-    lv_obj_clear_flag(s_badge, LV_OBJ_FLAG_SCROLLABLE);
-    s_state_lbl = lv_label_create(s_badge);
-    lv_label_set_text(s_state_lbl, "...");
-    lv_obj_set_style_text_color(s_state_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_state_lbl, PP_F16, 0);
-    lv_obj_center(s_state_lbl);
-
-    s_model_lbl = lv_label_create(s_scr_status);
-    lv_label_set_text(s_model_lbl, "");
-    lv_obj_set_style_text_color(s_model_lbl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_model_lbl, PP_F14, 0);
-    lv_label_set_long_mode(s_model_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_model_lbl, P ? scr_w() - 128 : 540);
-    lv_obj_align(s_model_lbl, LV_ALIGN_TOP_LEFT, 112, 114);
+    /* ---- layout-driven status content (same spec as Settings → Layout) ---- */
+    s_status_content = lv_obj_create(s_scr_status);
+    lv_obj_set_pos(s_status_content, 0, cy);
+    lv_obj_set_size(s_status_content, scr_w(), ch);
+    lv_obj_set_style_bg_opa(s_status_content, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_status_content, 0, 0);
+    lv_obj_set_style_pad_all(s_status_content, 0, 0);
+    lv_obj_set_style_radius(s_status_content, 0, 0);
+    lv_obj_clear_flag(s_status_content, LV_OBJ_FLAG_SCROLLABLE);
+    status_layout_sync();
 
     s_afc_chip = lv_label_create(s_scr_status);
     lv_label_set_text(s_afc_chip, "");
     lv_obj_set_style_text_color(s_afc_chip, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_afc_chip, PP_F14, 0);
-    lv_obj_align(s_afc_chip, LV_ALIGN_TOP_LEFT, 112, 134);
+    lv_obj_align(s_afc_chip, LV_ALIGN_TOP_LEFT, 112, cy + 70);
     lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_afc_chip, on_afc_chip_clicked, LV_EVENT_CLICKED, NULL);
 
-    /* ---- telemetry cells ---- landscape: 4 across; portrait: 2x2 grid ---- */
-    if (P) {
-        int cw2 = (CW - 12) / 2, xa = 16, xb = 16 + cw2 + 12, r0 = 160, r1 = 226;
-        s_nozzle_lbl = detail_cell(s_scr_status, xa, r0, cw2, tr(STR_NOZZLE), &pt_ic_nozzle);
-        s_bed_lbl    = detail_cell(s_scr_status, xb, r0, cw2, tr(STR_BED),    &pt_ic_bed);
-        s_speed_lbl  = detail_cell(s_scr_status, xa, r1, cw2, tr(STR_SPEED),  &pt_ic_speed);
-        s_z_lbl      = detail_cell(s_scr_status, xb, r1, cw2, tr(STR_Z_AXIS), NULL);
-    } else {
-        s_nozzle_lbl = detail_cell(s_scr_status, 16,  160, 180, tr(STR_NOZZLE),  &pt_ic_nozzle);
-        s_bed_lbl    = detail_cell(s_scr_status, 208, 160, 180, tr(STR_BED), &pt_ic_bed);
-        s_speed_lbl  = detail_cell(s_scr_status, 400, 160, 180, tr(STR_SPEED),   &pt_ic_speed);
-        s_z_lbl      = detail_cell(s_scr_status, 592, 160, 192, tr(STR_Z_AXIS),  NULL);
-    }
-
-    /* ---- job / progress card ---- */
-    lv_obj_t *jobcard = lv_obj_create(s_scr_status);
-    s_jobcard = jobcard;
-    const int CARDY = P ? 300 : 228;   /* below the 2x2 telemetry in portrait */
-    lv_obj_set_size(jobcard, P ? CW : 768, 88);
-    lv_obj_align(jobcard, LV_ALIGN_TOP_LEFT, 16, CARDY);
-    lv_obj_set_style_bg_color(jobcard, PP_SURFACE, 0);
-    lv_obj_set_style_border_width(jobcard, 0, 0);
-    lv_obj_set_style_radius(jobcard, 6, 0);
-    lv_obj_set_style_pad_all(jobcard, 12, 0);
-    lv_obj_clear_flag(jobcard, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_job_lbl = lv_label_create(jobcard);
-    lv_label_set_long_mode(s_job_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_job_lbl, P ? CW - 100 : 560);
-    lv_label_set_text(s_job_lbl, "");
-    lv_obj_set_style_text_color(s_job_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_job_lbl, PP_F16, 0);
-    lv_obj_align(s_job_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    s_pct_lbl = lv_label_create(jobcard);
-    lv_label_set_text(s_pct_lbl, "");
-    lv_obj_set_style_text_color(s_pct_lbl, PP_TEXT, 0);
-    lv_obj_set_style_text_font(s_pct_lbl, PP_F20, 0);
-    lv_obj_align(s_pct_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
-
-    s_bar = lv_bar_create(jobcard);
-    lv_obj_set_size(s_bar, P ? CW - 48 : 600, 12);
-    lv_obj_align(s_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_bar_set_range(s_bar, 0, 100);
-    lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_bar, PP_SURFACE_HI, 0);
-    lv_obj_set_style_bg_color(s_bar, PP_ORANGE, LV_PART_INDICATOR);
-
-    s_eta_lbl = lv_label_create(jobcard);
-    lv_label_set_text(s_eta_lbl, "");
-    lv_obj_set_style_text_color(s_eta_lbl, PP_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_eta_lbl, PP_F16, 0);
-    lv_obj_align(s_eta_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-
     /* ---- attention dialog banner (overlays the job card when the printer needs attention) ---- */
+    const int CARDY = cy + ch - 140;
     s_attn_card = lv_obj_create(s_scr_status);
     lv_obj_set_size(s_attn_card, P ? CW : 768, 130);
-    lv_obj_align(s_attn_card, LV_ALIGN_TOP_LEFT, 16, CARDY);
+    lv_obj_align(s_attn_card, LV_ALIGN_TOP_LEFT, 16, CARDY > cy ? CARDY : cy);
     lv_obj_set_style_bg_color(s_attn_card, PP_STATE_YELLOW, 0);
     lv_obj_set_style_bg_opa(s_attn_card, LV_OPA_20, 0);
     lv_obj_set_style_border_color(s_attn_card, PP_STATE_YELLOW, 0);
@@ -588,34 +670,6 @@ static void build_status_screen(void)
         lv_obj_align(s_attn_btns[i], LV_ALIGN_BOTTOM_LEFT, i * 160, 0);
         lv_obj_add_flag(s_attn_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
-
-    /* ---- action buttons ---- landscape: 4 centered near the bottom;
-     * portrait: centered 2x2 under the job/attention card ---- */
-    lv_obj_t *pause_btn = make_button(s_scr_status, tr(STR_PAUSE), on_pause_clicked, NULL, &s_btn_pause_lbl);
-    lv_obj_t *stop_btn  = make_button(s_scr_status, "Stop", on_stop_clicked, NULL, NULL);
-    lv_obj_t *files_btn = make_button(s_scr_status, tr(STR_FILES), on_files_clicked, NULL, NULL);
-    s_btn_control = make_button(s_scr_status, tr(STR_TOOLS), on_control_clicked, NULL, NULL);
-    {
-        const int bw = 150, gap = 16;
-        if (P) {
-            int row_w = 2 * bw + gap;
-            int x0 = (scr_w() - row_w) / 2;
-            if (x0 < 8) x0 = 8;
-            lv_obj_align(pause_btn,     LV_ALIGN_TOP_LEFT, x0, 452);
-            lv_obj_align(stop_btn,      LV_ALIGN_TOP_LEFT, x0 + bw + gap, 452);
-            lv_obj_align(files_btn,     LV_ALIGN_TOP_LEFT, x0, 524);
-            lv_obj_align(s_btn_control, LV_ALIGN_TOP_LEFT, x0 + bw + gap, 524);
-        } else {
-            int total = 4 * bw + 3 * gap;
-            int x0 = (scr_w() - total) / 2;
-            if (x0 < 8) x0 = 8;
-            lv_obj_align(pause_btn,     LV_ALIGN_BOTTOM_LEFT, x0, -16);
-            lv_obj_align(stop_btn,      LV_ALIGN_BOTTOM_LEFT, x0 + (bw + gap), -16);
-            lv_obj_align(files_btn,     LV_ALIGN_BOTTOM_LEFT, x0 + 2 * (bw + gap), -16);
-            lv_obj_align(s_btn_control, LV_ALIGN_BOTTOM_LEFT, x0 + 3 * (bw + gap), -16);
-        }
-    }
-    lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
 }
 static void on_storage_toggle(lv_event_t *e)
 {
@@ -713,27 +767,25 @@ static void build_filedetail_screen(void)
     lv_obj_t *back = make_barbtn(bar, LV_SYMBOL_LEFT " Back", on_fd_back, NULL, 100);
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -8, 0);
 
-    /* preview card holds thumbnail, loading bar, or a placeholder label */
+    /* preview card holds thumbnail, spinner, or a placeholder label */
     lv_obj_t *card = make_card(s_scr_filedetail, 360, 300);
     lv_obj_align(card, LV_ALIGN_TOP_MID, 0, 70);
+
+    s_thumb_spin = lv_spinner_create(card);
+    lv_obj_set_size(s_thumb_spin, 56, 56);
+    lv_obj_align(s_thumb_spin, LV_ALIGN_CENTER, 0, -18);
+    lv_spinner_set_anim_params(s_thumb_spin, 1000, 270);
+    lv_obj_set_style_arc_color(s_thumb_spin, PP_SURFACE_HI, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_thumb_spin, 5, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_thumb_spin, PP_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(s_thumb_spin, 5, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_thumb_spin, LV_OBJ_FLAG_HIDDEN);
 
     s_thumb_ph = lv_label_create(card);
     lv_label_set_text(s_thumb_ph, tr(STR_NO_PREVIEW));
     lv_obj_set_style_text_color(s_thumb_ph, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(s_thumb_ph, PP_F16, 0);
-    lv_obj_align(s_thumb_ph, LV_ALIGN_CENTER, 0, -12);
-
-    s_thumb_load = lv_bar_create(card);
-    lv_obj_set_size(s_thumb_load, 180, 8);
-    lv_obj_align(s_thumb_load, LV_ALIGN_CENTER, 0, 18);
-    lv_bar_set_range(s_thumb_load, 0, 100);
-    lv_bar_set_value(s_thumb_load, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_thumb_load, PP_SURFACE_HI, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_thumb_load, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_thumb_load, 4, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s_thumb_load, PP_ORANGE, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(s_thumb_load, 4, LV_PART_INDICATOR);
-    lv_obj_add_flag(s_thumb_load, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_thumb_ph, LV_ALIGN_CENTER, 0, 0);
 
     s_thumb_img = lv_image_create(card);
     lv_obj_set_size(s_thumb_img, 340, 280);   /* fixed viewport; image centered + scaled to fit */
@@ -1244,6 +1296,7 @@ static void open_printer_at(int idx)
     if (idx < 0 || idx >= s_dash_count) return;   /* index may be stale after a remove */
     app_state_select_printer(idx);
     /* Render cached status immediately so detail isn't stale until the next poll. */
+    status_layout_sync();
     if (s_dash_items) {
         pp_status_t *copy = malloc(sizeof(*copy));
         if (copy) { *copy = s_dash_items[idx]; ui_apply_status(copy); }
@@ -1262,7 +1315,7 @@ extern const lv_image_dsc_t pt_core_one_l;
 extern const lv_image_dsc_t pt_mini;
 extern const lv_image_dsc_t pt_mk4s;
 extern const lv_image_dsc_t pt_xl;
-extern const lv_image_dsc_t pt_fluidd;   /* Klipper / Moonraker printers */
+extern const lv_image_dsc_t pt_klipper;  /* Klipper / Moonraker printers */
 
 /* Pick the model image for a friendly model string (NULL → show placeholder). */
 static const lv_image_dsc_t *model_image(const char *model)
@@ -1273,7 +1326,31 @@ static const lv_image_dsc_t *model_image(const char *model)
     if (strstr(model, "MINI"))       return &pt_mini;
     if (strstr(model, "MK4S"))       return &pt_mk4s;
     if (strstr(model, "XL"))         return &pt_xl;
-    if (strstr(model, "Klipper"))    return &pt_fluidd;       /* Moonraker backend */
+    if (strstr(model, "Klipper"))    return &pt_klipper;      /* Moonraker backend */
+    /* Bambu Lab — specific models before generic "Bambu" (A1 mini before A1). */
+    if (strstr(model, "A1 mini"))    return &pt_bambu_a1mini;
+    if (strstr(model, "A2L"))        return &pt_bambu_a2l;
+    if (strstr(model, "A1"))         return &pt_bambu_a1;
+    if (strstr(model, "X1E"))        return &pt_bambu_x1e;
+    if (strstr(model, "X1C"))        return &pt_bambu_x1c;
+    if (strstr(model, "X2D"))        return &pt_bambu_x2d;
+    if (strstr(model, "P1S"))        return &pt_bambu_p1s;
+    if (strstr(model, "P1P"))        return &pt_bambu_p1p;
+    if (strstr(model, "Bambu"))      return &pt_bambu_default;
+    return NULL;
+}
+
+/* Fleet card icon when model string is not yet known (thumb loading, etc.). */
+static const lv_image_dsc_t *card_model_icon(const pp_status_t *s, int idx)
+{
+    const lv_image_dsc_t *m = model_image(s ? s->model : NULL);
+    if (m) return m;
+    pp_printer_t pr;
+    if (printer_store_get(idx, &pr)) {
+        if (strncmp(pr.host, "bambu:", 6) == 0 || strncmp(pr.host, "bambucloud:", 11) == 0)
+            return &pt_bambu_default;
+        if (pr.port == 7125) return &pt_klipper;
+    }
     return NULL;
 }
 
@@ -1532,18 +1609,14 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         if (s_card_thumbs[idx].buf) {
             lv_obj_t *jt = lv_image_create(thumb);
             lv_image_set_src(jt, &s_card_thumbs[idx].dsc);
-            lv_image_header_t hdr;
-            if (lv_image_decoder_get_info(&s_card_thumbs[idx].dsc, &hdr) == LV_RESULT_OK
-                && hdr.w > 0 && hdr.h > 0) {
-                uint32_t scale = (48u * 256u) / (hdr.w > hdr.h ? hdr.w : hdr.h);
-                if (scale > 256) scale = 256;
-                lv_image_set_scale(jt, scale);
+            image_scale_to_fit(jt, 48, 48);
+        } else {
+            const lv_image_dsc_t *fb = card_model_icon(s, idx);
+            if (fb) {
+                lv_obj_t *mi = lv_image_create(thumb);
+                lv_image_set_src(mi, fb);
+                image_scale_to_fit(mi, 48, 48);
             }
-            lv_obj_center(jt);
-        } else if (img) {
-            lv_obj_t *mi = lv_image_create(thumb);
-            lv_image_set_src(mi, img);
-            lv_obj_center(mi);
         }
     } else {
         /* No job; clear slot cache if it was occupied. */
@@ -1559,12 +1632,19 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         if (img) {
             lv_obj_t *mi = lv_image_create(thumb);
             lv_image_set_src(mi, img);
-            lv_obj_center(mi);
+            image_scale_to_fit(mi, 48, 48);
         } else {
-            lv_obj_t *ti = lv_label_create(thumb);
-            lv_label_set_text(ti, LV_SYMBOL_IMAGE);
-            lv_obj_set_style_text_color(ti, PP_TEXT_MUTED, 0);
-            lv_obj_center(ti);
+            const lv_image_dsc_t *fb = card_model_icon(s, idx);
+            if (fb) {
+                lv_obj_t *mi = lv_image_create(thumb);
+                lv_image_set_src(mi, fb);
+                image_scale_to_fit(mi, 48, 48);
+            } else {
+                lv_obj_t *ti = lv_label_create(thumb);
+                lv_label_set_text(ti, LV_SYMBOL_IMAGE);
+                lv_obj_set_style_text_color(ti, PP_TEXT_MUTED, 0);
+                lv_obj_center(ti);
+            }
         }
     }
 
@@ -2108,26 +2188,44 @@ void ui_status_set_afc_chip(const pp_afc_t *a)
     }
 }
 
-/* ---------- Custom layout (issue #6): the web designer emits a pp_layout_t. The device no longer
- * shows it as a navigable screen — it renders the spec OFF-SCREEN into a snapshot for the web
- * "Generate preview" button (editing AND previewing both live in the web UI). ---------- */
+/* ---------- Custom layout (issue #6): web designer emits a pp_layout_t; the live status screen
+ * content area AND the web "Generate preview" both render that spec (with fixed status chrome). ---- */
 
-/* Render layout spec L, bound to status st, into `parent` sized w x h. One-shot: each tile is built
- * AND bound inline (no live-update array, no header bar). Used only by the off-screen preview. */
+static void status_layout_sync(void)
+{
+    if (!s_status_content) return;
+    int cy, ch;
+    status_content_geom(&cy, &ch);
+    lv_obj_set_pos(s_status_content, 0, cy);
+    lv_obj_set_size(s_status_content, scr_w(), ch);
+    lv_obj_clean(s_status_content);
+    s_lay_n = 0;
+    s_job_hide_n = 0;
+    pp_status_t empty = {0};
+    s_lay_bind = true;
+    layout_render_into(s_status_content, layout_get_for_screen(ui_portrait()), &empty, scr_w(), ch);
+    s_lay_bind = false;
+    lv_obj_update_layout(s_status_content);
+}
+
+/* Render layout spec L into `parent` sized w x h. When s_lay_bind is set, records widgets in s_lay[]
+ * for live updates via layout_bind(). Group 1 tiles are tracked for the attention overlay. */
 static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_status_t *st, int w, int h)
 {
     if (!parent || !L || !st) return;
-    char buf[40];
-    int cols = L->cols ? L->cols : 8, rows = 1;
-    for (int i = 0; i < L->n; i++) { int rr = L->tiles[i].r + L->tiles[i].h; if (rr > rows) rows = rr; }
+    char buf[48];
+    int cols = L->cols ? L->cols : 8, rows = layout_rows_used(L);
     const int pad = 6;
-    int cw = w / cols, ch = h / rows;     /* no header off-screen: the full canvas is tile area */
-    /* Cap the row height so cells stay as compact as the stock ones (a 1-row cell ~= the 56px
-     * detail_cell) instead of stretching tall to fill the panel; the layout then top-aligns. */
-    if (ch > 68) ch = 68;
+    int cw = w / cols, ch = h / rows;
+    int max_th = 1;
+    for (int i = 0; i < L->n; i++)
+        if (L->tiles[i].h > max_th) max_th = L->tiles[i].h;
+    if (ch > 68) {
+        if (max_th >= 2) { if (ch > 120) ch = 120; }
+        else             ch = 68;
+    }
 
-    /* Pass 1: one shared surface card behind each group's bounding box (combined cards), drawn first
-     * so the grouped tiles' content sits on top of it. */
+    /* Pass 1: one shared surface card behind each group's bounding box. */
     bool gdrawn[PP_LAYOUT_GROUPS] = {0};
     for (int i = 0; i < L->n; i++) {
         if (L->tiles[i].type == 0 || L->tiles[i].type >= LT_COUNT) continue;
@@ -2150,6 +2248,7 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         lv_obj_set_style_border_width(gc, 0, 0);
         lv_obj_set_style_radius(gc, 6, 0);
         lv_obj_clear_flag(gc, LV_OBJ_FLAG_SCROLLABLE);
+        if (s_lay_bind && g == 1 && s_job_hide_n < PP_LAYOUT_MAX) s_job_hide[s_job_hide_n++] = gc;
     }
 
     for (int i = 0; i < L->n; i++) {
@@ -2163,7 +2262,9 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         lv_obj_set_style_radius(card, 6, 0);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-        /* HEADER: printer name + state badge fused in the state-tinted strip (the hero header). */
+        lv_obj_t *val = NULL, *barw = NULL, *img = NULL, *bdg = NULL;
+
+        /* HEADER: printer name + state badge fused in the state-tinted strip. */
         if (t->type == LT_HEADER) {
             lv_obj_set_style_bg_color(card, st->online ? pp_state_strip(st->state) : PP_STRIP_GRAY, 0);
             lv_obj_set_style_pad_hor(card, 10, 0);
@@ -2171,13 +2272,14 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_pad_column(card, 10, 0);
             lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
             lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-            lv_obj_t *nm = lv_label_create(card);
-            lv_label_set_text(nm, st->printer_name[0] ? st->printer_name : "Printer");
-            lv_obj_set_style_text_color(nm, PP_TEXT, 0);
-            lv_obj_set_style_text_font(nm, PP_F20, 0);
-            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
-            lv_obj_set_flex_grow(nm, 1);
-            lv_obj_t *bdg = lv_obj_create(card);
+            val = lv_label_create(card);
+            lv_label_set_text(val, st->printer_name[0] ? st->printer_name : "Printer");
+            lv_obj_set_style_text_color(val, PP_TEXT, 0);
+            lv_obj_set_style_text_font(val, PP_F28, 0);
+            layout_label_scroll(val, 0);
+            lv_obj_set_flex_grow(val, 1);
+            lv_obj_set_style_min_width(val, 0, 0);
+            bdg = lv_obj_create(card);
             lv_obj_set_size(bdg, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_pad_hor(bdg, 10, 0);
             lv_obj_set_style_pad_ver(bdg, 3, 0);
@@ -2186,14 +2288,42 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_bg_color(bdg, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0);
             lv_obj_clear_flag(bdg, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_t *sl = lv_label_create(bdg);
-            lv_label_set_text(sl, st->state[0] ? st->state : "...");
+            const char *stxt = st->online ? (st->state[0] ? st->state : "READY") : "OFFLINE";
+            lv_label_set_text(sl, tr_state(stxt));
             lv_obj_set_style_text_color(sl, PP_TEXT, 0);
             lv_obj_set_style_text_font(sl, PP_F16, 0);
+            if (s_lay_bind && s_lay_n < PP_LAYOUT_MAX) {
+                s_lay[s_lay_n].type = LT_HEADER;
+                s_lay[s_lay_n].val = val;
+                s_lay[s_lay_n].bar = NULL;
+                s_lay[s_lay_n].img = NULL;
+                s_lay[s_lay_n].card = card;
+                s_lay[s_lay_n].badge = bdg;
+                /* reuse bar slot for the badge label (state text) */
+                s_lay[s_lay_n].bar = sl;
+                s_lay_n++;
+            }
             continue;
         }
 
-        /* tile chrome per style: CARD = surface; BARE = transparent (floating label); ACCENT = orange.
-         * A grouped tile is always transparent — its group's shared card (pass 1) is the background. */
+        if (layout_is_button(t->type)) {
+            lv_obj_set_style_bg_opa(card, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(card, 0, 0);
+            lv_obj_t *blbl = NULL;
+            make_layout_button(card, layout_button_label(t->type), layout_button_cb(t->type),
+                               tw, th, &blbl);
+            if (s_lay_bind && s_lay_n < PP_LAYOUT_MAX) {
+                s_lay[s_lay_n].type = t->type;
+                s_lay[s_lay_n].val = blbl;
+                s_lay[s_lay_n].bar = NULL;
+                s_lay[s_lay_n].img = NULL;
+                s_lay[s_lay_n].card = card;
+                s_lay[s_lay_n].badge = NULL;
+                s_lay_n++;
+            }
+            continue;
+        }
+
         bool bare = (t->style == LS_BARE), accent = (t->style == LS_ACCENT);
         bool grouped = (t->group >= 1 && t->group < PP_LAYOUT_GROUPS);
         if (grouped) {
@@ -2210,9 +2340,8 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_bg_color(card, PP_SURFACE, 0);
             lv_obj_set_style_pad_all(card, 8, 0);
         }
-        lv_color_t vcol = (accent && !grouped) ? PP_TEXT_INVERSE : PP_TEXT;   /* grouped drops the orange bg */
+        lv_color_t vcol = (accent && !grouped) ? PP_TEXT_INVERSE : PP_TEXT;
 
-        /* caption only on CARD style (BARE/ACCENT drop it); NAME never captions. */
         bool has_cap = !bare && !accent && PP_TILE_LABELS[t->type][0] != '\0' && t->type != LT_NAME;
         if (has_cap) {
             lv_obj_t *cap = lv_label_create(card);
@@ -2222,7 +2351,6 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 0);
         }
 
-        lv_obj_t *val = NULL, *barw = NULL, *img = NULL;
         if (t->type == LT_PROGRESS) {
             barw = lv_bar_create(card);
             lv_obj_set_size(barw, tw - 16, 12);
@@ -2233,19 +2361,13 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
             lv_obj_set_style_bg_color(barw, PP_ORANGE, LV_PART_INDICATOR);
             val = lv_label_create(card);
             lv_obj_set_style_text_color(val, vcol, 0);
-            lv_obj_set_style_text_font(val, PP_F16, 0);
+            lv_obj_set_style_text_font(val, PP_F20, 0);
             lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 0);
         } else if (t->type == LT_THUMB) {
-            if (!accent && !grouped) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);   /* ACCENT/group keep their bg */
+            if (!accent && !grouped) lv_obj_set_style_bg_color(card, PP_SURFACE_HI, 0);
             lv_obj_set_style_pad_all(card, 0, 0);
             img = lv_image_create(card);
-            /* Scale the 48px model asset to fill ~80% of the slot's smaller side. */
-            int side = (tw < th) ? tw : th;
-            uint32_t sc = (uint32_t)(side * 4 / 5) * 256u / 48u;
-            if (sc < 256) sc = 256;
-            if (sc > 1024) sc = 1024;
-            lv_image_set_scale(img, sc);
-            lv_obj_center(img);
+            layout_thumb_bind_img(img, st, tw, th);
         } else if (t->type == LT_STATE) {
             val = lv_label_create(card);
             lv_obj_set_style_text_color(val, PP_TEXT, 0);
@@ -2259,12 +2381,10 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         } else if (t->type == LT_NAME) {
             val = lv_label_create(card);
             lv_obj_set_style_text_color(val, vcol, 0);
-            lv_obj_set_style_text_font(val, PP_F20, 0);
-            lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(val, tw - 4);
+            lv_obj_set_style_text_font(val, PP_F28, 0);
+            layout_label_scroll(val, tw - 4);
             lv_obj_align(val, LV_ALIGN_LEFT_MID, 0, 0);
         } else {
-            /* MODEL / JOB (secondary, muted-ish) or NOZZLE/BED/SPEED/Z/ETA (telemetry detail_cell). */
             const lv_image_dsc_t *ic = (t->type == LT_NOZZLE) ? &pt_ic_nozzle
                                      : (t->type == LT_BED)    ? &pt_ic_bed
                                      : (t->type == LT_SPEED)  ? &pt_ic_speed : NULL;
@@ -2275,21 +2395,24 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
                 lv_obj_align(im, LV_ALIGN_BOTTOM_LEFT, 0, 2);
                 vx = 34;
             }
-            bool secondary = (t->type == LT_MODEL || t->type == LT_JOB);
+            bool secondary = (t->type == LT_MODEL || t->type == LT_JOB || t->type == LT_ETA);
             val = lv_label_create(card);
-            lv_obj_set_style_text_color(val, (t->type == LT_MODEL) ? PP_TEXT_MUTED : vcol, 0);
+            lv_obj_set_style_text_color(val, (t->type == LT_MODEL || t->type == LT_ETA) ? PP_TEXT_MUTED : vcol, 0);
             lv_obj_set_style_text_font(val, secondary ? PP_F16 : PP_F20, 0);
-            lv_label_set_long_mode(val, LV_LABEL_LONG_DOT);
-            lv_obj_set_width(val, tw - vx);
+            layout_label_scroll(val, tw - vx);
             lv_obj_align(val, bare ? LV_ALIGN_LEFT_MID : LV_ALIGN_BOTTOM_LEFT, vx, 0);
         }
-        /* bind the sample status inline (folded-in layout_bind) */
+
+        /* Initial values (preview sample or empty live shell). */
         switch (t->type) {
         case LT_NAME:  if (val) lv_label_set_text(val, st->printer_name[0] ? st->printer_name : "Printer"); break;
-        case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : "Printer"); break;
+        case LT_MODEL: if (val) lv_label_set_text(val, st->model[0] ? st->model : ""); break;
         case LT_JOB:   if (val) lv_label_set_text(val, st->job_name[0] ? st->job_name : "--"); break;
-        case LT_STATE: if (val) { lv_label_set_text(val, st->state[0] ? st->state : "...");
-                                  lv_obj_set_style_bg_color(val, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0); } break;
+        case LT_STATE: if (val) {
+            const char *stxt = st->online ? (st->state[0] ? st->state : "READY") : "OFFLINE";
+            lv_label_set_text(val, tr_state(stxt));
+            lv_obj_set_style_bg_color(val, st->online ? pp_state_badge(st->state) : PP_BADGE_GRAY, 0);
+        } break;
         case LT_NOZZLE:
             if (val) {
                 if (st->target_nozzle > 0) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)st->temp_nozzle, (int)st->target_nozzle);
@@ -2313,23 +2436,174 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         } break;
         case LT_ETA:
             if (val) {
-                if (st->time_remaining > 0) { int m = st->time_remaining / 60; snprintf(buf, sizeof(buf), "%dh %02dm", m / 60, m % 60); }
-                else strlcpy(buf, "--", sizeof(buf));
+                if (st->time_remaining > 0) {
+                    char eta[24];
+                    fmt_eta(st->time_remaining, eta, sizeof(eta));
+                    snprintf(buf, sizeof(buf), tr(STR_ETA_FMT), eta);
+                } else strlcpy(buf, "", sizeof(buf));
                 lv_label_set_text(val, buf);
             }
             break;
         case LT_THUMB:
-            if (img) { const lv_image_dsc_t *m = model_image(st->model); if (m) lv_image_set_src(img, m); }
-            break;
+            break;   /* bound via layout_thumb_bind_img / layout_status_thumb_apply */
         default: break;
+        }
+
+        if (s_lay_bind && s_lay_n < PP_LAYOUT_MAX) {
+            s_lay[s_lay_n].type = t->type;
+            s_lay[s_lay_n].val = val;
+            s_lay[s_lay_n].bar = barw;
+            s_lay[s_lay_n].img = img;
+            s_lay[s_lay_n].card = card;
+            s_lay[s_lay_n].badge = NULL;
+            s_lay_n++;
+            if (t->group == 1 && s_job_hide_n < PP_LAYOUT_MAX) s_job_hide[s_job_hide_n++] = card;
         }
     }
 }
 
+static void layout_bind(const pp_status_t *s)
+{
+    if (!s || s_lay_n <= 0) return;
+    char buf[48];
+    for (int i = 0; i < s_lay_n; i++) {
+        lv_obj_t *v = s_lay[i].val;
+        switch (s_lay[i].type) {
+        case LT_HEADER:
+            if (s_lay[i].card)
+                lv_obj_set_style_bg_color(s_lay[i].card, s->online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
+            if (v) lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer");
+            if (s_lay[i].badge)
+                lv_obj_set_style_bg_color(s_lay[i].badge, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
+            if (s_lay[i].bar) {   /* badge label */
+                const char *stxt = s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE";
+                lv_label_set_text(s_lay[i].bar, tr_state(stxt));
+            }
+            break;
+        case LT_NAME:  if (v) lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer"); break;
+        case LT_MODEL: if (v) lv_label_set_text(v, s->model[0] ? s->model : ""); break;
+        case LT_JOB:
+            if (v) {
+                if (s->has_job) lv_label_set_text(v, s->job_name[0] ? s->job_name : tr(STR_PRINTING_PAREN));
+                else            lv_label_set_text(v, s->online ? tr(STR_NO_ACTIVE_PRINT) : "");
+            }
+            break;
+        case LT_STATE: if (v) {
+            const char *stxt = s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE";
+            lv_label_set_text(v, tr_state(stxt));
+            lv_obj_set_style_bg_color(v, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
+        } break;
+        case LT_NOZZLE:
+            if (v) {
+                if (!s->online) lv_label_set_text(v, "--");
+                else if ((int)s->target_nozzle >= 1) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle), lv_label_set_text(v, buf);
+                else snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_nozzle), lv_label_set_text(v, buf);
+            }
+            break;
+        case LT_BED:
+            if (v) {
+                if (!s->online) lv_label_set_text(v, "--");
+                else if ((int)s->target_bed >= 1) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed), lv_label_set_text(v, buf);
+                else snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_bed), lv_label_set_text(v, buf);
+            }
+            break;
+        case LT_SPEED:
+            if (v) {
+                if (!s->online) lv_label_set_text(v, "--");
+                else { snprintf(buf, sizeof(buf), "%d%%", s->speed); lv_label_set_text(v, buf); }
+            }
+            break;
+        case LT_ZAXIS:
+            if (v) {
+                if (!s->online) lv_label_set_text(v, "--");
+                else { snprintf(buf, sizeof(buf), "%.2fmm", s->axis_z); lv_label_set_text(v, buf); }
+            }
+            break;
+        case LT_PROGRESS: {
+            int pct = s->has_job ? (int)(s->progress + 0.5f) : 0;
+            if (s_lay[i].bar) lv_bar_set_value(s_lay[i].bar, pct, LV_ANIM_ON);
+            if (v) {
+                if (s->has_job) { snprintf(buf, sizeof(buf), "%d%%", pct); lv_label_set_text(v, buf); }
+                else lv_label_set_text(v, "");
+            }
+        } break;
+        case LT_ETA:
+            if (v) {
+                if (s->has_job && s->time_remaining > 0) {
+                    char eta[24];
+                    fmt_eta(s->time_remaining, eta, sizeof(eta));
+                    snprintf(buf, sizeof(buf), tr(STR_ETA_FMT), eta);
+                    lv_label_set_text(v, buf);
+                } else lv_label_set_text(v, "");
+            }
+            break;
+        case LT_THUMB:
+            if (s_lay[i].img && s_lay[i].card) {
+                int tw = (int)lv_obj_get_width(s_lay[i].card);
+                int th = (int)lv_obj_get_height(s_lay[i].card);
+                layout_thumb_bind_img(s_lay[i].img, s, tw, th);
+            }
+            break;
+        case LT_PAUSE:
+            if (v) {
+                bool paused = (strcmp(s->state, "PAUSED") == 0);
+                lv_label_set_text(v, paused ? tr(STR_RESUME) : tr(STR_PAUSE));
+            }
+            break;
+        case LT_TOOLS:
+            if (s_lay[i].card) {
+                if (s->has_control) lv_obj_remove_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+                else                lv_obj_add_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+            }
+            break;
+        case LT_AFC: {
+            pp_afc_t afc;
+            app_state_get_afc(&afc);
+            if (s_lay[i].card) {
+                if (afc.present && afc.n > 0) lv_obj_remove_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+                else                          lv_obj_add_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+            }
+            break;
+        }
+        default: break;
+        }
+    }
+    status_thumb_request(s);
+}
+
+/* Decorative status chrome for the web preview (matches live header + action row). */
+static void preview_noop(lv_event_t *e) { (void)e; }
+static void status_preview_chrome(lv_obj_t *host, int w, int h)
+{
+    (void)h;
+    lv_obj_t *bar = make_header(host, NULL);
+
+    lv_obj_t *home = make_barbtn(bar, LV_SYMBOL_HOME, preview_noop, NULL, 44);
+    lv_obj_align(home, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_t *dot = lv_obj_create(bar);
+    lv_obj_set_size(dot, 18, 18);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_bg_color(dot, PP_OK, 0);
+    lv_obj_align(dot, LV_ALIGN_RIGHT_MID, -52, 0);
+    lv_obj_t *gear = make_barbtn(bar, LV_SYMBOL_SETTINGS, preview_noop, NULL, 44);
+    lv_obj_align(gear, LV_ALIGN_RIGHT_MID, -78, 0);
+
+    lv_obj_t *estop = lv_button_create(bar);
+    lv_obj_set_size(estop, 160, 44);
+    lv_obj_align(estop, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(estop, PP_ERROR, 0);
+    lv_obj_set_style_border_width(estop, 0, 0);
+    lv_obj_set_style_radius(estop, 6, 0);
+    lv_obj_set_style_shadow_width(estop, 0, 0);
+    lv_obj_t *estop_lbl = lv_label_create(estop);
+    lv_label_set_text(estop_lbl, tr(STR_ESTOP));
+    lv_obj_set_style_text_color(estop_lbl, PP_WHITE, 0);
+    lv_obj_set_style_text_font(estop_lbl, PP_F16, 0);
+    lv_obj_center(estop_lbl);
+}
+
 #ifndef PP_HOST_SIM
-/* Shared ownership for the preview job: the httpd handler and the (possibly-late) LVGL applier each
- * hold one ref; whichever drops the last ref frees everything. This makes the timeout path leak-free
- * AND use-after-free-free regardless of which side finishes first. */
 void pp_preview_job_release(pp_preview_job_t *j)
 {
     bool last;
@@ -2343,33 +2617,34 @@ void pp_preview_job_release(pp_preview_job_t *j)
     }
 }
 
-/* Off-screen preview applier — runs on the LVGL task via pt_display_schedule_ui. Renders the spec
- * with sample data onto a throwaway (never-loaded) screen on the LIVE display at the panel's NATIVE
- * resolution, snapshots it to a packed RGB565 PSRAM buffer the httpd task streams as BMP, then
- * signals the handler. Native-resolution = exactly what the device shows; rendering wider than the
- * panel corrupts the draw pipeline, so we always match the panel. ALWAYS gives the semaphore. */
+/* Off-screen preview: header chrome + layout content at native panel resolution. */
 void ui_layout_preview_render(void *arg)
 {
     pp_preview_job_t *j = (pp_preview_job_t *)arg;
     j->ok = false; j->rgb = NULL;
 
-    pp_status_t st = {0};      /* representative sample so a preview always looks populated */
-    st.online = true;
-    strlcpy(st.printer_name, "Apollo", sizeof(st.printer_name));
-    strlcpy(st.model, "Prusa CORE One", sizeof(st.model));
-    strlcpy(st.state, "PRINTING", sizeof(st.state));
-    strlcpy(st.job_name, "benchy.gcode", sizeof(st.job_name));
-    st.temp_nozzle = 215; st.target_nozzle = 215;
-    st.temp_bed = 60;  st.target_bed = 60;
-    st.speed = 100;    st.axis_z = 12.4f;
-    st.progress = 64;  st.time_remaining = 64 * 60;
+    pp_status_t st = {0};
+    app_state_get(&st);
+    if (!st.online || !st.printer_name[0]) {
+        st.online = true;
+        strlcpy(st.printer_name, "Apollo", sizeof(st.printer_name));
+        strlcpy(st.model, "Prusa CORE One", sizeof(st.model));
+        strlcpy(st.state, "PRINTING", sizeof(st.state));
+        strlcpy(st.job_name, "benchy.gcode", sizeof(st.job_name));
+        st.temp_nozzle = 215; st.target_nozzle = 215;
+        st.temp_bed = 60;  st.target_bed = 60;
+        st.speed = 100;    st.axis_z = 12.4f;
+        st.progress = 64;  st.time_remaining = 64 * 60;
+        st.has_job = true;
+    }
 
     lv_display_t *disp = lv_display_get_default();
-    int w = (int)lv_display_get_horizontal_resolution(disp);
-    int h = (int)lv_display_get_vertical_resolution(disp);
-    j->w = w; j->h = h;        /* report the actual size back to the handler for the BMP header */
+    /* Always render landscape 800×480 for the web preview (matches the physical panel). */
+    const int w = 800, h = 480;
+    (void)disp;
+    j->w = w; j->h = h;
 
-    lv_obj_t *host = lv_obj_create(NULL);   /* a screen on the live display; never lv_screen_load'ed */
+    lv_obj_t *host = lv_obj_create(NULL);
     lv_obj_set_size(host, w, h);
     lv_obj_set_style_bg_color(host, PP_BG, 0);
     lv_obj_set_style_radius(host, 0, 0);
@@ -2377,7 +2652,21 @@ void ui_layout_preview_render(void *arg)
     lv_obj_set_style_pad_all(host, 0, 0);
     lv_obj_clear_flag(host, LV_OBJ_FLAG_SCROLLABLE);
 
-    layout_render_into(host, &j->spec, &st, w, h);
+    status_preview_chrome(host, w, h);
+
+    int cy, ch;
+    status_content_geom_for(h, &cy, &ch);
+    lv_obj_t *content = lv_obj_create(host);
+    lv_obj_set_pos(content, 0, cy);
+    lv_obj_set_size(content, w, ch);
+    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(content, 0, 0);
+    lv_obj_set_style_pad_all(content, 0, 0);
+    lv_obj_set_style_radius(content, 0, 0);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_lay_bind = false;
+    layout_render_into(content, &j->spec, &st, w, ch);
     lv_obj_update_layout(host);
 
     lv_draw_buf_t *snap = lv_snapshot_take(host, LV_COLOR_FORMAT_RGB565);
@@ -2386,7 +2675,7 @@ void ui_layout_preview_render(void *arg)
         uint8_t *raw = heap_caps_malloc(rowbytes * (size_t)h, MALLOC_CAP_SPIRAM);
         if (raw) {
             const uint8_t *src = (const uint8_t *)snap->data;
-            uint32_t stride = snap->header.stride;   /* source bytes per row (may be padded) */
+            uint32_t stride = snap->header.stride;
             for (int y = 0; y < h; y++)
                 memcpy(raw + (size_t)y * rowbytes, src + (size_t)y * stride, rowbytes);
             j->rgb = raw; j->ok = true;
@@ -2394,10 +2683,16 @@ void ui_layout_preview_render(void *arg)
         lv_draw_buf_destroy(snap);
     }
     lv_obj_delete(host);
-    xSemaphoreGive(j->sem);     /* wake the handler (if it's still waiting) */
-    pp_preview_job_release(j);  /* drop the applier's ref; frees if the handler already gave up */
+    xSemaphoreGive(j->sem);
+    pp_preview_job_release(j);
 }
 #endif /* !PP_HOST_SIM */
+
+void ui_apply_layout(void *arg)
+{
+    (void)arg;
+    status_layout_sync();
+}
 
 static void build_about_screen(void)
 {
@@ -2912,74 +3207,13 @@ const char *ui_current_screen(void)
 void ui_apply_status(void *arg)
 {
     pp_status_t *s = (pp_status_t *)arg;
-    char buf[64];
-
-    if (s->printer_name[0]) {
-        lv_label_set_text(s_title_lbl, s->printer_name);
+    if (s->printer_name[0])
         strlcpy(s_active_printer, s->printer_name, sizeof(s_active_printer));
-    }
     strlcpy(s_active_model, s->model, sizeof(s_active_model));
     lv_obj_set_style_bg_color(s_conn_dot, s->online ? PP_OK : PP_ERROR, 0);
     wifi_status_label_refresh();   /* keep the Wi-Fi screen's IP line current */
 
-    /* hero: model render on the orange tile, scaled to fill */
-    const lv_image_dsc_t *mimg = model_image(s->model);
-    if (mimg) {
-        lv_image_set_src(s_detail_img, mimg);
-        lv_image_set_scale(s_detail_img, 384);     /* 48px asset -> ~72px on tile */
-        lv_obj_remove_flag(s_detail_img, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_detail_img, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    /* hero: state-tinted strip + state badge (muted tint + white text) + model sub-line */
-    lv_obj_set_style_bg_color(s_herotop, s->online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
-    lv_obj_set_style_bg_color(s_badge, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
-    lv_label_set_text(s_state_lbl, tr_state(s->online ? (s->state[0] ? s->state : "READY") : "OFFLINE"));
-    lv_label_set_text(s_model_lbl, s->model[0] ? s->model : "");
-
-    /* telemetry cells */
-    if (s->online) {
-        if ((int)s->target_nozzle >= 1) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle);
-        else snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_nozzle);
-        lv_label_set_text(s_nozzle_lbl, buf);
-        if ((int)s->target_bed >= 1) snprintf(buf, sizeof(buf), "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed);
-        else snprintf(buf, sizeof(buf), "%d\xC2\xB0""C", (int)s->temp_bed);
-        lv_label_set_text(s_bed_lbl, buf);
-        snprintf(buf, sizeof(buf), "%d%%", s->speed);
-        lv_label_set_text(s_speed_lbl, buf);
-        snprintf(buf, sizeof(buf), "%.2fmm", s->axis_z);
-        lv_label_set_text(s_z_lbl, buf);
-    } else {
-        lv_label_set_text(s_nozzle_lbl, "--");
-        lv_label_set_text(s_bed_lbl, "--");
-        lv_label_set_text(s_speed_lbl, "--");
-        lv_label_set_text(s_z_lbl, "--");
-    }
-
-    if (s->has_job) {
-        lv_label_set_text(s_job_lbl, s->job_name[0] ? s->job_name : tr(STR_PRINTING_PAREN));
-        lv_bar_set_value(s_bar, (int)(s->progress + 0.5f), LV_ANIM_ON);
-        snprintf(buf, sizeof(buf), "%d%%", (int)(s->progress + 0.5f));
-        lv_label_set_text(s_pct_lbl, buf);
-        char eta[24];
-        fmt_eta(s->time_remaining, eta, sizeof(eta));
-        snprintf(buf, sizeof(buf), tr(STR_ETA_FMT), eta);
-        lv_label_set_text(s_eta_lbl, buf);
-    } else {
-        lv_label_set_text(s_job_lbl, s->online ? tr(STR_NO_ACTIVE_PRINT) : "");
-        lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
-        lv_label_set_text(s_pct_lbl, "");
-        lv_label_set_text(s_eta_lbl, "");
-    }
-
-    /* Pause button reflects the paused/printing state. */
-    bool paused = (strcmp(s->state, "PAUSED") == 0);
-    lv_label_set_text(s_btn_pause_lbl, paused ? tr(STR_RESUME) : tr(STR_PAUSE));
-
-    /* CONTROL button visibility based on capability probe. */
-    if (s->has_control) lv_obj_remove_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
-    else                lv_obj_add_flag(s_btn_control, LV_OBJ_FLAG_HIDDEN);
+    layout_bind(s);   /* feed live status into the Settings → Layout tile grid */
 
     ui_tools_refresh_menu();
     if (s->online) ui_tools_show_fault_if_needed(s->state);
@@ -3002,11 +3236,13 @@ void ui_apply_status(void *arg)
                 }
             }
             lv_obj_remove_flag(s_attn_card, LV_OBJ_FLAG_HIDDEN);
-            if (s_jobcard) lv_obj_add_flag(s_jobcard, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < s_job_hide_n; i++)
+                if (s_job_hide[i]) lv_obj_add_flag(s_job_hide[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             s_attn_dialog_id = 0;
             lv_obj_add_flag(s_attn_card, LV_OBJ_FLAG_HIDDEN);
-            if (s_jobcard) lv_obj_remove_flag(s_jobcard, LV_OBJ_FLAG_HIDDEN);
+            for (int i = 0; i < s_job_hide_n; i++)
+                if (s_job_hide[i]) lv_obj_remove_flag(s_job_hide[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
 
@@ -3077,42 +3313,63 @@ void ui_apply_files(void *arg)
 }
 
 /* Display a fetched gcode thumbnail (PNG bytes). Takes ownership of the wrapper
- * and the PNG buffer; frees the wrapper, retains the buffer for the descriptor. */
+ * and the PNG buffer. Updates the status LT_THUMB cache; also paints file detail when open. */
 void ui_apply_thumb(void *arg)
 {
     pp_image_t *im = (pp_image_t *)arg;
     if (!im) return;
 
-    /* Release whatever was on screen before. */
-    thumb_clear();
+    uint8_t *buf = im->data;
+    int len = im->len;
+    free(im);
 
-    if (!im->data || im->len <= 0) {
-        free(im->data);
-        free(im);
+    if (!buf || len <= 0) {
+        free(buf);
+        if (s_status_thumb.pending[0]) {
+            s_status_thumb.pending[0] = '\0';
+            status_thumb_clear();
+            layout_status_thumb_apply();
+        }
+        if (lv_screen_active() == s_scr_filedetail) {
+            thumb_show_loading(false);
+            lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
+        }
+        return;
+    }
+
+    if (s_status_thumb.pending[0])
+        strlcpy(s_status_thumb.url, s_status_thumb.pending, sizeof(s_status_thumb.url));
+    else if (!s_status_thumb.url[0])
+        strlcpy(s_status_thumb.url, "job", sizeof(s_status_thumb.url));
+    status_thumb_adopt(buf, len);
+    layout_status_thumb_apply();
+
+    if (lv_screen_active() != s_scr_filedetail) return;
+
+    thumb_clear();
+    s_thumb_buf = malloc((size_t)len);
+    if (!s_thumb_buf) {
         thumb_show_loading(false);
         lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
         return;
     }
-
-    /* Adopt the PNG bytes; build a descriptor LVGL's lodepng decoder can read. */
-    s_thumb_buf = im->data;
-    int len = im->len;
-    free(im);                  /* wrapper done; buffer now owned by s_thumb_buf */
+    memcpy(s_thumb_buf, s_status_thumb.buf, (size_t)len);
 
     s_thumb_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-    s_thumb_dsc.header.cf    = LV_COLOR_FORMAT_RAW;   /* encoded (PNG) source */
-    s_thumb_dsc.header.w     = 0;                     /* filled by the decoder */
+    s_thumb_dsc.header.cf    = LV_COLOR_FORMAT_RAW;
+    s_thumb_dsc.header.w     = 0;
     s_thumb_dsc.header.h     = 0;
     s_thumb_dsc.data         = s_thumb_buf;
     s_thumb_dsc.data_size    = (uint32_t)len;
 
-    /* Uniform downscale-to-fit (never upscale) within the 340x280 viewport. */
     lv_image_header_t hdr;
-    uint32_t scale = LV_SCALE_NONE;   /* 256 = 1x */
+    uint32_t scale = LV_SCALE_NONE;
     if (lv_image_decoder_get_info(&s_thumb_dsc, &hdr) != LV_RESULT_OK
         || hdr.w < 1 || hdr.h < 1) {
         thumb_clear();
+        thumb_show_loading(false);
         lv_obj_clear_flag(s_thumb_ph, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_thumb_ph, tr(STR_PREVIEW_UNAVAIL));
         return;

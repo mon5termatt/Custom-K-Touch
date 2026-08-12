@@ -122,6 +122,14 @@ bool app_state_active_is_moonraker(void)
     return detect_backend(aidx, &apr) == PP_BK_MOONRAKER;
 }
 
+bool app_state_active_is_bambu(void)
+{
+    int aidx = printer_store_active();
+    pp_printer_t apr;
+    if (aidx < 0 || !printer_store_get(aidx, &apr)) return false;
+    return detect_backend(aidx, &apr) == PP_BK_BAMBU;
+}
+
 /* Refresh AFC for the active Moonraker printer and push to the UI when it changes. */
 static void refresh_afc_active(void)
 {
@@ -587,7 +595,8 @@ static void run_command(const pp_cmd_t *cmd)
         else moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
         break;
     case PP_CMD_PRINT:
-        if (cloud || bambu) ESP_LOGW(TAG, "print-from-file not implemented for this backend");
+        if (cloud) ESP_LOGW(TAG, "print-from-file not implemented for this backend");
+        else if (bambu) bambu_print(&apr, cmd->path);
         else moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path);
         break;
     case PP_CMD_SET_PRINTER:
@@ -611,8 +620,9 @@ static void run_command(const pp_cmd_t *cmd)
         uint8_t *buf = NULL; int len = 0;
         esp_err_t tr = ESP_FAIL;
         if (cmd->path[0]) {
-            tr = moon ? moonraker_fetch_thumb(&apr, cmd->path, &buf, &len)
-                      : prusalink_get_blob(cmd->path, &buf, &len);
+            if (moon) tr = moonraker_fetch_thumb(&apr, cmd->path, &buf, &len);
+            else if (bambu) tr = bambu_fetch_thumb(&apr, cmd->path, &buf, &len);
+            else tr = prusalink_get_blob(cmd->path, &buf, &len);
         }
         pp_image_t *im = malloc(sizeof(*im));
         if (im) {
@@ -661,13 +671,13 @@ static void run_command(const pp_cmd_t *cmd)
         pp_file_list_t *list = malloc(sizeof(*list));
         if (list) {
             list->count = 0;
-            esp_err_t lr = moon ? moonraker_list(&apr, list->items, PP_MAX_FILES, &list->count)
-                                : prusalink_list("/", list->items, PP_MAX_FILES, &list->count);
-            if (lr == ESP_OK) {
-                if (pt_display_schedule_ui(ui_apply_files, list) != LV_RESULT_OK) {
-                    free(list);
-                }
-            } else {
+            esp_err_t lr = ESP_FAIL;
+            if (bambu) lr = bambu_list(&apr, list->items, PP_MAX_FILES, &list->count);
+            else if (moon) lr = moonraker_list(&apr, list->items, PP_MAX_FILES, &list->count);
+            else lr = prusalink_list("/", list->items, PP_MAX_FILES, &list->count);
+            /* Always refresh UI (empty list on failure) so Files isn't stuck blank. */
+            if (lr != ESP_OK) list->count = 0;
+            if (pt_display_schedule_ui(ui_apply_files, list) != LV_RESULT_OK) {
                 free(list);
             }
         }

@@ -222,6 +222,8 @@ esp_err_t moonraker_get_status_of(const pp_printer_t *pr, pp_status_t *out)
         }
         strlcpy(out->state, map_state(kstate), sizeof(out->state));
         out->has_job = (!strcmp(out->state, "PRINTING") || !strcmp(out->state, "PAUSED"));
+        if (out->has_job && out->job_name[0])
+            strlcpy(out->job_thumb, out->job_name, sizeof(out->job_thumb));
 
         float prog = 0;
         if (vsd) prog = jnum(vsd, "progress", 0);
@@ -265,6 +267,12 @@ static void build_meta(uint32_t mtime, const char *disp, char *out, size_t n)
     else if (mat)       strlcpy(out, mat, n);
 }
 
+static int file_cmp_mtime_desc(const void *a, const void *b)
+{
+    uint32_t x = ((const pp_file_t *)a)->mtime, y = ((const pp_file_t *)b)->mtime;
+    return (x < y) - (x > y);
+}
+
 esp_err_t moonraker_list(const pp_printer_t *pr, pp_file_t *arr, int max, int *count)
 {
     *count = 0;
@@ -295,6 +303,7 @@ esp_err_t moonraker_list(const pp_printer_t *pr, pp_file_t *arr, int max, int *c
         (*count)++;
     }
     cJSON_Delete(root);
+    if (*count > 1) qsort(arr, (size_t)*count, sizeof(pp_file_t), file_cmp_mtime_desc);
     return ESP_OK;
 }
 

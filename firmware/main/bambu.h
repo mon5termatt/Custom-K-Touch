@@ -23,6 +23,15 @@ esp_err_t bambu_resume(const pp_printer_t *pr);
 esp_err_t bambu_stop(const pp_printer_t *pr);
 esp_err_t bambu_gcode(const pp_printer_t *pr, const char *gcode);   /* raw M/G-code via gcode_line */
 
+/* LAN only (FTPS :990): list printable .3mf / .gcode on printer storage (/, /cache). */
+esp_err_t bambu_list(const pp_printer_t *pr, pp_file_t *arr, int max, int *count);
+
+/* Start a print of a path returned by bambu_list (MQTT project_file / gcode_file). */
+esp_err_t bambu_print(const pp_printer_t *pr, const char *path);
+
 /* One JPEG frame from the P1/A1 LAN camera (TLS TCP :6000). Caller frees *out.
  * X1 RTSPS is not supported here. */
 esp_err_t bambu_fetch_snapshot(const pp_printer_t *pr, uint8_t **out, int *out_len);
+
+/* Download a ready-made PNG from FTPS /image/<id>.png. Caller frees *out. */
+esp_err_t bambu_fetch_thumb(const pp_printer_t *pr, const char *path, uint8_t **out, int *out_len);

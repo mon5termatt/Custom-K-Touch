@@ -149,12 +149,23 @@ static lv_obj_t *make_hdr(lv_obj_t *parent, const char *title, lv_event_cb_t bac
     return bar;
 }
 
-static void go_hub(lv_event_t *e) { (void)e; lv_screen_load(s_hub); }
 static void go_status(lv_event_t *e)
 {
     (void)e;
     ui_request_screen("status");
 }
+
+static bool s_back_to_status;
+
+static void tools_go_back(lv_event_t *e)
+{
+    (void)e;
+    if (s_back_to_status) ui_request_screen("status");
+    else                  lv_screen_load(s_hub);
+}
+
+void ui_tools_set_back_to_status(void) { s_back_to_status = true; }
+void ui_tools_set_back_to_hub(void)    { s_back_to_status = false; }
 typedef void (*tools_action_fn)(void);
 static tools_action_fn s_confirm_fn;
 
@@ -380,6 +391,7 @@ static lv_obj_t *build_placeholder(const char *title)
 /* ---- hub ---- */
 static void open_scr(lv_event_t *e)
 {
+    ui_tools_set_back_to_hub();
     lv_obj_t *scr = (lv_obj_t *)lv_event_get_user_data(e);
     if (scr) lv_screen_load(scr);
 }
@@ -387,6 +399,7 @@ static void open_scr(lv_event_t *e)
 static void open_webcam(lv_event_t *e)
 {
     (void)e;
+    ui_tools_set_back_to_hub();
     if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING_WEBCAM));
     app_state_fetch_snapshot();
     lv_screen_load(s_webcam);
@@ -395,6 +408,7 @@ static void open_webcam(lv_event_t *e)
 static void open_console(lv_event_t *e)
 {
     (void)e;
+    ui_tools_set_back_to_hub();
     app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
     lv_screen_load(s_console);
     /* HID keypad indev is created after ui_init — (re)attach entry field when opening. */
@@ -404,6 +418,7 @@ static void open_console(lv_event_t *e)
 static void open_macros(lv_event_t *e)
 {
     (void)e;
+    ui_tools_set_back_to_hub();
     app_state_post_cmd(PP_CMD_LIST_MACROS, NULL);
     lv_screen_load(s_macros);
 }
@@ -411,6 +426,7 @@ static void open_macros(lv_event_t *e)
 static void open_afc(lv_event_t *e)
 {
     (void)e;
+    ui_tools_set_back_to_hub();
     pp_afc_t afc;
     app_state_get_afc(&afc);
     if (!afc.present) return;
@@ -547,7 +563,7 @@ static void build_move(void)
     s_move = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_move, PP_BG, 0);
     if (t_portrait()) lv_obj_add_flag(s_move, LV_OBJ_FLAG_SCROLLABLE);
-    make_hdr(s_move, tr(STR_MOVE), go_hub);
+    make_hdr(s_move, tr(STR_MOVE), tools_go_back);
 
     /* Centered cluster: Z column (88) + gap 16 + XY pad (3*76 + 2*10 = 248) = 352 */
     const int bw = 76, bh = 52, gap = 10, z_w = 88;
@@ -647,7 +663,7 @@ static void build_temp(void)
     s_temp = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_temp, PP_BG, 0);
     if (t_portrait()) lv_obj_add_flag(s_temp, LV_OBJ_FLAG_SCROLLABLE);
-    make_hdr(s_temp, tr(STR_TEMPERATURE), go_hub);
+    make_hdr(s_temp, tr(STR_TEMPERATURE), tools_go_back);
 
     const char *mats[] = { "PLA", "PETG", "ASA", "Cooldown" };
     for (int i = 0; i < 4; i++) {
@@ -758,7 +774,7 @@ static void build_webcam(void)
 {
     s_webcam = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_webcam, PP_BG, 0);
-    make_hdr(s_webcam, tr(STR_WEBCAM), go_hub);
+    make_hdr(s_webcam, tr(STR_WEBCAM), tools_go_back);
 
     s_snap_card = make_card(s_webcam, tw() - 32, th() - 120);
     lv_obj_align(s_snap_card, LV_ALIGN_TOP_MID, 0, 70);
@@ -1034,7 +1050,7 @@ static void build_afc(void)
     s_afc = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_afc, PP_BG, 0);
     lv_obj_add_flag(s_afc, LV_OBJ_FLAG_SCROLLABLE);
-    make_hdr(s_afc, tr(STR_AFC), go_hub);
+    make_hdr(s_afc, tr(STR_AFC), tools_go_back);
 
     /* Status strip — KS “Loaded: laneN” + AFC state */
     lv_obj_t *strip = lv_obj_create(s_afc);
@@ -1314,7 +1330,7 @@ static void build_console(void)
 {
     s_console = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_console, PP_BG, 0);
-    make_hdr(s_console, tr(STR_CONSOLE), go_hub);
+    make_hdr(s_console, tr(STR_CONSOLE), tools_go_back);
 
     s_console_log = lv_textarea_create(s_console);
     lv_obj_set_size(s_console_log, tw() - 32, th() - 180);
@@ -1455,7 +1471,7 @@ static void build_macros(void)
 {
     s_macros = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_macros, PP_BG, 0);
-    make_hdr(s_macros, tr(STR_MACROS), go_hub);
+    make_hdr(s_macros, tr(STR_MACROS), tools_go_back);
     s_macros_grid = lv_obj_create(s_macros);
     lv_obj_set_size(s_macros_grid, LV_PCT(100), th() - 56);
     lv_obj_align(s_macros_grid, LV_ALIGN_TOP_MID, 0, 56);
@@ -1561,7 +1577,7 @@ static void build_tune(void)
 {
     s_tune = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_tune, PP_BG, 0);
-    make_hdr(s_tune, tr(STR_TUNE), go_hub);
+    make_hdr(s_tune, tr(STR_TUNE), tools_go_back);
 
     lv_obj_t *sl = lv_label_create(s_tune);
     lv_label_set_text(sl, tr(STR_SPEED_FACTOR));
@@ -1811,7 +1827,7 @@ static void build_calib(void)
     build_calib_children();
     s_calib = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_calib, PP_BG, 0);
-    make_hdr(s_calib, tr(STR_CALIBRATION), go_hub);
+    make_hdr(s_calib, tr(STR_CALIBRATION), tools_go_back);
 
     lv_obj_t *grid = lv_obj_create(s_calib);
     lv_obj_set_size(grid, LV_PCT(100), th() - 56);
@@ -1905,6 +1921,7 @@ void ui_tools_init(void)
 
 void ui_tools_open(void)
 {
+    ui_tools_set_back_to_hub();
     ui_tools_refresh_menu();
     lv_screen_load(s_hub);
 }
@@ -1915,6 +1932,31 @@ void ui_tools_open_afc(void)
     app_state_get_afc(&afc);
     if (!afc.present) return;
     lv_screen_load(s_afc);
+}
+
+void ui_tools_open_move(void)   { lv_screen_load(s_move); }
+void ui_tools_open_temp(void)   { lv_screen_load(s_temp); }
+void ui_tools_open_tune(void)   { lv_screen_load(s_tune); }
+void ui_tools_open_calib(void)  { lv_screen_load(s_calib); }
+
+void ui_tools_open_webcam(void)
+{
+    if (s_snap_ph) lv_label_set_text(s_snap_ph, tr(STR_LOADING_WEBCAM));
+    app_state_fetch_snapshot();
+    lv_screen_load(s_webcam);
+}
+
+void ui_tools_open_console(void)
+{
+    app_state_post_cmd(PP_CMD_GCODE_LOG, NULL);
+    lv_screen_load(s_console);
+    ui_kb_focus_set(s_console_ta);
+}
+
+void ui_tools_open_macros(void)
+{
+    app_state_post_cmd(PP_CMD_LIST_MACROS, NULL);
+    lv_screen_load(s_macros);
 }
 
 lv_obj_t *ui_tools_hub_screen(void) { return s_hub; }

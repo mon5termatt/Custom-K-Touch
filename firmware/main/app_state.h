@@ -89,6 +89,9 @@ void app_state_get_afc(pp_afc_t *out);
 /* True when the active printer's detected backend is Moonraker. */
 bool app_state_active_is_moonraker(void);
 
+/* True when the active printer's detected backend is Bambu Lab. */
+bool app_state_active_is_bambu(void);
+
 /* Thread-safe snapshot of the whole fleet cache. Copies up to `max` entries into
  * arr[] and writes the count to *count. */
 void app_state_get_fleet(pp_status_t *arr, int max, int *count);

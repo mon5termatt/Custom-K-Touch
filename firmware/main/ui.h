@@ -33,6 +33,7 @@ void ui_boot_update(int progress, const char *status);
 
 /* Scheduled appliers — run on the LVGL thread, take ownership of arg, free it. */
 void ui_apply_status(void *status_copy);     /* arg: pp_status_t*     */
+void ui_apply_layout(void *unused);           /* rebuild status content from saved layout spec */
 void ui_apply_files(void *file_list_copy);    /* arg: pp_file_list_t*  */
 void ui_apply_wifi_list(void *wifi_list_copy);  /* arg: pp_wifi_list_t* */
 void ui_apply_dashboard(void *dash_copy);     /* arg: pp_dash_t*       */
@@ -81,6 +82,15 @@ void ui_apply_endstops(void *arg);    /* pp_endstop_list_t* */
 void ui_tools_init(void);
 void ui_tools_open(void);
 void ui_tools_open_afc(void);
+void ui_tools_open_move(void);
+void ui_tools_open_temp(void);
+void ui_tools_open_webcam(void);
+void ui_tools_open_macros(void);
+void ui_tools_open_console(void);
+void ui_tools_open_tune(void);
+void ui_tools_open_calib(void);
+void ui_tools_set_back_to_status(void);  /* next tool screen Back → printer status */
+void ui_tools_set_back_to_hub(void);     /* next tool screen Back → tools hub */
 bool ui_tools_is_hub_active(void);
 bool ui_tools_is_webcam_active(void);
 bool ui_tools_is_afc_active(void);
