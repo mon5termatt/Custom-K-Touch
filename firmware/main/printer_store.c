@@ -35,7 +35,7 @@ static bool migrate_host_port(pp_printer_t *p)
 {
     if (!p || !p->host[0]) return false;
     if (strncmp(p->host, "cloud:", 6) == 0 || strncmp(p->host, "bambu:", 6) == 0 ||
-        strncmp(p->host, "bambucloud:", 11) == 0) return false;
+        strncmp(p->host, "bambucloud:", 11) == 0 || strncmp(p->host, "sdcp:", 5) == 0) return false;
     if (p->host[0] == '[') {
         char *rb = strchr(p->host, ']');
         if (!rb || rb[1] != ':' || !rb[2]) return false;

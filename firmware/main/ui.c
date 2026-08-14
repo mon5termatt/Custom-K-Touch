@@ -738,18 +738,50 @@ static void on_fd_back(lv_event_t *e)
     lv_screen_load(s_scr_files);
 }
 
+static void fd_print_do(void)
+{
+    if (!s_sel_path[0]) return;
+    if (s_files_usb_mode) app_state_post_cmd(PP_CMD_UPLOAD, s_sel_path);
+    else                  app_state_post_cmd(PP_CMD_PRINT, s_sel_path);
+    lv_screen_load(s_scr_status);
+}
+
+static void fd_print_confirm_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    lv_msgbox_close(mbox);
+    fd_print_do();
+}
+
+static void fd_print_cancel_cb(lv_event_t *e)
+{
+    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
+    lv_msgbox_close(mbox);
+}
+
 static void on_fd_print(lv_event_t *e)
 {
     (void)e;
     if (ui_locked_block()) return;
-    if (s_sel_path[0]) {
-        if (s_files_usb_mode) {
-            app_state_post_cmd(PP_CMD_UPLOAD, s_sel_path);
-        } else {
-            app_state_post_cmd(PP_CMD_PRINT, s_sel_path);
-        }
-    }
-    lv_screen_load(s_scr_status);
+    if (!s_sel_path[0]) return;
+
+    const char *name = s_files_usb_mode ? s_sel_path : s_sel_path;
+    if (s_fd_name) name = lv_label_get_text(s_fd_name);
+    if (!name || !name[0]) name = s_sel_path;
+
+    char body[192];
+    snprintf(body, sizeof(body),
+             s_files_usb_mode ? "Upload and print\n%s?" : "Start printing\n%s?",
+             name);
+
+    lv_obj_t *mbox = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(mbox, "Print");
+    lv_msgbox_add_text(mbox, body);
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "Print");
+    lv_obj_set_style_bg_color(ok, PP_ORANGE, 0);
+    lv_obj_add_event_cb(ok, fd_print_confirm_cb, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
+    lv_obj_add_event_cb(cancel, fd_print_cancel_cb, LV_EVENT_CLICKED, mbox);
 }
 
 static void build_filedetail_screen(void)
@@ -1388,11 +1420,37 @@ static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, ch
     } else { strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--"); }
 }
 
+/* SDCP resin card: UV LED / layer / FEP film count / ETA (reuses the 4 value slots). */
+static void fmt_telemetry_sdcp(const pp_status_t *s, char *uv, char *layer, char *film, char *eta)
+{
+    if (!s->online) {
+        strcpy(uv, "--"); strcpy(layer, "--"); strcpy(film, "--"); strcpy(eta, "--");
+        return;
+    }
+    sprintf(uv, "%d\xC2\xB0""C", (int)(s->temp_nozzle + 0.5f));
+    if (s->current_layer >= 0 && s->total_layer > 0)
+        sprintf(layer, "%d/%d", s->current_layer, s->total_layer);
+    else if (s->current_layer >= 0)
+        sprintf(layer, "%d", s->current_layer);
+    else
+        strcpy(layer, "--");
+    if (s->release_film >= 0) sprintf(film, "%d", s->release_film);
+    else strcpy(film, "--");
+    fmt_eta(s->time_remaining, eta, 16);
+}
+
+static bool printer_is_sdcp(int idx)
+{
+    pp_printer_t pr;
+    return printer_store_get(idx, &pr) && strncmp(pr.host, "sdcp:", 5) == 0;
+}
+
 /* Per-card widget handles captured at build time so a poll that changes only values can update
  * them in place (gist #11) instead of destroying + rebuilding every card (flicker + CPU). */
 typedef struct {
     lv_obj_t *strip, *badge, *badge_lbl, *name_lbl, *model_lbl;
     lv_obj_t *v_noz, *v_speed, *v_bed, *v_z, *prog_bar, *prog_lbl;
+    bool resin;   /* SDCP card layout (UV/layer/film/ETA) */
 } dash_refs_t;
 static dash_refs_t s_dref[PP_MAX_PRINTERS];
 static int      s_dref_n;        /* number of cards currently laid out */
@@ -1472,12 +1530,21 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
     }
     ch |= lbl_set_if_changed(r->name_lbl, s->printer_name[0] ? s->printer_name : "Printer");
     ch |= lbl_set_if_changed(r->model_lbl, s->model[0] ? s->model : (online ? "Printer" : ""));
-    char nz[24], hb[24], sp[16], zx[16];
-    fmt_telemetry(s, nz, hb, sp, zx);
-    ch |= lbl_set_if_changed(r->v_noz, nz);
-    ch |= lbl_set_if_changed(r->v_speed, sp);
-    ch |= lbl_set_if_changed(r->v_bed, hb);
-    ch |= lbl_set_if_changed(r->v_z, zx);
+    if (r->resin) {
+        char uv[24], ly[24], fl[16], et[16];
+        fmt_telemetry_sdcp(s, uv, ly, fl, et);
+        ch |= lbl_set_if_changed(r->v_noz, uv);
+        ch |= lbl_set_if_changed(r->v_speed, ly);
+        ch |= lbl_set_if_changed(r->v_bed, fl);
+        ch |= lbl_set_if_changed(r->v_z, et);
+    } else {
+        char nz[24], hb[24], sp[16], zx[16];
+        fmt_telemetry(s, nz, hb, sp, zx);
+        ch |= lbl_set_if_changed(r->v_noz, nz);
+        ch |= lbl_set_if_changed(r->v_speed, sp);
+        ch |= lbl_set_if_changed(r->v_bed, hb);
+        ch |= lbl_set_if_changed(r->v_z, zx);
+    }
     if (s->has_job && r->prog_bar) {
         int pct = (int)(s->progress + 0.5f);
         if (lv_bar_get_value(r->prog_bar) != pct) {
@@ -1506,6 +1573,7 @@ static uint32_t dash_sig(const pp_dash_t *d, const int *order, int n, bool hide_
         if (hide_off && !d->items[idx].online) continue;
         const pp_status_t *s = &d->items[idx];
         MIX(idx); MIX(s->online ? 1 : 0); MIX(s->has_job ? 1 : 0); MIX(s->firmware[0] ? 1 : 0);
+        MIX(printer_is_sdcp(idx) ? 1 : 0);            /* resin vs FDM card layout */
         MIX(s_card_thumbs[idx].buf ? 1 : 0);          /* thumb arrival forces a rebuild to show it */
         for (const char *p = s->job_thumb; *p; p++) MIX(*p);
         shown++;
@@ -1671,15 +1739,27 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         lv_obj_align(fwl, LV_ALIGN_TOP_LEFT, 66, 59);
     }
 
-    /* ---- 3-column labeled telemetry grid ---- */
-    char nz[24], hb[24], sp[16], zx[16];
-    fmt_telemetry(s, nz, hb, sp, zx);
+    /* ---- labeled telemetry grid (FDM: nozzle/speed/bed/Z — resin: UV/layer/film/ETA) ---- */
+    const bool resin = printer_is_sdcp(idx);
+    if (r) r->resin = resin;
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
-    lv_obj_t *vn = card_cell(c, X1, R1, tr(STR_NOZZLE), nz);
-    lv_obj_t *vs = card_cell(c, X2, R1, tr(STR_SPEED),  sp);   /* Connect column order: NOZZLE / SPEED / BED */
-    lv_obj_t *vb = card_cell(c, X3, R1, tr(STR_BED),    hb);
-    lv_obj_t *vz = card_cell(c, X1, R2, tr(STR_Z_AXIS), zx);
-    if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = vz; }
+    if (resin) {
+        char uv[24], ly[24], fl[16], et[16];
+        fmt_telemetry_sdcp(s, uv, ly, fl, et);
+        lv_obj_t *v1 = card_cell(c, X1, R1, tr(STR_UV_LED), uv);
+        lv_obj_t *v2 = card_cell(c, X2, R1, tr(STR_LAYER),  ly);
+        lv_obj_t *v3 = card_cell(c, X3, R1, tr(STR_FILM),   fl);
+        lv_obj_t *v4 = card_cell(c, X1, R2, tr(STR_ETA),    et);
+        if (r) { r->v_noz = v1; r->v_speed = v2; r->v_bed = v3; r->v_z = v4; }
+    } else {
+        char nz[24], hb[24], sp[16], zx[16];
+        fmt_telemetry(s, nz, hb, sp, zx);
+        lv_obj_t *vn = card_cell(c, X1, R1, tr(STR_NOZZLE), nz);
+        lv_obj_t *vs = card_cell(c, X2, R1, tr(STR_SPEED),  sp);   /* Connect column order: NOZZLE / SPEED / BED */
+        lv_obj_t *vb = card_cell(c, X3, R1, tr(STR_BED),    hb);
+        lv_obj_t *vz = card_cell(c, X1, R2, tr(STR_Z_AXIS), zx);
+        if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = vz; }
+    }
 
     /* progress (when printing) fills the 2nd/3rd column of row 2 */
     if (s->has_job) {

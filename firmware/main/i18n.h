@@ -47,6 +47,7 @@ typedef enum {
     STR_FARM_UNAVAIL, STR_FARM_ORDER_FMT,
     /* dashboard / fleet card field labels + sidebar nav + headers */
     STR_NOZZLE, STR_BED, STR_SPEED, STR_Z_AXIS, STR_ETA_FMT,
+    STR_UV_LED, STR_LAYER, STR_FILM, STR_ETA,
     STR_FLEET, STR_NAV_PRINTER, STR_FILES, STR_SETTINGS,
     /* printer state words (mapped from the backend's English state by tr_state) */
     STR_ST_IDLE, STR_ST_PRINTING, STR_ST_PAUSED, STR_ST_FINISHED, STR_ST_STOPPED,
