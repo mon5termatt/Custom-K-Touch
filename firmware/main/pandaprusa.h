@@ -6,7 +6,7 @@
 #define PP_FW_VERSION "0.8.5"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
-typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU } pp_backend_t;
+typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU, PP_BK_SDCP } pp_backend_t;
 
 /* A configured printer (see printers.h / printers.example.h). */
 typedef struct {
@@ -34,6 +34,7 @@ typedef struct {
     float  progress;          /* percent 0..100                              */
     int    current_layer;    /* current layer index (-1 if unknown)        */
     int    total_layer;      /* total layer count (-1 if unknown)         */
+    int    release_film;     /* SDCP FEP release count (-1 if unknown)    */
     int    time_remaining;    /* seconds (-1 if unknown)                     */
     int    time_printing;     /* seconds                                     */
     char   job_name[96];      /* display_name of the file being printed      */

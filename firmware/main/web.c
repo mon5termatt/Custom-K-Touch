@@ -100,6 +100,7 @@ static const char INDEX_HTML[] =
 "<div class=ptile onclick=pick('klipper')><span class=ptag>Recommended</span><b>&#9881; Klipper (Moonraker)</b><small>Fluidd / Mainsail printers. Use host:7125 (or just the IP).</small></div>"
 "<div class=ptile onclick=pick('link')><b>&#9635; Prusa (PrusaLink)</b><small>MK4 &middot; MK3.5/3.9 &middot; MINI &middot; CORE One &middot; XL, by IP + API key.</small></div>"
 "<div class=ptile onclick=pick('bambu')><b>&#9635; Bambu (LAN)</b><small>X1 &middot; P1 &middot; A1 in LAN + Developer Mode, by IP + Access Code.</small></div>"
+"<div class=ptile onclick=pick('sdcp')><span class=ptag>Alpha</span><b>&#9635; Resin (SDCP)</b><small>Chitubox / Elegoo SDCP V3 printers (Saturn, Mars, &hellip;) by IP. Monitoring only.</small></div>"
 "</div>"
 "<div class=pthead>Cloud accounts <small>&mdash; optional; sign in to pull a fleet</small></div>"
 "<div class=ptgrid>"
@@ -242,16 +243,29 @@ static const char INDEX_HTML[] =
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
-"document.getElementById('stlist').innerHTML=L.map((r,i)=>{const c=r.online?sc(r.state):'gray';return '<div class=\"card '+c+'\">'+"
-"'<div class=c-head>'+r.name+'<div class=c-badge>'+(r.online?r.state:'OFFLINE')+'</div></div>'+"
-"'<div class=c-body>'+"
+"document.getElementById('stlist').innerHTML=L.map((r,i)=>{const c=r.online?sc(r.state):'gray';"
+"const layer=(r.layer!=null&&r.tlayer!=null&&r.tlayer>0)?(r.layer+'/'+r.tlayer):(r.layer!=null?String(r.layer):'--');"
+"const eta=(()=>{let s=r.eta;if(s==null||s<0)return'--';let h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?(h+'h '+String(m).padStart(2,'0')+'m'):(m+'m')})();"
+"const body=r.sdcp?("
+"'<div class=c-grid>'+"
+"'<div class=c-cell><b>UV LED</b><div>'+(r.online?r.uv+'&deg;C':'--')+'</div></div>'+"
+"'<div class=c-cell><b>LAYER</b><div>'+(r.online?layer:'--')+'</div></div>'+"
+"'<div class=c-cell><b>FILM</b><div>'+(r.online&&r.film!=null&&r.film>=0?r.film:'--')+'</div></div>'+"
+"'<div class=c-cell><b>ETA</b><div>'+(r.online?eta:'--')+'</div></div>'+"
+"'<div class=c-cell style=grid-column:span 2><b>PROGRESS</b><div>'+(r.printing?r.progress+'%':'--')+'</div></div>'+"
+"'</div>'"
+"):("
 "'<div class=c-grid>'+"
 "'<div class=c-cell><b>NOZZLE</b><div>'+(r.online?r.nozzle+(r.tnozzle>0?'/'+r.tnozzle:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>HEATBED</b><div>'+(r.online?r.bed+(r.tbed>0?'/'+r.tbed:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>SPEED</b><div>'+(r.online?r.speed+'%':'--')+'</div></div>'+"
 "'<div class=c-cell><b>Z AXIS</b><div>'+(r.online?r.z.toFixed(2)+'mm':'--')+'</div></div>'+"
 "'<div class=c-cell style=grid-column:span 2><b>PROGRESS</b><div>'+(r.printing?r.progress+'%':'--')+'</div></div>'+"
-"'</div>'+"
+"'</div>'"
+");"
+"return '<div class=\"card '+c+'\">'+"
+"'<div class=c-head>'+r.name+'<div class=c-badge>'+(r.online?r.state:'OFFLINE')+'</div></div>'+"
+"'<div class=c-body>'+body+"
 "(r.printing?('<p class=muted style=margin:12px 0 4px 0>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'):'')+"
 "(r.ctl?cp(r,i):'')+"
 "'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';wapply();restoreAfc();loadAllAfc();"
@@ -338,20 +352,22 @@ static const char INDEX_HTML[] =
 "let PL=[],EI=-1;"
 "var CT='klipper';"  /* current add type — Klipper-first */
 "function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
-"let b=ty=='bambu';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
-"ph.placeholder=b?'Printer IP':(ty=='klipper'?'host or host:7125':'IP / host');"
+"let b=ty=='bambu',s=ty=='sdcp';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
+"pk.style.display=(b||s)?'none':'';"
+"ph.placeholder=b||s?'Printer IP':(ty=='klipper'?'host or host:7125':'IP / host');"
 "pk.placeholder=b?'LAN Access Code':(ty=='klipper'?'API key (usually blank)':'API key');"
-"pftitle.textContent=({link:'Add a Prusa printer',klipper:'Add a Klipper printer',bambu:'Add a Bambu Lab printer'}[ty]||'Add printer');"
+"pftitle.textContent=({link:'Add a Prusa printer',klipper:'Add a Klipper printer',bambu:'Add a Bambu Lab printer',sdcp:'Add a resin (SDCP) printer'}[ty]||'Add printer');"
 "ppick.style.display='none';pform.style.display='block'}"
 "function pcancel(){pform.style.display='none';ppick.style.display='block';EI=-1}"
 "async function lp(){PL=await fetch('/api/printers').then(x=>x.json());"
-"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):(p.port==7125?'Klipper ':'')+p.host+(p.port&&p.port!=80&&p.port!=7125?(':'+p.port):'')+(p.haskey?'':' (no key)'))+'</span> '"
+"document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):p.host.indexOf('sdcp:')==0?'Resin SDCP '+p.host.slice(5):(p.port==7125?'Klipper ':'')+p.host+(p.port&&p.port!=80&&p.port!=7125?(':'+p.port):'')+(p.haskey?'':' (no key)'))+'</span> '"
 "+'<button class=p onclick=usep('+p.i+')>Use</button> <button onclick=editp('+p.i+')>Edit</button> <button onclick=delp('+p.i+')>Remove</button></div>').join('')}"
-"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;let b=p.host.indexOf('bambu:')==0;CT=b?'bambu':(p.port==7125?'klipper':'link');"
-"pn.value=p.name;pk.value='';ph.value=b?p.host.slice(6):p.host;ps.value=p.serial||'';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
-"ph.placeholder=b?'Printer IP':(CT=='klipper'?'host or host:7125':'IP / host');pk.placeholder=b?'LAN Access Code (blank = keep)':(CT=='klipper'?'API key (blank = keep)':'API key (blank = keep)');"
+"function editp(i){let p=PL.find(x=>x.i==i);if(!p)return;EI=i;let b=p.host.indexOf('bambu:')==0,s=p.host.indexOf('sdcp:')==0;CT=b?'bambu':s?'sdcp':(p.port==7125?'klipper':'link');"
+"pn.value=p.name;pk.value='';ph.value=b?p.host.slice(6):s?p.host.slice(5):p.host;ps.value=p.serial||'';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
+"pk.style.display=(b||s)?'none':'';"
+"ph.placeholder=b||s?'Printer IP':(CT=='klipper'?'host or host:7125':'IP / host');pk.placeholder=b?'LAN Access Code (blank = keep)':(CT=='klipper'?'API key (blank = keep)':'API key (blank = keep)');"
 "pftitle.textContent='Edit '+p.name;ppick.style.display='none';pform.style.display='block'}"
-"async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value,type:CT};if(EI>=0)m.i=EI;"
+"async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:CT=='sdcp'?'sdcp:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value,type:CT};if(EI>=0)m.i=EI;"
 "let r=await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});"
 "if(r.status>=400)alert(await r.text());else{pcancel();lp()}}"
 "async function delp(i){if(!confirm('Remove this printer?'))return;await fetch('/api/printers/remove',{method:'POST',body:JSON.stringify({i:i})});if(EI==i)pcancel();lp()}"
@@ -610,7 +626,7 @@ static bool split_host_port(char *host, int *port_out)
 {
     if (!host || !host[0] || !port_out) return false;
     if (strncmp(host, "cloud:", 6) == 0 || strncmp(host, "bambu:", 6) == 0 ||
-        strncmp(host, "bambucloud:", 11) == 0) return false;
+        strncmp(host, "bambucloud:", 11) == 0 || strncmp(host, "sdcp:", 5) == 0) return false;
     if (host[0] == '[') {
         char *rb = strchr(host, ']');
         if (!rb || rb[1] != ':' || !rb[2]) return false;
@@ -638,8 +654,15 @@ static bool split_host_port(char *host, int *port_out)
 static void normalize_printer_endpoint(pp_printer_t *p, const char *type_str, const cJSON *port_j)
 {
     if (!p) return;
+    /* type=sdcp with a bare IP → prefix like the web form does. */
+    if (type_str && strcmp(type_str, "sdcp") == 0 && p->host[0] &&
+        strncmp(p->host, "sdcp:", 5) != 0) {
+        char tmp[sizeof(p->host) + 5];
+        snprintf(tmp, sizeof(tmp), "sdcp:%s", p->host);
+        strlcpy(p->host, tmp, sizeof(p->host));
+    }
     if (strncmp(p->host, "cloud:", 6) == 0 || strncmp(p->host, "bambu:", 6) == 0 ||
-        strncmp(p->host, "bambucloud:", 11) == 0) {
+        strncmp(p->host, "bambucloud:", 11) == 0 || strncmp(p->host, "sdcp:", 5) == 0) {
         p->port = 0;
         return;
     }
@@ -932,18 +955,29 @@ static esp_err_t fleet_get(httpd_req_t *req)
     cJSON *a = cJSON_CreateArray();
     for (int i = 0; i < n; i++) {
         cJSON *e = cJSON_CreateObject();
+        pp_printer_t pr = {0};
+        bool sdcp = printer_store_get(i, &pr) && strncmp(pr.host, "sdcp:", 5) == 0;
         cJSON_AddStringToObject(e, "name", arr[i].printer_name);
         cJSON_AddBoolToObject(e, "online", arr[i].online);
         cJSON_AddStringToObject(e, "state", arr[i].state);
-        cJSON_AddNumberToObject(e, "nozzle", (int)arr[i].temp_nozzle);
-        cJSON_AddNumberToObject(e, "tnozzle", (int)arr[i].target_nozzle);
-        cJSON_AddNumberToObject(e, "bed", (int)arr[i].temp_bed);
-        cJSON_AddNumberToObject(e, "tbed", (int)arr[i].target_bed);
+        cJSON_AddBoolToObject(e, "sdcp", sdcp);
+        if (sdcp) {
+            cJSON_AddNumberToObject(e, "uv", (int)(arr[i].temp_nozzle + 0.5f));
+            cJSON_AddNumberToObject(e, "layer", arr[i].current_layer);
+            cJSON_AddNumberToObject(e, "tlayer", arr[i].total_layer);
+            cJSON_AddNumberToObject(e, "film", arr[i].release_film);
+            cJSON_AddNumberToObject(e, "eta", arr[i].time_remaining);
+        } else {
+            cJSON_AddNumberToObject(e, "nozzle", (int)arr[i].temp_nozzle);
+            cJSON_AddNumberToObject(e, "tnozzle", (int)arr[i].target_nozzle);
+            cJSON_AddNumberToObject(e, "bed", (int)arr[i].temp_bed);
+            cJSON_AddNumberToObject(e, "tbed", (int)arr[i].target_bed);
+            cJSON_AddNumberToObject(e, "speed", arr[i].speed);
+            cJSON_AddNumberToObject(e, "z", arr[i].axis_z);
+        }
         cJSON_AddBoolToObject(e, "printing", arr[i].has_job);
         cJSON_AddNumberToObject(e, "progress", (int)(arr[i].progress + 0.5f));
         cJSON_AddStringToObject(e, "job", arr[i].job_name);
-        cJSON_AddNumberToObject(e, "speed", arr[i].speed);
-        cJSON_AddNumberToObject(e, "z", arr[i].axis_z);
         cJSON_AddStringToObject(e, "uuid", arr[i].uuid);      /* control target (cloud) */
         cJSON_AddBoolToObject(e, "cloud", arr[i].is_cloud);
         cJSON_AddBoolToObject(e, "ctl", arr[i].has_control);  /* show control panel */

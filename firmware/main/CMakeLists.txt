@@ -17,6 +17,7 @@ idf_component_register(
         "prusa_connect.c"
         "bambu.c"
         "bambu_cloud.c"
+        "sdcp.c"
         "netlog.c"
         "usb_hid_kb.c"
         "pt_core_one.c"
@@ -49,6 +50,7 @@ idf_component_register(
         esp_https_ota       # GitHub Releases self-update
         esp-tls             # TLS + certificate bundle for GitHub HTTPS
         mqtt                # Bambu Lab LAN backend (MQTT over TLS to the printer broker)
+        esp_websocket_client # Chitubox SDCP V3 resin backend (ws://IP:3030)
         esp_lcd             # read panel framebuffer for /api/screen.bmp
         esp_timer           # uptime for /api/info
         json                # cJSON parsing
