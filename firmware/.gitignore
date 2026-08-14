@@ -10,3 +10,7 @@ dependencies.lock
 # Editor / IDE
 .vscode/
 *.swp
+
+# Local Bambu probe scripts (credentials / scratch)
+/tools/probe_bambu_dates.py
+/tools/probe_bambu_ftps.py
