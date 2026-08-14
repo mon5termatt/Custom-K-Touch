@@ -4,6 +4,7 @@
 #include "moonraker.h"
 #include "bambu.h"
 #include "bambu_cloud.h"
+#include "sdcp.h"
 #include "printer_store.h"
 #include "prefs.h"
 #include "skin.h"
@@ -55,6 +56,7 @@ static pp_backend_t detect_backend(int i, const pp_printer_t *pr)
     if (strncmp(pr->host, "cloud:", 6) == 0) return PP_BK_PRUSA_CONNECT;
     if (strncmp(pr->host, "bambu:", 6) == 0 ||
         strncmp(pr->host, "bambucloud:", 11) == 0) return PP_BK_BAMBU;   /* LAN or cloud; bambu.c routes */
+    if (strncmp(pr->host, "sdcp:", 5) == 0) return PP_BK_SDCP;
     if (s_backend[i] == PP_BK_UNKNOWN) {
         if (moonraker_probe(pr)) {
             s_backend[i] = PP_BK_MOONRAKER;
@@ -432,6 +434,28 @@ static bool poll_printer(int i)
             s_info_control[i] = true;
             xSemaphoreGive(s_lock);
         }
+    } else if (bk == PP_BK_SDCP) {
+        /* Identity (MachineName/FW) only arrives via UDP discovery. After the MainboardID is
+         * cached in NVS we skip discovery on the hot path — but RAM cache is empty after reboot,
+         * so refresh identity until s_info_model is populated. */
+        bool need_id = (i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0');
+        if (sdcp_get_status_ex(&pr, &fresh, need_id) != ESP_OK)
+            return mark_printer_offline(i, &pr, active);
+        /* Persist MainboardID so later polls skip UDP discovery. */
+        if (fresh.uuid[0] && strcmp(pr.uuid, fresh.uuid) != 0) {
+            strlcpy(pr.uuid, fresh.uuid, sizeof(pr.uuid));
+            printer_store_update(i, &pr);
+        }
+        if (i >= 0 && i < PP_MAX_PRINTERS && fresh.model[0] &&
+            (s_info_model[i][0] == '\0' || strcmp(s_info_model[i], fresh.model) != 0 ||
+             (fresh.firmware[0] && strcmp(s_info_fw[i], fresh.firmware) != 0))) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            strlcpy(s_info_model[i], fresh.model, sizeof(s_info_model[i]));
+            if (fresh.firmware[0])
+                strlcpy(s_info_fw[i], fresh.firmware, sizeof(s_info_fw[i]));
+            s_info_control[i] = false;   /* files/print yes; Control panel no */
+            xSemaphoreGive(s_lock);
+        }
     } else if (bk == PP_BK_MOONRAKER) {
         if (moonraker_get_status_of(&pr, &fresh) != ESP_OK)
             return mark_printer_offline(i, &pr, active);
@@ -453,7 +477,7 @@ static bool poll_printer(int i)
     strlcpy(fresh.printer_name, pr.name, sizeof(fresh.printer_name));
 
     /* Identity (model/firmware/control): one blocking fetch per HTTP printer, then reuse cache. */
-    if (bk != PP_BK_BAMBU && fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
+    if (bk != PP_BK_BAMBU && bk != PP_BK_SDCP && fresh.online && i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
         char m[28] = {0}, fw[24] = {0}, u[40] = {0};
         bool ctl = false;
         bool got;
@@ -488,9 +512,17 @@ static bool poll_printer(int i)
 
     /* Hydrate the polled status from our cached identity row. */
     if (i >= 0 && i < PP_MAX_PRINTERS) {
-        strlcpy(fresh.model, s_info_model[i], sizeof(fresh.model));
-        strlcpy(fresh.firmware, s_info_fw[i], sizeof(fresh.firmware));
-        fresh.has_control = s_info_control[i];
+        if (bk == PP_BK_SDCP) {
+            if (!fresh.model[0]) strlcpy(fresh.model, s_info_model[i], sizeof(fresh.model));
+            if (!fresh.firmware[0]) strlcpy(fresh.firmware, s_info_fw[i], sizeof(fresh.firmware));
+            fresh.has_control = false;
+        } else {
+            if (bk != PP_BK_BAMBU || !fresh.model[0])
+                strlcpy(fresh.model, s_info_model[i], sizeof(fresh.model));
+            if (bk != PP_BK_BAMBU || !fresh.firmware[0])
+                strlcpy(fresh.firmware, s_info_fw[i], sizeof(fresh.firmware));
+            fresh.has_control = s_info_control[i];
+        }
     }
 
     bool changed = false;
@@ -576,27 +608,29 @@ static void run_command(const pp_cmd_t *cmd)
     bool moon = (abk == PP_BK_MOONRAKER);
     bool cloud = (abk == PP_BK_PRUSA_CONNECT);
     bool bambu = (abk == PP_BK_BAMBU);
+    bool sdcp = (abk == PP_BK_SDCP);
     const char *uuid = cloud ? apr.host + 6 : NULL;
 
     switch (cmd->kind) {
     case PP_CMD_PAUSE:
         if (cloud) prusa_connect_pause(uuid);
         else if (bambu) bambu_pause(&apr);
-        else moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
+        else if (!sdcp) moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
         break;
     case PP_CMD_RESUME:
         if (cloud) prusa_connect_resume(uuid);
         else if (bambu) bambu_resume(&apr);
-        else moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
+        else if (!sdcp) moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
         break;
     case PP_CMD_STOP:
         if (cloud) prusa_connect_stop(uuid);
         else if (bambu) bambu_stop(&apr);
-        else moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
+        else if (!sdcp) moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
         break;
     case PP_CMD_PRINT:
         if (cloud) ESP_LOGW(TAG, "print-from-file not implemented for this backend");
         else if (bambu) bambu_print(&apr, cmd->path);
+        else if (sdcp) sdcp_print(&apr, cmd->path);
         else moon ? moonraker_print(&apr, cmd->path) : prusalink_print(cmd->path);
         break;
     case PP_CMD_SET_PRINTER:
@@ -622,6 +656,7 @@ static void run_command(const pp_cmd_t *cmd)
         if (cmd->path[0]) {
             if (moon) tr = moonraker_fetch_thumb(&apr, cmd->path, &buf, &len);
             else if (bambu) tr = bambu_fetch_thumb(&apr, cmd->path, &buf, &len);
+            else if (sdcp) tr = sdcp_fetch_thumb(&apr, cmd->path, &buf, &len);
             else tr = prusalink_get_blob(cmd->path, &buf, &len);
         }
         pp_image_t *im = malloc(sizeof(*im));
@@ -648,7 +683,11 @@ static void run_command(const pp_cmd_t *cmd)
                 pp_backend_t tbk = detect_backend(cmd->index, &pr);
                 esp_err_t tr = (tbk == PP_BK_MOONRAKER)
                     ? moonraker_fetch_thumb(&pr, cmd->path, &buf, &len)
-                    : prusalink_get_blob_of(&pr, cmd->path, &buf, &len);
+                    : (tbk == PP_BK_SDCP)
+                        ? sdcp_fetch_thumb(&pr, cmd->path, &buf, &len)
+                        : (tbk == PP_BK_BAMBU)
+                            ? bambu_fetch_thumb(&pr, cmd->path, &buf, &len)
+                            : prusalink_get_blob_of(&pr, cmd->path, &buf, &len);
                 if (tr == ESP_OK) {
                     pp_image_t *im = malloc(sizeof(*im));
                     pp_thumb_dash_t *td = malloc(sizeof(*td));
@@ -674,6 +713,7 @@ static void run_command(const pp_cmd_t *cmd)
             esp_err_t lr = ESP_FAIL;
             if (bambu) lr = bambu_list(&apr, list->items, PP_MAX_FILES, &list->count);
             else if (moon) lr = moonraker_list(&apr, list->items, PP_MAX_FILES, &list->count);
+            else if (sdcp) lr = sdcp_list(&apr, list->items, PP_MAX_FILES, &list->count);
             else lr = prusalink_list("/", list->items, PP_MAX_FILES, &list->count);
             /* Always refresh UI (empty list on failure) so Files isn't stuck blank. */
             if (lr != ESP_OK) list->count = 0;
