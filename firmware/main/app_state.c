@@ -86,6 +86,14 @@ static SemaphoreHandle_t s_lock;
 static QueueHandle_t    s_cmds;
 static char             s_upd_url[300];   /* download URL from the last update check (net task only) */
 
+/* SDCP motherboards allow ~5 concurrent WebSockets. One-shot connect-per-poll at
+ * CONFIG_PP_POLL_INTERVAL_MS can exhaust slots and look like "went offline". */
+#define SDCP_MIN_POLL_US     30000000LL  /* background refresh ~every 30s when healthy */
+#define SDCP_FAIL_OFFLINE    3           /* consecutive fails before marking offline */
+static uint8_t s_sdcp_fail[PP_MAX_PRINTERS];
+static int64_t s_sdcp_ok_us[PP_MAX_PRINTERS];
+static bool    s_sdcp_force[PP_MAX_PRINTERS];  /* set when user opens/selects the printer */
+
 /* Clear a fleet slot to offline (keep the friendly name). Returns whether it was online. */
 static bool mark_printer_offline(int i, const pp_printer_t *pr, int active)
 {
@@ -427,20 +435,55 @@ static bool poll_printer(int i)
             /* Unreachable (off, wrong access code, or Developer Mode disabled): show offline. */
             return mark_printer_offline(i, &pr, active);
         }
-        /* The report carries identity inline; cache the model once for the detail screen. */
-        if (i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0') {
-            xSemaphoreTake(s_lock, portMAX_DELAY);
-            strlcpy(s_info_model[i], fresh.model, sizeof(s_info_model[i]));
-            s_info_control[i] = true;
-            xSemaphoreGive(s_lock);
+        /* The report carries identity inline; cache model + firmware for the fleet card. */
+        if (i >= 0 && i < PP_MAX_PRINTERS) {
+            bool need = (s_info_model[i][0] == '\0' ||
+                         (fresh.firmware[0] && strcmp(s_info_fw[i], fresh.firmware) != 0) ||
+                         (fresh.model[0] && strcmp(s_info_model[i], fresh.model) != 0));
+            if (need) {
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                if (fresh.model[0])
+                    strlcpy(s_info_model[i], fresh.model, sizeof(s_info_model[i]));
+                if (fresh.firmware[0])
+                    strlcpy(s_info_fw[i], fresh.firmware, sizeof(s_info_fw[i]));
+                s_info_control[i] = true;
+                xSemaphoreGive(s_lock);
+            }
         }
     } else if (bk == PP_BK_SDCP) {
         /* Identity (MachineName/FW) only arrives via UDP discovery. After the MainboardID is
          * cached in NVS we skip discovery on the hot path — but RAM cache is empty after reboot,
          * so refresh identity until s_info_model is populated. */
         bool need_id = (i >= 0 && i < PP_MAX_PRINTERS && s_info_model[i][0] == '\0');
-        if (sdcp_get_status_ex(&pr, &fresh, need_id) != ESP_OK)
+        bool force = (i >= 0 && i < PP_MAX_PRINTERS && s_sdcp_force[i]);
+        /* Throttle healthy printers — opening WS every poll interval burns the 5-slot limit.
+         * Force refresh when the user opens/selects this printer. */
+        if (i >= 0 && i < PP_MAX_PRINTERS && !need_id && !force) {
+            bool online = false;
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            online = s_cache[i].online;
+            xSemaphoreGive(s_lock);
+            int64_t now = esp_timer_get_time();
+            if (online && s_sdcp_ok_us[i] && (now - s_sdcp_ok_us[i]) < SDCP_MIN_POLL_US)
+                return false;
+        }
+        if (i >= 0 && i < PP_MAX_PRINTERS) s_sdcp_force[i] = false;
+        if (sdcp_get_status_ex(&pr, &fresh, need_id) != ESP_OK) {
+            if (i >= 0 && i < PP_MAX_PRINTERS) {
+                s_sdcp_fail[i]++;
+                if (s_sdcp_fail[i] < SDCP_FAIL_OFFLINE) {
+                    ESP_LOGW(TAG, "sdcp '%s' poll fail (%d/%d) — keeping last status",
+                             pr.name, s_sdcp_fail[i], SDCP_FAIL_OFFLINE);
+                    return false;
+                }
+                s_sdcp_fail[i] = 0;
+            }
             return mark_printer_offline(i, &pr, active);
+        }
+        if (i >= 0 && i < PP_MAX_PRINTERS) {
+            s_sdcp_fail[i] = 0;
+            s_sdcp_ok_us[i] = esp_timer_get_time();
+        }
         /* Persist MainboardID so later polls skip UDP discovery. */
         if (fresh.uuid[0] && strcmp(pr.uuid, fresh.uuid) != 0) {
             strlcpy(pr.uuid, fresh.uuid, sizeof(pr.uuid));
@@ -615,17 +658,20 @@ static void run_command(const pp_cmd_t *cmd)
     case PP_CMD_PAUSE:
         if (cloud) prusa_connect_pause(uuid);
         else if (bambu) bambu_pause(&apr);
-        else if (!sdcp) moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
+        else if (sdcp) sdcp_pause(&apr);
+        else moon ? moonraker_pause(&apr) : prusalink_pause(job_id);
         break;
     case PP_CMD_RESUME:
         if (cloud) prusa_connect_resume(uuid);
         else if (bambu) bambu_resume(&apr);
-        else if (!sdcp) moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
+        else if (sdcp) sdcp_resume(&apr);
+        else moon ? moonraker_resume(&apr) : prusalink_resume(job_id);
         break;
     case PP_CMD_STOP:
         if (cloud) prusa_connect_stop(uuid);
         else if (bambu) bambu_stop(&apr);
-        else if (!sdcp) moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
+        else if (sdcp) sdcp_stop(&apr);
+        else moon ? moonraker_stop(&apr) : prusalink_stop(job_id);
         break;
     case PP_CMD_PRINT:
         if (cloud) ESP_LOGW(TAG, "print-from-file not implemented for this backend");
@@ -635,6 +681,9 @@ static void run_command(const pp_cmd_t *cmd)
         break;
     case PP_CMD_SET_PRINTER:
         printer_store_set_active(cmd->index);
+        /* Opening a resin printer should refresh now, not wait for the 30s background tick. */
+        if (cmd->index >= 0 && cmd->index < PP_MAX_PRINTERS)
+            s_sdcp_force[cmd->index] = true;
         break;
     case PP_CMD_WIFI_SCAN: {
         pp_wifi_list_t *wl = malloc(sizeof(*wl));
@@ -781,8 +830,9 @@ static void run_command(const pp_cmd_t *cmd)
         break;
     }
     case PP_CMD_DIALOG_ACTION:
-        /* Answer the active printer's attention dialog (cloud only). index=dialog_id, path=button. */
+        /* Answer the active printer's attention dialog. index=dialog_id, path=button. */
         if (cloud && cmd->index) prusa_connect_dialog_action(uuid, cmd->index, cmd->path);
+        else if (sdcp && cmd->index) sdcp_dialog_dismiss(cmd->index);
         break;
     case PP_CMD_STORE_ADD: {
         /* Printer-store NVS writes run here (net task), never on the LVGL/PSRAM-stack task. */

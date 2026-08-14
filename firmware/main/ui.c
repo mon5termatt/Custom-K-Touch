@@ -1420,6 +1420,17 @@ static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, ch
     } else { strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--"); }
 }
 
+/* Compact only exact thousands/millions (60000→60K); leave non-round values as-is. */
+static void fmt_film_n(int n, char *buf, size_t nbuf)
+{
+    if (n >= 1000000 && (n % 1000000) == 0)
+        snprintf(buf, nbuf, "%dM", n / 1000000);
+    else if (n >= 1000 && (n % 1000) == 0)
+        snprintf(buf, nbuf, "%dK", n / 1000);
+    else
+        snprintf(buf, nbuf, "%d", n);
+}
+
 /* SDCP resin card: UV LED / layer / FEP film count / ETA (reuses the 4 value slots). */
 static void fmt_telemetry_sdcp(const pp_status_t *s, char *uv, char *layer, char *film, char *eta)
 {
@@ -1434,8 +1445,16 @@ static void fmt_telemetry_sdcp(const pp_status_t *s, char *uv, char *layer, char
         sprintf(layer, "%d", s->current_layer);
     else
         strcpy(layer, "--");
-    if (s->release_film >= 0) sprintf(film, "%d", s->release_film);
-    else strcpy(film, "--");
+    if (s->release_film >= 0 && s->release_film_max > 0) {
+        char a[12], b[12];
+        fmt_film_n(s->release_film, a, sizeof(a));
+        fmt_film_n(s->release_film_max, b, sizeof(b));
+        snprintf(film, 24, "%s/%s", a, b);
+    } else if (s->release_film >= 0) {
+        fmt_film_n(s->release_film, film, 24);
+    } else {
+        strcpy(film, "--");
+    }
     fmt_eta(s->time_remaining, eta, 16);
 }
 
@@ -1531,7 +1550,7 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
     ch |= lbl_set_if_changed(r->name_lbl, s->printer_name[0] ? s->printer_name : "Printer");
     ch |= lbl_set_if_changed(r->model_lbl, s->model[0] ? s->model : (online ? "Printer" : ""));
     if (r->resin) {
-        char uv[24], ly[24], fl[16], et[16];
+        char uv[24], ly[24], fl[24], et[16];
         fmt_telemetry_sdcp(s, uv, ly, fl, et);
         ch |= lbl_set_if_changed(r->v_noz, uv);
         ch |= lbl_set_if_changed(r->v_speed, ly);
@@ -1744,7 +1763,7 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
     if (r) r->resin = resin;
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
     if (resin) {
-        char uv[24], ly[24], fl[16], et[16];
+        char uv[24], ly[24], fl[24], et[16];
         fmt_telemetry_sdcp(s, uv, ly, fl, et);
         lv_obj_t *v1 = card_cell(c, X1, R1, tr(STR_UV_LED), uv);
         lv_obj_t *v2 = card_cell(c, X2, R1, tr(STR_LAYER),  ly);

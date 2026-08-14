@@ -112,6 +112,38 @@ static bool parse_report(const char *json, int len, pp_status_t *out)
     return true;
 }
 
+/* info.get_version → module[] ; the "ota" entry's sw_ver is the user-facing firmware. */
+static bool parse_version(const char *json, int len, pp_status_t *out)
+{
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    if (!root) return false;
+    cJSON *info = cJSON_GetObjectItem(root, "info");
+    if (!cJSON_IsObject(info)) { cJSON_Delete(root); return false; }
+    cJSON *mods = cJSON_GetObjectItem(info, "module");
+    if (!cJSON_IsArray(mods)) { cJSON_Delete(root); return false; }
+
+    bool got = false;
+    const cJSON *m;
+    cJSON_ArrayForEach(m, mods) {
+        if (!cJSON_IsObject(m)) continue;
+        const cJSON *name = cJSON_GetObjectItem(m, "name");
+        if (!cJSON_IsString(name) || !name->valuestring) continue;
+        if (strcmp(name->valuestring, "ota") != 0) continue;
+        const cJSON *sw = cJSON_GetObjectItem(m, "sw_ver");
+        if (cJSON_IsString(sw) && sw->valuestring && sw->valuestring[0]) {
+            strlcpy(out->firmware, sw->valuestring, sizeof(out->firmware));
+            got = true;
+        }
+        /* Prefer printer product_name over serial-prefix guess when present. */
+        const cJSON *pn = cJSON_GetObjectItem(m, "product_name");
+        if (cJSON_IsString(pn) && pn->valuestring && pn->valuestring[0])
+            strlcpy(out->model, pn->valuestring, sizeof(out->model));
+        break;
+    }
+    cJSON_Delete(root);
+    return got;
+}
+
 /* Rough model name from the serial prefix (best-effort; Bambu doesn't put it in the report).
  * Prefixes from https://wiki.bambulab.com/en/general/find-sn */
 static const char *model_from_serial(const char *serial)
@@ -140,6 +172,7 @@ typedef struct {
     pp_status_t *out;         /* FETCH mode: filled from the report */
     SemaphoreHandle_t done;
     volatile bool got;        /* FETCH: report parsed; PUBLISH: publish accepted */
+    volatile bool got_fw;     /* FETCH: info.get_version ota.sw_ver parsed */
     char *acc;                /* PSRAM accumulator for fragmented FETCH payloads */
     int   acc_len;
 } bambu_ctx_t;
@@ -156,10 +189,13 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data)
         if (c->mode == BAMBU_FETCH) {
             snprintf(topic, sizeof(topic), "device/%s/report", c->serial);
             esp_mqtt_client_subscribe(e->client, topic, 0);
-            /* Force a full state push (the printer otherwise only sends deltas). */
             snprintf(topic, sizeof(topic), "device/%s/request", c->serial);
+            /* Full status + version inventory (ota.sw_ver = user-facing firmware). */
             esp_mqtt_client_publish(e->client, topic,
                 "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}",
+                0, 0, 0);
+            esp_mqtt_client_publish(e->client, topic,
+                "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}",
                 0, 0, 0);
         } else {
             snprintf(topic, sizeof(topic), "device/%s/request", c->serial);
@@ -178,7 +214,12 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data)
             c->acc_len += e->data_len;
         }
         if (e->current_data_offset + e->data_len >= e->total_data_len) {
-            if (parse_report(c->acc, c->acc_len, c->out)) { c->got = true; xSemaphoreGive(c->done); }
+            if (parse_version(c->acc, c->acc_len, c->out))
+                c->got_fw = true;
+            if (parse_report(c->acc, c->acc_len, c->out)) {
+                c->got = true;
+                xSemaphoreGive(c->done);
+            }
             c->acc_len = 0;
         }
         break;
@@ -224,6 +265,11 @@ static esp_err_t mqtt_session(const char *uri, const char *user, const char *pas
     if (started == ESP_OK) {
         TickType_t wait = pdMS_TO_TICKS(mode == BAMBU_FETCH ? BAMBU_WAIT_MS : BAMBU_PUB_MS);
         xSemaphoreTake(ctx.done, wait);
+        /* Status unblocks first; linger briefly so get_version can fill firmware. */
+        if (mode == BAMBU_FETCH && ctx.got && !ctx.got_fw) {
+            for (int i = 0; i < 10 && !ctx.got_fw; i++)
+                vTaskDelay(pdMS_TO_TICKS(100));
+        }
     }
     esp_mqtt_client_stop(cl);
     esp_mqtt_client_destroy(cl);
@@ -251,7 +297,9 @@ esp_err_t bambu_get_status_of(const pp_printer_t *pr, pp_status_t *out)
     out->online = true;
     out->is_cloud = bambu_is_cloud(pr);
     strlcpy(out->printer_name, pr->name, sizeof(out->printer_name));
-    strlcpy(out->model, model_from_serial(pr->uuid), sizeof(out->model));
+    /* Model: prefer product_name from get_version; else serial-prefix guess. */
+    if (!out->model[0])
+        strlcpy(out->model, model_from_serial(pr->uuid), sizeof(out->model));
     strlcpy(out->uuid, pr->uuid, sizeof(out->uuid));
     return ESP_OK;
 }

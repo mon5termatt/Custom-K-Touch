@@ -20,6 +20,7 @@
 #include "lwip/netdb.h"
 #include "lwip/inet.h"
 #include "cJSON.h"
+#include "i18n.h"
 
 static const char *TAG = "sdcp";
 
@@ -29,6 +30,11 @@ static const char *TAG = "sdcp";
 #define SDCP_DISC_MS     2500
 #define SDCP_WAIT_MS     6000
 #define SDCP_RX_CAP      16384
+
+/* Synthetic dialog_ids for the Prusa-style attention banner (Connect uses real ids). */
+#define SDCP_DID_PRINT   900000   /* + PrintInfo.ErrorNumber */
+#define SDCP_DID_XFER    910000   /* + sdcp/error ErrorCode */
+#define SDCP_DID_NOTICE  920000   /* + sdcp/notice Type */
 
 /* Machine CurrentStatus values (spec). */
 enum {
@@ -73,7 +79,53 @@ typedef struct {
     char machine[40];
     char firmware[24];
     char proto[16];
+    int  release_film_max;   /* from discovery Attributes; -1 if absent */
 } sdcp_disc_t;
+
+/* ReleaseFilmMax comes from sdcp/attributes (Cmd 1), not status — cache per MainboardID. */
+#define SDCP_FILM_CACHE_N 4
+typedef struct {
+    char mid[40];
+    int  film_max;
+} sdcp_film_cache_t;
+static sdcp_film_cache_t s_film_cache[SDCP_FILM_CACHE_N];
+
+static int sdcp_film_max_get(const char *mid)
+{
+    if (!mid || !mid[0]) return -1;
+    for (int i = 0; i < SDCP_FILM_CACHE_N; i++) {
+        if (s_film_cache[i].mid[0] && strcmp(s_film_cache[i].mid, mid) == 0)
+            return s_film_cache[i].film_max;
+    }
+    return -1;
+}
+
+static void sdcp_film_max_set(const char *mid, int film_max)
+{
+    if (!mid || !mid[0] || film_max <= 0) return;
+    int free_i = -1;
+    for (int i = 0; i < SDCP_FILM_CACHE_N; i++) {
+        if (s_film_cache[i].mid[0] && strcmp(s_film_cache[i].mid, mid) == 0) {
+            s_film_cache[i].film_max = film_max;
+            return;
+        }
+        if (free_i < 0 && !s_film_cache[i].mid[0]) free_i = i;
+    }
+    int i = (free_i >= 0) ? free_i : 0;
+    strlcpy(s_film_cache[i].mid, mid, sizeof(s_film_cache[i].mid));
+    s_film_cache[i].film_max = film_max;
+}
+
+static void sdcp_apply_film_max(pp_status_t *out, const char *mid)
+{
+    if (!out) return;
+    if (out->release_film_max > 0) {
+        sdcp_film_max_set(mid && mid[0] ? mid : out->uuid, out->release_film_max);
+        return;
+    }
+    int cached = sdcp_film_max_get(mid && mid[0] ? mid : out->uuid);
+    if (cached > 0) out->release_film_max = cached;
+}
 
 static esp_err_t sdcp_discover(const char *ip, sdcp_disc_t *out)
 {
@@ -146,6 +198,11 @@ static esp_err_t sdcp_discover(const char *ip, sdcp_disc_t *out)
             strlcpy(out->proto, v->valuestring, sizeof(out->proto));
         if (!out->brand_id[0] && (v = cJSON_GetObjectItem(attrs, "Id")) && cJSON_IsString(v))
             strlcpy(out->brand_id, v->valuestring, sizeof(out->brand_id));
+        out->release_film_max = -1;
+        if ((v = cJSON_GetObjectItem(attrs, "ReleaseFilmMax")) && cJSON_IsNumber(v) && v->valueint > 0) {
+            out->release_film_max = v->valueint;
+            sdcp_film_max_set(out->mainboard_id, out->release_film_max);
+        }
     }
     cJSON_Delete(root);
 
@@ -157,6 +214,102 @@ static esp_err_t sdcp_discover(const char *ip, sdcp_disc_t *out)
     if (out->proto[0] && strncmp(out->proto, "V3", 2) != 0) {
         ESP_LOGW(TAG, "unsupported ProtocolVersion %s (need V3)", out->proto);
         return ESP_ERR_NOT_SUPPORTED;
+    }
+    return ESP_OK;
+}
+
+/* ---------- attention dialog (Prusa-style banner) ---------- */
+
+typedef struct {
+    char mid[40];
+    int  dialog_id;
+    char title[32];
+    char text[160];
+    bool is_error;
+    bool active;
+    bool dismissed;
+} sdcp_attn_t;
+
+static sdcp_attn_t s_attn;
+
+static const char *sdcp_print_error_text(int n)
+{
+    switch (n) {
+    case 1: return "File MD5 check failed";
+    case 2: return "File read failed";
+    case 3: return "Resolution mismatch";
+    case 4: return "Format mismatch";
+    case 5: return "Machine model mismatch";
+    default: return "Print error";
+    }
+}
+
+static const char *sdcp_xfer_error_text(int n)
+{
+    switch (n) {
+    case 1: return "File transfer MD5 check failed";
+    case 2: return "File format is incorrect";
+    default: return "Printer error";
+    }
+}
+
+static int sdcp_json_intish(const cJSON *v, int fallback)
+{
+    if (!v) return fallback;
+    if (cJSON_IsNumber(v)) return v->valueint;
+    if (cJSON_IsString(v) && v->valuestring && v->valuestring[0])
+        return atoi(v->valuestring);
+    return fallback;
+}
+
+static void sdcp_attn_remember(const char *mid, int dialog_id,
+                               const char *title, const char *text, bool is_error)
+{
+    if (!dialog_id) return;
+    if (s_attn.dismissed && s_attn.dialog_id == dialog_id &&
+        mid && mid[0] && strcmp(s_attn.mid, mid) == 0)
+        return;
+    if (s_attn.dialog_id != dialog_id) s_attn.dismissed = false;
+    if (mid && mid[0]) strlcpy(s_attn.mid, mid, sizeof(s_attn.mid));
+    s_attn.dialog_id = dialog_id;
+    strlcpy(s_attn.title, title && title[0] ? title : tr(STR_ATTENTION), sizeof(s_attn.title));
+    strlcpy(s_attn.text, text ? text : "", sizeof(s_attn.text));
+    s_attn.is_error = is_error;
+    s_attn.active = true;
+}
+
+static void sdcp_attn_apply(pp_status_t *out, int dialog_id,
+                            const char *title, const char *text, bool is_error)
+{
+    if (!out || !dialog_id) return;
+    if (s_attn.dismissed && s_attn.dialog_id == dialog_id) return;
+
+    out->dialog_id = dialog_id;
+    strlcpy(out->dialog_title, title && title[0] ? title : tr(STR_ATTENTION),
+            sizeof(out->dialog_title));
+    strlcpy(out->dialog_text, text ? text : "", sizeof(out->dialog_text));
+    strlcpy(out->dialog_btns[0], tr(STR_OK), sizeof(out->dialog_btns[0]));
+    out->dialog_btn_count = 1;
+    if (is_error) strlcpy(out->state, "ATTENTION", sizeof(out->state));
+
+    sdcp_attn_remember(out->uuid[0] ? out->uuid : s_attn.mid, dialog_id,
+                       out->dialog_title, out->dialog_text, is_error);
+}
+
+static void sdcp_attn_merge_pending(pp_status_t *out, const char *mid)
+{
+    if (!out || out->dialog_id || !s_attn.active || s_attn.dismissed) return;
+    if (mid && mid[0] && s_attn.mid[0] && strcmp(s_attn.mid, mid) != 0) return;
+    sdcp_attn_apply(out, s_attn.dialog_id, s_attn.title, s_attn.text, s_attn.is_error);
+}
+
+esp_err_t sdcp_dialog_dismiss(int dialog_id)
+{
+    if (!dialog_id) return ESP_ERR_INVALID_ARG;
+    if (dialog_id >= SDCP_DID_PRINT) {
+        s_attn.dialog_id = dialog_id;
+        s_attn.dismissed = true;
+        ESP_LOGI(TAG, "attention dismissed id=%d", dialog_id);
     }
     return ESP_OK;
 }
@@ -227,8 +380,21 @@ static void map_status(const cJSON *status, pp_status_t *out, const char *ip)
         else state = "READY";
         break;
     }
-    if (err != 0 && machine == SDCP_MS_PRINTING) state = "ATTENTION";
-    strlcpy(out->state, state, sizeof(out->state));
+    if (err != 0) {
+        sdcp_attn_apply(out, SDCP_DID_PRINT + err, tr(STR_ATTENTION),
+                        sdcp_print_error_text(err), true);
+        if (!out->dialog_id)
+            strlcpy(out->state, state, sizeof(out->state));  /* dismissed while error persists */
+    } else {
+        strlcpy(out->state, state, sizeof(out->state));
+        /* Print error cleared on printer — allow the same code to reappear later. */
+        if (s_attn.active && s_attn.dialog_id >= SDCP_DID_PRINT &&
+            s_attn.dialog_id < SDCP_DID_XFER) {
+            s_attn.active = false;
+            s_attn.dismissed = false;
+            s_attn.dialog_id = 0;
+        }
+    }
     out->has_job = has_job;
 
     out->current_layer = cur_layer;
@@ -271,6 +437,9 @@ static void map_status(const cJSON *status, pp_status_t *out, const char *ip)
         out->target_bed = (float)t->valuedouble;
     if ((t = cJSON_GetObjectItem(status, "ReleaseFilm")) && cJSON_IsNumber(t))
         out->release_film = t->valueint;
+    /* Some firmwares may echo max in status; normally it arrives via attributes. */
+    if ((t = cJSON_GetObjectItem(status, "ReleaseFilmMax")) && cJSON_IsNumber(t) && t->valueint > 0)
+        out->release_film_max = t->valueint;
 }
 
 /* ---------- WebSocket one-shot RPC (status / list / print) ---------- */
@@ -279,6 +448,7 @@ typedef enum {
     SDCP_OP_STATUS = 0,
     SDCP_OP_LIST,
     SDCP_OP_PRINT,
+    SDCP_OP_SIMPLE,   /* pause/stop/resume — Cmd + empty Data, wait Ack */
 } sdcp_op_t;
 
 typedef struct {
@@ -302,7 +472,9 @@ typedef struct {
     char list_url[48];
     /* PRINT */
     char print_file[160];
-    int  print_ack;   /* -1 pending, else Ack code */
+    /* PRINT / SIMPLE */
+    int  ack;         /* -1 pending, else Ack code */
+    int  simple_cmd;  /* Cmd number for SDCP_OP_SIMPLE */
 } sdcp_ws_ctx_t;
 
 static void sdcp_make_ids(char *rid, size_t rn, uint32_t *ts_out)
@@ -356,6 +528,75 @@ static void sdcp_parse_file_list(sdcp_ws_ctx_t *ctx, const cJSON *inner)
     xSemaphoreGive(ctx->done);
 }
 
+static void sdcp_handle_push(sdcp_ws_ctx_t *ctx, const char *tstr, const cJSON *root)
+{
+    const cJSON *d = cJSON_GetObjectItem(root, "Data");
+    const cJSON *inner = cJSON_IsObject(d) ? cJSON_GetObjectItem(d, "Data") : NULL;
+    if (!cJSON_IsObject(inner)) return;
+
+    const char *mid = ctx->mainboard_id;
+    const cJSON *midj = cJSON_IsObject(d) ? cJSON_GetObjectItem(d, "MainboardID") : NULL;
+    if (cJSON_IsString(midj) && midj->valuestring && midj->valuestring[0])
+        mid = midj->valuestring;
+
+    if (strstr(tstr, "sdcp/error/") == tstr) {
+        int code = sdcp_json_intish(cJSON_GetObjectItem(inner, "ErrorCode"), 0);
+        if (code <= 0) return;
+        int did = SDCP_DID_XFER + code;
+        const char *text = sdcp_xfer_error_text(code);
+        sdcp_attn_remember(mid, did, tr(STR_ATTENTION), text, true);
+        if (ctx->op == SDCP_OP_STATUS && ctx->out_status)
+            sdcp_attn_apply(ctx->out_status, did, tr(STR_ATTENTION), text, true);
+        ESP_LOGW(TAG, "sdcp/error ErrorCode=%d", code);
+        return;
+    }
+
+    if (strstr(tstr, "sdcp/notice/") == tstr) {
+        int type = sdcp_json_intish(cJSON_GetObjectItem(inner, "Type"), 0);
+        /* Type 1 = history sync success — not worth an attention banner. */
+        if (type == 1) return;
+        const cJSON *msg = cJSON_GetObjectItem(inner, "Message");
+        char text[160] = {0};
+        if (cJSON_IsString(msg) && msg->valuestring)
+            strlcpy(text, msg->valuestring, sizeof(text));
+        else if (cJSON_IsObject(msg) || cJSON_IsArray(msg)) {
+            char *raw = cJSON_PrintUnformatted(msg);
+            if (raw) { strlcpy(text, raw, sizeof(text)); free(raw); }
+        }
+        if (!text[0]) snprintf(text, sizeof(text), "Notification (type %d)", type);
+        int did = SDCP_DID_NOTICE + (type > 0 ? type : 1);
+        sdcp_attn_remember(mid, did, tr(STR_ATTENTION), text, false);
+        if (ctx->op == SDCP_OP_STATUS && ctx->out_status)
+            sdcp_attn_apply(ctx->out_status, did, tr(STR_ATTENTION), text, false);
+        ESP_LOGI(TAG, "sdcp/notice type=%d", type);
+    }
+}
+
+static void sdcp_handle_attributes(sdcp_ws_ctx_t *ctx, const cJSON *root)
+{
+    const cJSON *attrs = cJSON_GetObjectItem(root, "Attributes");
+    if (!cJSON_IsObject(attrs)) {
+        const cJSON *d = cJSON_GetObjectItem(root, "Data");
+        if (cJSON_IsObject(d)) attrs = cJSON_GetObjectItem(d, "Attributes");
+    }
+    if (!cJSON_IsObject(attrs)) return;
+
+    const char *mid = ctx->mainboard_id;
+    const cJSON *midj = cJSON_GetObjectItem(root, "MainboardID");
+    if ((!midj || !cJSON_IsString(midj)) && cJSON_IsObject(cJSON_GetObjectItem(root, "Data")))
+        midj = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "Data"), "MainboardID");
+    if (cJSON_IsString(midj) && midj->valuestring && midj->valuestring[0])
+        mid = midj->valuestring;
+
+    const cJSON *v = cJSON_GetObjectItem(attrs, "ReleaseFilmMax");
+    int film_max = sdcp_json_intish(v, 0);
+    if (film_max > 0) {
+        sdcp_film_max_set(mid, film_max);
+        if (ctx->out_status) ctx->out_status->release_film_max = film_max;
+        ESP_LOGI(TAG, "ReleaseFilmMax=%d", film_max);
+    }
+}
+
 static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
 {
     if (!data || len <= 0) return;
@@ -367,11 +608,18 @@ static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
     const cJSON *topic = cJSON_GetObjectItem(root, "Topic");
     const char *tstr = (cJSON_IsString(topic) && topic->valuestring) ? topic->valuestring : "";
 
+    /* Proactive push topics can arrive on any WS session. */
+    if (strstr(tstr, "sdcp/error/") == tstr || strstr(tstr, "sdcp/notice/") == tstr)
+        sdcp_handle_push(ctx, tstr, root);
+    if (strstr(tstr, "sdcp/attributes/") == tstr)
+        sdcp_handle_attributes(ctx, root);
+
     if (ctx->op == SDCP_OP_STATUS) {
         if (strstr(tstr, "sdcp/status/") == tstr) {
             const cJSON *st = cJSON_GetObjectItem(root, "Status");
             if (cJSON_IsObject(st) && ctx->out_status) {
                 map_status(st, ctx->out_status, ctx->ip);
+                sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
                 ctx->ok = true;
                 xSemaphoreGive(ctx->done);
             }
@@ -386,6 +634,7 @@ static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
             const cJSON *st = cJSON_GetObjectItem(root, "Status");
             if (cJSON_IsObject(st) && ctx->out_status) {
                 map_status(st, ctx->out_status, ctx->ip);
+                sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
                 ctx->ok = true;
                 xSemaphoreGive(ctx->done);
             }
@@ -418,17 +667,32 @@ static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
         }
     }
 
-    if (ctx->op == SDCP_OP_PRINT && cJSON_IsObject(inner)) {
+    if ((ctx->op == SDCP_OP_PRINT || ctx->op == SDCP_OP_SIMPLE) && cJSON_IsObject(inner)) {
         const cJSON *ack = cJSON_GetObjectItem(inner, "Ack");
         if (cJSON_IsNumber(ack)) {
-            ctx->print_ack = ack->valueint;
-            if (ctx->print_ack != 0)
-                ESP_LOGW(TAG, "print Ack=%d", ctx->print_ack);
-            ctx->ok = (ctx->print_ack == 0);
+            ctx->ack = ack->valueint;
+            if (ctx->ack != 0)
+                ESP_LOGW(TAG, "Cmd Ack=%d", ctx->ack);
+            ctx->ok = (ctx->ack == 0);
             xSemaphoreGive(ctx->done);
         }
     }
     cJSON_Delete(root);
+}
+
+static void sdcp_send_cmd(sdcp_ws_ctx_t *ctx, int cmd)
+{
+    if (!ctx->client) return;
+    char req[384], rid[33];
+    const char *id = ctx->brand_id[0] ? ctx->brand_id : ctx->mainboard_id;
+    uint32_t ts = 0;
+    sdcp_make_ids(rid, sizeof(rid), &ts);
+    snprintf(req, sizeof(req),
+             "{\"Id\":\"%s\",\"Data\":{\"Cmd\":%d,\"Data\":{},\"RequestID\":\"%s\","
+             "\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
+             "\"Topic\":\"sdcp/request/%s\"}",
+             id, cmd, rid, ctx->mainboard_id, (unsigned long)ts, ctx->mainboard_id);
+    esp_websocket_client_send_text(ctx->client, req, strlen(req), pdMS_TO_TICKS(2000));
 }
 
 static void sdcp_send_request(sdcp_ws_ctx_t *ctx)
@@ -440,11 +704,12 @@ static void sdcp_send_request(sdcp_ws_ctx_t *ctx)
     sdcp_make_ids(ctx->request_id, sizeof(ctx->request_id), &ts);
 
     if (ctx->op == SDCP_OP_STATUS) {
-        snprintf(req, sizeof(req),
-                 "{\"Id\":\"%s\",\"Data\":{\"Cmd\":0,\"Data\":{},\"RequestID\":\"%s\","
-                 "\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
-                 "\"Topic\":\"sdcp/request/%s\"}",
-                 id, ctx->request_id, ctx->mainboard_id, (unsigned long)ts, ctx->mainboard_id);
+        /* Cmd 0 = status; Cmd 1 = attributes (ReleaseFilmMax lives here). */
+        sdcp_send_cmd(ctx, 0);
+        if (sdcp_film_max_get(ctx->mainboard_id) <= 0)
+            sdcp_send_cmd(ctx, 1);
+        ctx->sent_cmd = true;
+        return;
     } else if (ctx->op == SDCP_OP_LIST) {
         snprintf(req, sizeof(req),
                  "{\"Id\":\"%s\",\"Data\":{\"Cmd\":258,\"Data\":{\"Url\":\"%s\"},"
@@ -452,8 +717,14 @@ static void sdcp_send_request(sdcp_ws_ctx_t *ctx)
                  "\"Topic\":\"sdcp/request/%s\"}",
                  id, ctx->list_url, ctx->request_id, ctx->mainboard_id,
                  (unsigned long)ts, ctx->mainboard_id);
+    } else if (ctx->op == SDCP_OP_SIMPLE) {
+        snprintf(req, sizeof(req),
+                 "{\"Id\":\"%s\",\"Data\":{\"Cmd\":%d,\"Data\":{},\"RequestID\":\"%s\","
+                 "\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
+                 "\"Topic\":\"sdcp/request/%s\"}",
+                 id, ctx->simple_cmd, ctx->request_id, ctx->mainboard_id,
+                 (unsigned long)ts, ctx->mainboard_id);
     } else { /* PRINT */
-        /* Escape is unnecessary for typical resin paths; keep payload tight. */
         snprintf(req, sizeof(req),
                  "{\"Id\":\"%s\",\"Data\":{\"Cmd\":128,\"Data\":{\"Filename\":\"%s\",\"StartLayer\":0},"
                  "\"RequestID\":\"%s\",\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
@@ -552,8 +823,27 @@ static esp_err_t sdcp_ws_rpc(const char *ip, const sdcp_disc_t *disc, sdcp_ws_ct
     ctx->client = cl;
     esp_websocket_register_events(cl, WEBSOCKET_EVENT_ANY, sdcp_ws_event, ctx);
     esp_err_t st = esp_websocket_client_start(cl);
-    if (st == ESP_OK)
+    if (st == ESP_OK) {
         xSemaphoreTake(ctx->done, pdMS_TO_TICKS(SDCP_WAIT_MS));
+        /* Only linger for attributes when we still need ReleaseFilmMax — holding the
+         * socket longer burns one of the printer's scarce WebSocket slots (~5). */
+        if (ctx->op == SDCP_OP_STATUS && ctx->ok &&
+            ctx->out_status && ctx->out_status->release_film_max <= 0 &&
+            sdcp_film_max_get(ctx->mainboard_id) <= 0) {
+            for (int i = 0; i < 10; i++) {
+                if (ctx->out_status->release_film_max > 0) break;
+                if (sdcp_film_max_get(ctx->mainboard_id) > 0) {
+                    sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            if (ctx->out_status)
+                sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
+        } else if (ctx->op == SDCP_OP_STATUS && ctx->ok && ctx->out_status) {
+            sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
+        }
+    }
 
     esp_websocket_client_stop(cl);
     esp_websocket_client_destroy(cl);
@@ -579,6 +869,7 @@ esp_err_t sdcp_get_status_ex(const pp_printer_t *pr, pp_status_t *out, bool refr
     out->current_layer = -1;
     out->total_layer = -1;
     out->release_film = -1;
+    out->release_film_max = -1;
     out->time_remaining = -1;
     out->has_control = false;
 
@@ -590,6 +881,21 @@ esp_err_t sdcp_get_status_ex(const pp_printer_t *pr, pp_status_t *out, bool refr
     ctx.op = SDCP_OP_STATUS;
     ctx.out_status = out;
     esp_err_t r = sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
+    /* One quick retry — printers with a 5-slot WS limit often reject a reconnect
+     * that races a previous close (TIME_WAIT / "too many client"). */
+    if (r != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(400));
+        memset(out, 0, sizeof(*out));
+        out->current_layer = -1;
+        out->total_layer = -1;
+        out->release_film = -1;
+        out->release_film_max = -1;
+        out->time_remaining = -1;
+        ctx = (sdcp_ws_ctx_t){0};
+        ctx.op = SDCP_OP_STATUS;
+        ctx.out_status = out;
+        r = sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
+    }
     if (r != ESP_OK) return r;
 
     out->online = true;
@@ -600,6 +906,12 @@ esp_err_t sdcp_get_status_ex(const pp_printer_t *pr, pp_status_t *out, bool refr
     else if (disc.name[0]) strlcpy(out->model, disc.name, sizeof(out->model));
     if (disc.firmware[0]) strlcpy(out->firmware, disc.firmware, sizeof(out->firmware));
     strlcpy(out->printer_name, pr->name, sizeof(out->printer_name));
+    if (disc.release_film_max > 0)
+        sdcp_film_max_set(disc.mainboard_id, disc.release_film_max);
+    sdcp_apply_film_max(out, disc.mainboard_id);
+    /* Apply any push error/notice captured on this or a prior WS session. */
+    if (s_attn.mid[0] == '\0') strlcpy(s_attn.mid, disc.mainboard_id, sizeof(s_attn.mid));
+    sdcp_attn_merge_pending(out, disc.mainboard_id);
     return ESP_OK;
 }
 
@@ -657,7 +969,7 @@ esp_err_t sdcp_print(const pp_printer_t *pr, const char *filename)
 
     sdcp_ws_ctx_t ctx = {0};
     ctx.op = SDCP_OP_PRINT;
-    ctx.print_ack = -1;
+    ctx.ack = -1;
     strlcpy(ctx.print_file, filename, sizeof(ctx.print_file));
     /* Reject paths that would break the JSON string (quotes / control chars). */
     for (const char *p = ctx.print_file; *p; p++) {
@@ -668,6 +980,23 @@ esp_err_t sdcp_print(const pp_printer_t *pr, const char *filename)
     }
     return sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
 }
+
+static esp_err_t sdcp_simple_cmd(const pp_printer_t *pr, int cmd)
+{
+    if (!sdcp_is(pr)) return ESP_FAIL;
+    sdcp_disc_t disc = {0};
+    if (sdcp_resolve(pr, &disc, false) != ESP_OK || !disc.mainboard_id[0]) return ESP_FAIL;
+
+    sdcp_ws_ctx_t ctx = {0};
+    ctx.op = SDCP_OP_SIMPLE;
+    ctx.simple_cmd = cmd;
+    ctx.ack = -1;
+    return sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
+}
+
+esp_err_t sdcp_pause(const pp_printer_t *pr)  { return sdcp_simple_cmd(pr, 129); }
+esp_err_t sdcp_stop(const pp_printer_t *pr)   { return sdcp_simple_cmd(pr, 130); }
+esp_err_t sdcp_resume(const pp_printer_t *pr) { return sdcp_simple_cmd(pr, 131); }
 
 typedef struct { uint8_t *buf; int len; int cap; } sdcp_http_acc_t;
 

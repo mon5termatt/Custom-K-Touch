@@ -235,8 +235,24 @@ static const char INDEX_HTML[] =
 "<img id=snapi style='max-width:84vw;max-height:70vh;border-radius:6px;background:#000;min-width:200px;min-height:120px' onerror=\"this.alt='No snapshot available for this printer'\"></div></div>"
 "<script>"
 "var FL=[];var SNAPU='';var SNAPIDX=0;"
-"function t(i){for(let n=0;n<11;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
-"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';if(i==1)lp();if(i==4){shot();lgload();dimload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload()}"
+"var TABN=['status','printers','wifi','firmware','screen','accounts','farm','theme','layout','settings','advanced'];"
+"var CURTAB=0;"
+"function tabFromHash(){var h=(location.hash||'#').slice(1).split('/')[0];var i=TABN.indexOf(h);return i>=0?i:0;}"
+"function t(i,push){i=i|0;if(i<0||i>10)i=0;"
+"for(let n=0;n<11;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
+"document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';"
+"if(i==1)lp();if(i==4){shot();lgload();dimload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload();"
+"if(push!==false&&i!==CURTAB){var st=Object.assign({},history.state||{},{tab:i});delete st.form;delete st.snap;"
+"history.pushState(st,'','#'+TABN[i]);}"
+"CURTAB=i;}"
+"window.addEventListener('popstate',function(e){"
+"var st=e.state||{};"
+"if(st.snap){document.getElementById('snapm').style.display='flex';return;}"
+"document.getElementById('snapm').style.display='none';document.getElementById('snapi').src='';"
+"if(st.form){t(1,false);if(typeof openAddForm==='function')openAddForm(st.form);return;}"
+"if(document.getElementById('pform').style.display!=='none'){document.getElementById('pform').style.display='none';document.getElementById('ppick').style.display='block';}"
+"t(st.tab!=null?st.tab:tabFromHash(),false);"
+"});"
 "async function advload(){try{let a=await fetch('/api/advanced').then(x=>x.json());document.getElementById('advcam').value=a.webcam_index||0;document.getElementById('advled').value=a.led_notes||'';document.getElementById('advmsg').textContent=''}catch(e){}}"
 "async function advsave(){let body=JSON.stringify({webcam_index:+document.getElementById('advcam').value||0,led_notes:document.getElementById('advled').value||''});"
 "await fetch('/api/advanced',{method:'POST',headers:{'Content-Type':'application/json'},body:body});document.getElementById('advmsg').textContent='Saved.';}"
@@ -246,11 +262,13 @@ static const char INDEX_HTML[] =
 "document.getElementById('stlist').innerHTML=L.map((r,i)=>{const c=r.online?sc(r.state):'gray';"
 "const layer=(r.layer!=null&&r.tlayer!=null&&r.tlayer>0)?(r.layer+'/'+r.tlayer):(r.layer!=null?String(r.layer):'--');"
 "const eta=(()=>{let s=r.eta;if(s==null||s<0)return'--';let h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?(h+'h '+String(m).padStart(2,'0')+'m'):(m+'m')})();"
+"const fk=n=>{if(n==null||n<0)return'--';if(n>=1e6&&n%1e6===0)return(n/1e6)+'M';if(n>=1e3&&n%1e3===0)return(n/1e3)+'K';return String(n)};"
+"const film=r.online&&r.film!=null&&r.film>=0?(r.filmmax>0?fk(r.film)+'/'+fk(r.filmmax):fk(r.film)):'--';"
 "const body=r.sdcp?("
 "'<div class=c-grid>'+"
 "'<div class=c-cell><b>UV LED</b><div>'+(r.online?r.uv+'&deg;C':'--')+'</div></div>'+"
 "'<div class=c-cell><b>LAYER</b><div>'+(r.online?layer:'--')+'</div></div>'+"
-"'<div class=c-cell><b>FILM</b><div>'+(r.online&&r.film!=null&&r.film>=0?r.film:'--')+'</div></div>'+"
+"'<div class=c-cell><b>FILM</b><div>'+film+'</div></div>'+"
 "'<div class=c-cell><b>ETA</b><div>'+(r.online?eta:'--')+'</div></div>'+"
 "'<div class=c-cell style=grid-column:span 2><b>PROGRESS</b><div>'+(r.printing?r.progress+'%':'--')+'</div></div>'+"
 "'</div>'"
@@ -267,21 +285,24 @@ static const char INDEX_HTML[] =
 "'<div class=c-head>'+r.name+'<div class=c-badge>'+(r.online?r.state:'OFFLINE')+'</div></div>'+"
 "'<div class=c-body>'+body+"
 "(r.printing?('<p class=muted style=margin:12px 0 4px 0>'+r.job+'</p><div class=bar><i style=width:'+r.progress+'%></i></div>'):'')+"
-"(r.ctl?cp(r,i):'')+"
+"(r.ctl?cp(r,i):(r.sdcp&&r.printing?cpsdcp(i):''))+"
 "'</div></div>'}).join('')||'<div class=card style=padding:18px>No printers yet.</div>';wapply();restoreAfc();loadAllAfc();"
 "try{let d=await fetch('/api/info').then(x=>x.json());document.getElementById('dev').innerHTML="
 "'<span class=muted>'+d.name+' '+d.fw+' &middot; heap '+Math.round(d.heap_free/1024)+'KB &middot; up '+d.uptime_s+'s</span>'}catch(e){}}"
 /* Per-printer control panel on each fleet card — mirrors the touchscreen Control screen.
    All onclick args are numeric (printer index, axis 0/1/2, signed distance, feedrate) so
    nothing needs quote-escaping inside these C string literals. */
-"function csnap(i){var p=FL[i];if(!p)return;SNAPU=p.uuid||'';SNAPIDX=i;document.getElementById('snapt').textContent=p.name+' \\u2014 webcam';snapr();document.getElementById('snapm').style.display='flex';}"
+"function csnap(i){var p=FL[i];if(!p)return;SNAPU=p.uuid||'';SNAPIDX=i;document.getElementById('snapt').textContent=p.name+' \\u2014 webcam';snapr();document.getElementById('snapm').style.display='flex';"
+"history.pushState(Object.assign({},history.state||{},{tab:CURTAB,snap:1}),'','#'+TABN[CURTAB]+'/webcam');}"
 "function snapr(){var src=SNAPU?('/api/connect/snapshot?uuid='+SNAPU+'&t='+Date.now()):('/api/printer/snapshot?i='+SNAPIDX+'&t='+Date.now());document.getElementById('snapi').src=src;}"
-"function snapx(){document.getElementById('snapm').style.display='none';document.getElementById('snapi').src='';}"
+"function snapx(){document.getElementById('snapm').style.display='none';document.getElementById('snapi').src='';"
+"if(history.state&&history.state.snap)history.back();}"
 "function cp(r,i){return '<div class=ctlp>'+'<button onclick=csnap('+i+')>&#128247; Webcam</button>'+(r.printing?"
 "'<div class=lbl>JOB</div><button onclick=cpause('+i+')>Pause</button><button onclick=cresume('+i+')>Resume</button><button onclick=cstop('+i+')>Stop</button>':"
 "'<div class=lbl>PREHEAT</div><div><button onclick=cpre('+i+',0)>PLA</button><button onclick=cpre('+i+',1)>PETG</button><button onclick=cpre('+i+',2)>ASA</button><button onclick=cpre('+i+',3)>Cooldown</button></div>'+"
 "'<div class=lbl style=margin-top:8px>MOVE</div><div><button onclick=chome('+i+')>&#8962; Home</button><button onclick=cjog('+i+',0,-10,3000)>X-</button><button onclick=cjog('+i+',0,10,3000)>X+</button><button onclick=cjog('+i+',1,-10,3000)>Y-</button><button onclick=cjog('+i+',1,10,3000)>Y+</button><button onclick=cjog('+i+',2,-10,600)>Z-</button><button onclick=cjog('+i+',2,10,600)>Z+</button></div>')+"
 "'<div id=afc'+i+'></div></div>';}"
+"function cpsdcp(i){return '<div class=ctlp><div class=lbl>JOB</div><button onclick=cpause('+i+')>Pause</button><button onclick=cresume('+i+')>Resume</button><button onclick=cstop('+i+')>Stop</button></div>';}"
 "function cgo(i,op,qs){return fetch('/api/printer/control?i='+i+'&op='+op+(qs||''),{method:'POST'}).then(()=>setTimeout(st,1200)).catch(()=>{});}"
 "function cpause(i){cgo(i,'pause')}"
 "function cresume(i){cgo(i,'resume')}"
@@ -351,14 +372,17 @@ static const char INDEX_HTML[] =
 "async function addc(id,name){await fetch('/api/printers',{method:'POST',body:JSON.stringify({name:name,host:'cloud:'+id,key:'connect'})});lp();alert(tr('Added!'))}"
 "let PL=[],EI=-1;"
 "var CT='klipper';"  /* current add type — Klipper-first */
-"function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
+"function openAddForm(ty){CT=ty;EI=-1;pn.value=ph.value=pk.value=ps.value='';"
 "let b=ty=='bambu',s=ty=='sdcp';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
 "pk.style.display=(b||s)?'none':'';"
 "ph.placeholder=b||s?'Printer IP':(ty=='klipper'?'host or host:7125':'IP / host');"
 "pk.placeholder=b?'LAN Access Code':(ty=='klipper'?'API key (usually blank)':'API key');"
 "pftitle.textContent=({link:'Add a Prusa printer',klipper:'Add a Klipper printer',bambu:'Add a Bambu Lab printer',sdcp:'Add a resin (SDCP) printer'}[ty]||'Add printer');"
-"ppick.style.display='none';pform.style.display='block'}"
-"function pcancel(){pform.style.display='none';ppick.style.display='block';EI=-1}"
+"ppick.style.display='none';pform.style.display='block';}"
+"function pick(ty){if(ty=='connect'||ty=='bcloud'){t(5);return}"
+"openAddForm(ty);history.pushState({tab:1,form:ty},'','#printers/add');}"
+"function pcancel(){if(history.state&&history.state.form){history.back();return;}"
+"pform.style.display='none';ppick.style.display='block';EI=-1;}"
 "async function lp(){PL=await fetch('/api/printers').then(x=>x.json());"
 "document.getElementById('plist').innerHTML=PL.map(p=>'<div class=card style=\"padding:10px 12px\">'+(p.active?'\\u2605 ':'')+'<b>'+p.name+'</b> <span class=muted>'+(p.host.indexOf('cloud:')==0?'\\u2601 Prusa Connect':p.host.indexOf('bambucloud:')==0?'\\u2601 Bambu Cloud':p.host.indexOf('bambu:')==0?'Bambu LAN '+p.host.slice(6):p.host.indexOf('sdcp:')==0?'Resin SDCP '+p.host.slice(5):(p.port==7125?'Klipper ':'')+p.host+(p.port&&p.port!=80&&p.port!=7125?(':'+p.port):'')+(p.haskey?'':' (no key)'))+'</span> '"
 "+'<button class=p onclick=usep('+p.i+')>Use</button> <button onclick=editp('+p.i+')>Edit</button> <button onclick=delp('+p.i+')>Remove</button></div>').join('')}"
@@ -366,7 +390,8 @@ static const char INDEX_HTML[] =
 "pn.value=p.name;pk.value='';ph.value=b?p.host.slice(6):s?p.host.slice(5):p.host;ps.value=p.serial||'';ps.style.display=b?'':'none';bbhint.style.display=b?'':'none';"
 "pk.style.display=(b||s)?'none':'';"
 "ph.placeholder=b||s?'Printer IP':(CT=='klipper'?'host or host:7125':'IP / host');pk.placeholder=b?'LAN Access Code (blank = keep)':(CT=='klipper'?'API key (blank = keep)':'API key (blank = keep)');"
-"pftitle.textContent='Edit '+p.name;ppick.style.display='none';pform.style.display='block'}"
+"pftitle.textContent='Edit '+p.name;ppick.style.display='none';pform.style.display='block';"
+"history.pushState({tab:1,form:CT},'','#printers/edit');}"
 "async function savp(){let host=CT=='bambu'?'bambu:'+ph.value:CT=='sdcp'?'sdcp:'+ph.value:ph.value;let m={name:pn.value,host:host,key:pk.value,serial:ps.value,type:CT};if(EI>=0)m.i=EI;"
 "let r=await fetch(EI<0?'/api/printers':'/api/printers/update',{method:'POST',body:JSON.stringify(m)});"
 "if(r.status>=400)alert(await r.text());else{pcancel();lp()}}"
@@ -543,6 +568,7 @@ static const char INDEX_HTML[] =
 "ns.forEach(function(x){var raw=x.nodeValue,k=raw.trim();if(!k)return;if(d[k]){x.nodeValue=raw.replace(k,d[k]);return;}var m=k.match(/^[^A-Za-z0-9]+(.+)$/);if(m&&d[m[1]])x.nodeValue=raw.replace(m[1],d[m[1]]);});"
 "document.querySelectorAll('[placeholder]').forEach(function(e){var k=e.getAttribute('placeholder');if(d[k])e.setAttribute('placeholder',d[k]);});}"
 "async function winit(){try{var r=await fetch('/api/info').then(x=>x.json());if(r.langcode)WL=r.langcode;}catch(e){}wapply();}"
+"var boot=tabFromHash();t(boot,false);history.replaceState({tab:boot},'','#'+TABN[boot]);"
 "winit();st();la();setInterval(st,3000);"
 "</script></body></html>";
 
@@ -772,7 +798,7 @@ static esp_err_t printers_active_post(httpd_req_t *req)
     cJSON *j = cJSON_Parse(body);
     if (j) {
         const cJSON *iv = cJSON_GetObjectItem(j, "i");
-        if (cJSON_IsNumber(iv)) printer_store_set_active((int)iv->valuedouble);
+        if (cJSON_IsNumber(iv)) app_state_select_printer((int)iv->valuedouble);
         cJSON_Delete(j);
     }
     free(body);
@@ -966,6 +992,7 @@ static esp_err_t fleet_get(httpd_req_t *req)
             cJSON_AddNumberToObject(e, "layer", arr[i].current_layer);
             cJSON_AddNumberToObject(e, "tlayer", arr[i].total_layer);
             cJSON_AddNumberToObject(e, "film", arr[i].release_film);
+            cJSON_AddNumberToObject(e, "filmmax", arr[i].release_film_max);
             cJSON_AddNumberToObject(e, "eta", arr[i].time_remaining);
         } else {
             cJSON_AddNumberToObject(e, "nozzle", (int)arr[i].temp_nozzle);

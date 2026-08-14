@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.8.5"
+#define PP_FW_VERSION "0.8.6"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU, PP_BK_SDCP } pp_backend_t;
@@ -35,6 +35,7 @@ typedef struct {
     int    current_layer;    /* current layer index (-1 if unknown)        */
     int    total_layer;      /* total layer count (-1 if unknown)         */
     int    release_film;     /* SDCP FEP release count (-1 if unknown)    */
+    int    release_film_max; /* SDCP ReleaseFilmMax lifespan (-1 unknown) */
     int    time_remaining;    /* seconds (-1 if unknown)                     */
     int    time_printing;     /* seconds                                     */
     char   job_name[96];      /* display_name of the file being printed      */
