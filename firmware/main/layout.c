@@ -13,11 +13,11 @@ typedef struct { uint8_t cols, n; pp_tile_t tiles[PP_LAYOUT_MAX]; } pp_layout_v0
 const char *const PP_TILE_KEYS[LT_COUNT] = {
     "", "name", "model", "state", "nozzle", "bed", "speed", "z", "progress", "eta", "thumb", "header", "job",
     "pause", "stop", "files", "tools", "move", "temp", "webcam", "macros", "console", "tune", "calib", "afc",
-    "layer_progress"
+    "layer_progress", "lights"
 };
 const char *const PP_TILE_LABELS[LT_COUNT] = {
     "", "PRINTER", "MODEL", "STATE", "NOZZLE", "BED", "SPEED", "Z AXIS", "PROGRESS", "ETA", "", "", "FILE",
-    "", "", "", "", "", "", "", "", "", "", "", "", "LAYER"
+    "", "", "", "", "", "", "", "", "", "", "", "", "LAYER", ""
 };
 
 /* Landscape default (cols=6): hero, telemetry 4-across, job card, action buttons on the bottom row. */

@@ -911,3 +911,178 @@ esp_err_t moonraker_afc_move(const pp_printer_t *pr, int lane_num, int distance_
 esp_err_t moonraker_afc_prep(const pp_printer_t *pr)   { return moonraker_gcode(pr, "BT_PREP"); }
 esp_err_t moonraker_afc_resume(const pp_printer_t *pr) { return moonraker_gcode(pr, "BT_RESUME"); }
 esp_err_t moonraker_afc_clear(const pp_printer_t *pr)  { return moonraker_gcode(pr, "AFC_CLEAR_MESSAGE"); }
+
+static uint8_t led_u8(float v)
+{
+    if (v < 0.f) v = 0.f;
+    if (v > 1.f) v = 1.f;
+    return (uint8_t)(v * 255.f + 0.5f);
+}
+
+static bool led_name_ok(const char *n)
+{
+    if (!n || !n[0] || n[0] == '_') return false;
+    for (const char *p = n; *p; p++) {
+        char c = *p;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return false;
+    }
+    return true;
+}
+
+/* Match "neopixel screen" / "led case" / "led_effect rainbow". Longer prefixes first. */
+static bool led_parse_object(const char *obj, char *type, size_t tl, char *name, size_t nl,
+                             uint8_t *kind, bool *pwm)
+{
+    static const struct { const char *pfx; uint8_t kind; bool pwm; } T[] = {
+        { "led_effect ", PP_LED_KIND_EFFECT, false },
+        { "neopixel ",   PP_LED_KIND_COLOR,  false },
+        { "dotstar ",    PP_LED_KIND_COLOR,  false },
+        { "pca9533 ",    PP_LED_KIND_COLOR,  false },
+        { "pca9632 ",    PP_LED_KIND_COLOR,  false },
+        { "AFC_led ",    PP_LED_KIND_COLOR,  false },
+        { "afc_led ",    PP_LED_KIND_COLOR,  false },
+        { "led ",        PP_LED_KIND_COLOR,  true  },
+    };
+    if (!obj) return false;
+    for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+        size_t n = strlen(T[i].pfx);
+        if (strncmp(obj, T[i].pfx, n) != 0) continue;
+        const char *nm = obj + n;
+        if (!led_name_ok(nm)) return false;
+        if (type && tl) strlcpy(type, T[i].pfx, tl); /* includes trailing space; trim below */
+        if (type && tl) {
+            size_t L = strlen(type);
+            if (L && type[L - 1] == ' ') type[L - 1] = '\0';
+        }
+        if (name && nl) strlcpy(name, nm, nl);
+        if (kind) *kind = T[i].kind;
+        if (pwm) *pwm = T[i].pwm;
+        return true;
+    }
+    return false;
+}
+
+static bool led_json_truthy(const cJSON *v)
+{
+    if (cJSON_IsTrue(v)) return true;
+    if (cJSON_IsNumber(v) && v->valuedouble != 0) return true;
+    return false;
+}
+
+static void led_fill_color(pp_led_t *L, const cJSON *st)
+{
+    if (!L || !st) return;
+    char key[48];
+    snprintf(key, sizeof(key), "%s %s", L->type, L->name);
+    cJSON *o = cJSON_GetObjectItemCaseSensitive(st, key);
+    if (!cJSON_IsObject(o)) return;
+    cJSON *en = cJSON_GetObjectItemCaseSensitive(o, "enabled");
+    if (!en) en = cJSON_GetObjectItemCaseSensitive(o, "running");
+    if (en && (cJSON_IsBool(en) || cJSON_IsNumber(en))) {
+        L->on = led_json_truthy(en);
+        L->on_known = true;
+    }
+    cJSON *cd = cJSON_GetObjectItemCaseSensitive(o, "color_data");
+    if (!cJSON_IsArray(cd) || cJSON_GetArraySize(cd) < 1) return;
+    L->pixels = cJSON_GetArraySize(cd);
+    cJSON *p0 = cJSON_GetArrayItem(cd, 0);
+    if (!cJSON_IsArray(p0)) return;
+    int n = cJSON_GetArraySize(p0);
+    float ch[4] = {0, 0, 0, 0};
+    for (int i = 0; i < n && i < 4; i++) {
+        cJSON *c = cJSON_GetArrayItem(p0, i);
+        if (cJSON_IsNumber(c)) ch[i] = (float)c->valuedouble;
+    }
+    L->r = led_u8(ch[0]);
+    L->g = led_u8(ch[1]);
+    L->b = led_u8(ch[2]);
+    L->w = led_u8(ch[3]);
+    if (!L->on_known && L->kind != PP_LED_KIND_EFFECT) {
+        L->on = (L->r || L->g || L->b || L->w);
+        L->on_known = true;
+    }
+}
+
+esp_err_t moonraker_list_leds(const pp_printer_t *pr, pp_led_list_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+    resp_t r = {0};
+    int sc = 0;
+    if (do_request(pr, HTTP_METHOD_GET, "/printer/objects/list", &r, &sc) != ESP_OK ||
+        sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_FAIL;
+    cJSON *res = cJSON_GetObjectItemCaseSensitive(root, "result");
+    cJSON *objs = res ? cJSON_GetObjectItemCaseSensitive(res, "objects") : NULL;
+    if (cJSON_IsArray(objs)) {
+        cJSON *it;
+        cJSON_ArrayForEach(it, objs) {
+            if (out->count >= PP_LED_MAX) break;
+            if (!cJSON_IsString(it) || !it->valuestring) continue;
+            pp_led_t *L = &out->items[out->count];
+            if (!led_parse_object(it->valuestring, L->type, sizeof(L->type),
+                                  L->name, sizeof(L->name), &L->kind, &L->pwm))
+                continue;
+            L->dimmable = (L->kind != PP_LED_KIND_EFFECT);
+            out->count++;
+        }
+    }
+    cJSON_Delete(root);
+    if (out->count == 0) return ESP_OK;
+
+    char path[768];
+    size_t off = (size_t)snprintf(path, sizeof(path), "/printer/objects/query");
+    for (int i = 0; i < out->count && off + 64 < sizeof(path); i++) {
+        char key[48], enc[64];
+        snprintf(key, sizeof(key), "%s %s", out->items[i].type, out->items[i].name);
+        q_encode(key, enc, sizeof(enc));
+        off += (size_t)snprintf(path + off, sizeof(path) - off, "%c%s", i ? '&' : '?', enc);
+    }
+    r = (resp_t){0};
+    if (do_request(pr, HTTP_METHOD_GET, path, &r, &sc) != ESP_OK || sc != 200 || !r.buf) {
+        free(r.buf);
+        return ESP_OK;   /* names still useful without color_data */
+    }
+    root = cJSON_Parse(r.buf);
+    free(r.buf);
+    if (!root) return ESP_OK;
+    cJSON *st = cJSON_GetObjectItemCaseSensitive(root, "result");
+    if (st) st = cJSON_GetObjectItemCaseSensitive(st, "status");
+    if (cJSON_IsObject(st)) {
+        for (int i = 0; i < out->count; i++)
+            led_fill_color(&out->items[i], st);
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+esp_err_t moonraker_set_led(const pp_printer_t *pr, const char *name,
+                            float r, float g, float b, float w)
+{
+    if (!led_name_ok(name)) return ESP_FAIL;
+    r = (r < 0.f) ? 0.f : (r > 1.f ? 1.f : r);
+    g = (g < 0.f) ? 0.f : (g > 1.f ? 1.f : g);
+    b = (b < 0.f) ? 0.f : (b > 1.f ? 1.f : b);
+    w = (w < 0.f) ? 0.f : (w > 1.f ? 1.f : w);
+    char gcode[128];
+    snprintf(gcode, sizeof(gcode),
+             "SET_LED LED=%s RED=%.3f GREEN=%.3f BLUE=%.3f WHITE=%.3f TRANSMIT=1",
+             name, r, g, b, w);
+    return moonraker_gcode(pr, gcode);
+}
+
+esp_err_t moonraker_set_led_effect(const pp_printer_t *pr, const char *name, bool stop)
+{
+    if (!led_name_ok(name)) return ESP_FAIL;
+    char gcode[96];
+    if (stop) snprintf(gcode, sizeof(gcode), "SET_LED_EFFECT EFFECT=%s STOP=1", name);
+    else      snprintf(gcode, sizeof(gcode), "SET_LED_EFFECT EFFECT=%s", name);
+    return moonraker_gcode(pr, gcode);
+}

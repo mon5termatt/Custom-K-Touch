@@ -22,15 +22,17 @@ static inline bool t_portrait(void) { return tw() < 600; }
 
 /* ---- screens ---- */
 static lv_obj_t *s_hub;
-static lv_obj_t *s_move, *s_temp, *s_webcam, *s_afc, *s_console, *s_macros;
+static lv_obj_t *s_move, *s_temp, *s_webcam, *s_afc, *s_console, *s_macros, *s_lights;
 static lv_obj_t *s_tune, *s_calib, *s_endstops, *s_pid, *s_zoff, *s_mesh, *s_fault;
 static lv_obj_t *s_hub_grid;
 static lv_obj_t *s_hub_afc_btn;
-static lv_obj_t *s_hub_moon_btns[6]; /* macros, console, tune, calib — hide for non-Moonraker */
+static lv_obj_t *s_hub_moon_btns[6]; /* macros, console, tune, calib, lights */
 
 static lv_obj_t *s_console_log;
 static lv_obj_t *s_console_ta;
 static lv_obj_t *s_macros_grid;
+static lv_obj_t *s_leds_grid;
+static lv_obj_t *s_leds_status;
 static lv_obj_t *s_endstop_grid;
 static lv_obj_t *s_endstop_status;
 static lv_obj_t *s_fault_msg;
@@ -38,7 +40,11 @@ static lv_obj_t *s_fault_msg;
 /* Tune / Temp / Z numpad state */
 static lv_obj_t *s_tune_speed_slider, *s_tune_flow_slider;
 static lv_obj_t *s_tune_speed_val, *s_tune_flow_val;
+static lv_obj_t *s_tune_fdm;              /* % speed/flow UI (Moonraker / Connect) */
+static lv_obj_t *s_tune_bambu;            /* Silent/Standard/Sport presets */
+static lv_obj_t *s_bambu_spd_btns[4];
 static int s_tune_speed = 100, s_tune_flow = 100;
+static int s_bambu_spd_lvl = 2;           /* 1 Silent … 4 Ludicrous */
 static lv_obj_t *s_numpad_modal, *s_numpad_ta;
 static float s_numpad_min, s_numpad_max;
 static int s_numpad_decimals;
@@ -66,11 +72,14 @@ static lv_obj_t *s_afc_load_btn[PP_AFC_MAX_LANES];
 static lv_obj_t *s_afc_load_lbl[PP_AFC_MAX_LANES];
 static lv_obj_t *s_afc_eject_btn[PP_AFC_MAX_LANES];
 static lv_obj_t *s_afc_dist_btns[3];
+static lv_obj_t *s_afc_unload_btn;
+static lv_obj_t *s_afc_footer;            /* Move/Prep row — Klipper AFC only */
 static int s_afc_lane_nums[PP_AFC_MAX_LANES];
 static bool s_afc_lane_active[PP_AFC_MAX_LANES];
 static int s_afc_sel_lane;
 static int s_afc_move_mm = 50;
 static int s_afc_n_shown;
+static bool s_afc_is_ams;
 static int s_jog_step = 10;
 static int s_extrude_mm = 15;
 
@@ -396,6 +405,13 @@ static void open_scr(lv_event_t *e)
     if (scr) lv_screen_load(scr);
 }
 
+static void open_tune_hub(lv_event_t *e)
+{
+    (void)e;
+    ui_tools_set_back_to_hub();
+    ui_tools_open_tune();
+}
+
 static void open_webcam(lv_event_t *e)
 {
     (void)e;
@@ -421,6 +437,16 @@ static void open_macros(lv_event_t *e)
     ui_tools_set_back_to_hub();
     app_state_post_cmd(PP_CMD_LIST_MACROS, NULL);
     lv_screen_load(s_macros);
+}
+
+static void open_lights(lv_event_t *e)
+{
+    (void)e;
+    ui_tools_set_back_to_hub();
+    if (s_leds_status) lv_label_set_text(s_leds_status, tr(STR_LOADING));
+    if (s_leds_grid) lv_obj_clean(s_leds_grid);
+    app_state_post_cmd(PP_CMD_LIST_LEDS, NULL);
+    lv_screen_load(s_lights);
 }
 
 static void open_afc(lv_event_t *e)
@@ -491,10 +517,11 @@ static void fill_hub_tiles(void)
     add_hub_tile(s_hub_grid, tr(STR_MOVE), open_scr, s_move, tile_w, tile_h, NULL);
     add_hub_tile(s_hub_grid, tr(STR_TEMPERATURE), open_scr, s_temp, tile_w, tile_h, NULL);
     add_hub_tile(s_hub_grid, tr(STR_WEBCAM), open_webcam, NULL, tile_w, tile_h, NULL);
+    add_hub_tile(s_hub_grid, tr(STR_LIGHTS), open_lights, NULL, tile_w, tile_h, &s_hub_moon_btns[4]);
     add_hub_tile(s_hub_grid, tr(STR_AFC), open_afc, NULL, tile_w, tile_h, &s_hub_afc_btn);
     add_hub_tile(s_hub_grid, tr(STR_MACROS), open_macros, NULL, tile_w, tile_h, &s_hub_moon_btns[0]);
     add_hub_tile(s_hub_grid, tr(STR_CONSOLE), open_console, NULL, tile_w, tile_h, &s_hub_moon_btns[1]);
-    add_hub_tile(s_hub_grid, tr(STR_TUNE), open_scr, s_tune, tile_w, tile_h, &s_hub_moon_btns[2]);
+    add_hub_tile(s_hub_grid, tr(STR_TUNE), open_tune_hub, NULL, tile_w, tile_h, &s_hub_moon_btns[2]);
     add_hub_tile(s_hub_grid, tr(STR_CALIBRATION), open_scr, s_calib, tile_w, tile_h, &s_hub_moon_btns[3]);
     ui_tools_refresh_menu();
     /* Always start hidden — ui_apply_afc reveals after Moonraker detects lanes.
@@ -735,6 +762,12 @@ static void snap_fs_hide(void)
     if (s_snap_modal) lv_obj_add_flag(s_snap_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
+void ui_tools_leave(void)
+{
+    snap_fs_hide();
+    tools_numpad_close();
+}
+
 static void snap_fs_show(void)
 {
     if (s_snap_modal) lv_obj_clear_flag(s_snap_modal, LV_OBJ_FLAG_HIDDEN);
@@ -787,6 +820,9 @@ static void build_webcam(void)
     s_snap_ph = lv_label_create(s_snap_card);
     lv_label_set_text(s_snap_ph, tr(STR_TAP_LOAD_CAM));
     lv_obj_set_style_text_color(s_snap_ph, PP_TEXT_MUTED, 0);
+    lv_label_set_long_mode(s_snap_ph, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_snap_ph, tw() - 64);
+    lv_obj_set_style_text_align(s_snap_ph, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_snap_ph, LV_ALIGN_CENTER, 0, 0);
 
     s_snap_img = lv_image_create(s_snap_card);
@@ -970,7 +1006,7 @@ static void on_afc_select(lv_event_t *e)
 
 static void on_afc_load_unload(lv_event_t *e)
 {
-    if (ui_locked_block_public()) return;
+    if (ui_locked_block_public() || s_afc_is_ams) return;
     int slot = (int)(intptr_t)lv_event_get_user_data(e);
     if (slot < 0 || slot >= PP_AFC_MAX_LANES) return;
     int num = s_afc_lane_nums[slot];
@@ -985,7 +1021,7 @@ static void on_afc_load_unload(lv_event_t *e)
 
 static void on_afc_eject_lane(lv_event_t *e)
 {
-    if (ui_locked_block_public()) return;
+    if (ui_locked_block_public() || s_afc_is_ams) return;
     int slot = (int)(intptr_t)lv_event_get_user_data(e);
     if (slot < 0 || slot >= PP_AFC_MAX_LANES) return;
     int num = s_afc_lane_nums[slot];
@@ -997,13 +1033,13 @@ static void on_afc_eject_lane(lv_event_t *e)
 
 static void on_afc_unload(lv_event_t *e)
 {
-    (void)e; if (ui_locked_block_public()) return;
+    (void)e; if (ui_locked_block_public() || s_afc_is_ams) return;
     app_state_post_cmd(PP_CMD_AFC_UNLOAD, NULL);
 }
 
 static void on_afc_move(lv_event_t *e)
 {
-    if (ui_locked_block_public()) return;
+    if (ui_locked_block_public() || s_afc_is_ams) return;
     int sign = (int)(intptr_t)lv_event_get_user_data(e);
     if (s_afc_sel_lane > 0)
         app_state_post_cmd_n(PP_CMD_AFC_MOVE, s_afc_sel_lane, sign * s_afc_move_mm, 0);
@@ -1011,16 +1047,17 @@ static void on_afc_move(lv_event_t *e)
 
 static void on_afc_dist(lv_event_t *e)
 {
+    if (s_afc_is_ams) return;
     s_afc_move_mm = (int)(intptr_t)lv_event_get_user_data(e);
     afc_refresh_sel_style();
 }
 
 static void on_afc_prep(lv_event_t *e)
-{ (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_PREP, NULL); }
+{ (void)e; if (s_afc_is_ams || ui_locked_block_public()) return; app_state_post_cmd(PP_CMD_AFC_PREP, NULL); }
 static void on_afc_resume(lv_event_t *e)
-{ (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_RESUME, NULL); }
+{ (void)e; if (s_afc_is_ams || ui_locked_block_public()) return; app_state_post_cmd(PP_CMD_AFC_RESUME, NULL); }
 static void on_afc_clear(lv_event_t *e)
-{ (void)e; if (!ui_locked_block_public()) app_state_post_cmd(PP_CMD_AFC_CLEAR, NULL); }
+{ (void)e; if (s_afc_is_ams || ui_locked_block_public()) return; app_state_post_cmd(PP_CMD_AFC_CLEAR, NULL); }
 
 static lv_obj_t *afc_mini_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
                               void *ud, lv_obj_t **out_lbl)
@@ -1075,6 +1112,7 @@ static void build_afc(void)
     lv_obj_align(s_afc_loaded_lbl, LV_ALIGN_LEFT_MID, 120, 0);
 
     lv_obj_t *gunl = make_button(strip, tr(STR_AFC_UNLOAD), on_afc_unload, NULL, NULL);
+    s_afc_unload_btn = gunl;
     lv_obj_set_size(gunl, 88, 32);
     lv_obj_align(gunl, LV_ALIGN_RIGHT_MID, 0, 0);
 
@@ -1164,30 +1202,37 @@ static void build_afc(void)
                                           (void *)(intptr_t)i, NULL);
     }
 
-    /* Lane move + system actions (footer) — KS “Lane Move” lite, no Sensors/More */
-    int fy = th() - 56;
-    lv_obj_t *mm = make_button(s_afc, "Move-", on_afc_move, (void *)(intptr_t)-1, NULL);
-    lv_obj_t *mp = make_button(s_afc, "Move+", on_afc_move, (void *)(intptr_t)1, NULL);
+    /* Lane move + system actions (footer) — KS “Lane Move” lite; hidden for Bambu AMS */
+    s_afc_footer = lv_obj_create(s_afc);
+    lv_obj_set_size(s_afc_footer, tw(), 48);
+    lv_obj_align(s_afc_footer, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(s_afc_footer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_afc_footer, 0, 0);
+    lv_obj_set_style_pad_all(s_afc_footer, 0, 0);
+    lv_obj_clear_flag(s_afc_footer, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *mm = make_button(s_afc_footer, "Move-", on_afc_move, (void *)(intptr_t)-1, NULL);
+    lv_obj_t *mp = make_button(s_afc_footer, "Move+", on_afc_move, (void *)(intptr_t)1, NULL);
     lv_obj_set_size(mm, 72, 36); lv_obj_set_size(mp, 72, 36);
-    lv_obj_align(mm, LV_ALIGN_TOP_LEFT, 16, fy);
-    lv_obj_align(mp, LV_ALIGN_TOP_LEFT, 96, fy);
+    lv_obj_align(mm, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_align(mp, LV_ALIGN_LEFT_MID, 96, 0);
 
     const int dists[] = {20, 50, 100};
     for (int i = 0; i < 3; i++) {
         char buf[12]; snprintf(buf, sizeof(buf), "%d", dists[i]);
-        s_afc_dist_btns[i] = make_button(s_afc, buf, on_afc_dist, (void *)(intptr_t)dists[i], NULL);
+        s_afc_dist_btns[i] = make_button(s_afc_footer, buf, on_afc_dist, (void *)(intptr_t)dists[i], NULL);
         lv_obj_set_user_data(s_afc_dist_btns[i], (void *)(intptr_t)dists[i]);
         lv_obj_set_size(s_afc_dist_btns[i], 48, 36);
-        lv_obj_align(s_afc_dist_btns[i], LV_ALIGN_TOP_LEFT, 180 + i * 56, fy);
+        lv_obj_align(s_afc_dist_btns[i], LV_ALIGN_LEFT_MID, 180 + i * 56, 0);
     }
 
-    lv_obj_t *prep = make_button(s_afc, tr(STR_AFC_PREP), on_afc_prep, NULL, NULL);
-    lv_obj_t *res = make_button(s_afc, tr(STR_RESUME), on_afc_resume, NULL, NULL);
-    lv_obj_t *clr = make_button(s_afc, tr(STR_AFC_CLEAR), on_afc_clear, NULL, NULL);
+    lv_obj_t *prep = make_button(s_afc_footer, tr(STR_AFC_PREP), on_afc_prep, NULL, NULL);
+    lv_obj_t *res = make_button(s_afc_footer, tr(STR_RESUME), on_afc_resume, NULL, NULL);
+    lv_obj_t *clr = make_button(s_afc_footer, tr(STR_AFC_CLEAR), on_afc_clear, NULL, NULL);
     lv_obj_set_size(prep, 64, 36); lv_obj_set_size(res, 72, 36); lv_obj_set_size(clr, 64, 36);
-    lv_obj_align(prep, LV_ALIGN_TOP_RIGHT, -160, fy);
-    lv_obj_align(res, LV_ALIGN_TOP_RIGHT, -84, fy);
-    lv_obj_align(clr, LV_ALIGN_TOP_RIGHT, -16, fy);
+    lv_obj_align(prep, LV_ALIGN_RIGHT_MID, -160, 0);
+    lv_obj_align(res, LV_ALIGN_RIGHT_MID, -84, 0);
+    lv_obj_align(clr, LV_ALIGN_RIGHT_MID, -16, 0);
     afc_refresh_sel_style();
 }
 
@@ -1196,11 +1241,22 @@ void ui_apply_afc(void *arg)
     pp_afc_t *a = (pp_afc_t *)arg;
     if (!a) return;
 
+    s_afc_is_ams = a->is_ams;
     if (s_hub_afc_btn) {
         if (a->present) lv_obj_clear_flag(s_hub_afc_btn, LV_OBJ_FLAG_HIDDEN);
         else            lv_obj_add_flag(s_hub_afc_btn, LV_OBJ_FLAG_HIDDEN);
     }
     ui_status_set_afc_chip(a);
+
+    /* AMS is display-only — hide Klipper AFC action controls. */
+    if (s_afc_unload_btn) {
+        if (a->is_ams) lv_obj_add_flag(s_afc_unload_btn, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_afc_unload_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_afc_footer) {
+        if (a->is_ams) lv_obj_add_flag(s_afc_footer, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_afc_footer, LV_OBJ_FLAG_HIDDEN);
+    }
 
     if (s_afc_state_lbl) {
         if (a->error) {
@@ -1254,6 +1310,15 @@ void ui_apply_afc(void *arg)
         }
         if (s_afc_load_lbl[i])
             lv_label_set_text(s_afc_load_lbl[i], active ? tr(STR_AFC_UNLOAD) : tr(STR_AFC_LOAD));
+
+        if (s_afc_load_btn[i]) {
+            if (a->is_ams) lv_obj_add_flag(s_afc_load_btn[i], LV_OBJ_FLAG_HIDDEN);
+            else           lv_obj_clear_flag(s_afc_load_btn[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_afc_eject_btn[i]) {
+            if (a->is_ams) lv_obj_add_flag(s_afc_eject_btn[i], LV_OBJ_FLAG_HIDDEN);
+            else           lv_obj_clear_flag(s_afc_eject_btn[i], LV_OBJ_FLAG_HIDDEN);
+        }
 
         if (s_afc_swatch[i]) {
             if (L->color[0] == '#') {
@@ -1485,7 +1550,341 @@ static void build_macros(void)
     lv_obj_add_flag(s_macros_grid, LV_OBJ_FLAG_SCROLLABLE);
 }
 
+/* ---- Lights (Klipper [led] PWM + [neopixel] RGB/RGBW) ---- */
+static pp_led_t s_led_copy[PP_LED_MAX];
+static int s_led_n;
+
+static int led_level_pct(const pp_led_t *L)
+{
+    int m = L->r;
+    if (L->g > m) m = L->g;
+    if (L->b > m) m = L->b;
+    if (L->w > m) m = L->w;
+    return (m * 100 + 127) / 255;
+}
+
+static void led_post_color(int idx, uint8_t r, uint8_t g, uint8_t b, uint8_t w)
+{
+    if (idx < 0 || idx >= s_led_n) return;
+    if (!s_led_copy[idx].name[0]) return;
+    int rgb = ((int)r << 16) | ((int)g << 8) | (int)b;
+    app_state_post_cmd_ex(PP_CMD_SET_LED, s_led_copy[idx].name, 0, rgb, (int)w);
+}
+
+static void on_led_onoff(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    int pack = (int)(intptr_t)lv_event_get_user_data(e);
+    int idx = pack >> 1;
+    bool on = pack & 1;
+    if (idx < 0 || idx >= s_led_n) return;
+    const pp_led_t *L = &s_led_copy[idx];
+    if (L->kind == PP_LED_KIND_EFFECT) return;
+    if (!on) { led_post_color(idx, 0, 0, 0, 0); return; }
+    if (L->pwm) led_post_color(idx, 0, 0, 0, 255);
+    else        led_post_color(idx, 255, 255, 255, 255);
+}
+
+static void on_led_fx_toggle(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= s_led_n) return;
+    pp_led_t *L = &s_led_copy[idx];
+    if (L->kind != PP_LED_KIND_EFFECT) return;
+    bool stop = L->on;
+    L->on = !stop;
+    L->on_known = true;
+    app_state_post_cmd_ex(PP_CMD_SET_LED, L->name, stop ? 2 : 1, 0, 0);
+}
+
+static void on_led_preset(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    int pack = (int)(intptr_t)lv_event_get_user_data(e);
+    int idx = pack >> 8;
+    int pre = pack & 0xFF;
+    if (idx < 0 || idx >= s_led_n) return;
+    switch (pre) {
+    case 0: led_post_color(idx, 0, 0, 0, 0); break;
+    case 1: led_post_color(idx, 255, 0, 0, 0); break;
+    case 2: led_post_color(idx, 0, 255, 0, 0); break;
+    case 3: led_post_color(idx, 0, 0, 255, 0); break;
+    case 4: led_post_color(idx, 255, 140, 40, 0); break;   /* warm */
+    case 5: led_post_color(idx, 0, 0, 0, 255); break;      /* white channel (GRBW) */
+    default: break;
+    }
+}
+
+static void on_led_bright(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    lv_obj_t *sl = lv_event_get_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(sl);
+    if (idx < 0 || idx >= s_led_n) return;
+    int pct = (int)lv_slider_get_value(sl);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    pp_led_t L = s_led_copy[idx];
+    int m = L.r;
+    if (L.g > m) m = L.g;
+    if (L.b > m) m = L.b;
+    if (L.w > m) m = L.w;
+    uint8_t r, g, b, w;
+    if (pct == 0) {
+        r = g = b = w = 0;
+    } else if (m == 0) {
+        uint8_t v = (uint8_t)((pct * 255 + 50) / 100);
+        if (L.pwm) { r = g = b = 0; w = v; }
+        else       { r = g = b = w = v; }
+    } else {
+        r = (uint8_t)((L.r * pct * 255) / (m * 100));
+        g = (uint8_t)((L.g * pct * 255) / (m * 100));
+        b = (uint8_t)((L.b * pct * 255) / (m * 100));
+        w = (uint8_t)((L.w * pct * 255) / (m * 100));
+    }
+    led_post_color(idx, r, g, b, w);
+}
+
+static lv_obj_t *led_chip(lv_obj_t *parent, lv_color_t col, const char *txt, lv_event_cb_t cb, void *ud)
+{
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_size(b, 40, 36);
+    lv_obj_set_style_bg_color(b, col, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(b, PP_BORDER, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 4, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    if (txt) {
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, txt);
+        lv_obj_set_style_text_color(l, PP_WHITE, 0);
+        lv_obj_set_style_text_font(l, PP_F14, 0);
+        lv_obj_center(l);
+    }
+    return b;
+}
+
+static void add_led_fx_btn(const pp_led_t *L, int idx)
+{
+    lv_obj_t *tb = make_button(s_leds_grid, L->name, on_led_fx_toggle,
+                               (void *)(intptr_t)idx, NULL);
+    lv_obj_set_size(tb, 176, 40);
+    lv_obj_t *lab = lv_obj_get_child(tb, 0);
+    if (lab) {
+        lv_obj_set_width(lab, 164);
+        lv_label_set_long_mode(lab, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_align(lab, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    if (L->on) {
+        lv_obj_set_style_bg_opa(tb, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(tb, PP_ORANGE, 0);
+    }
+}
+
+static void add_led_card(const pp_led_t *L, int idx, int card_w)
+{
+    int card_h = L->dimmable ? 118 : 88;
+    lv_obj_t *card = make_card(s_leds_grid, card_w, card_h);
+    lv_obj_set_style_pad_all(card, 8, 0);
+
+    lv_color_t swc;
+    if (L->w > L->r && L->w > L->g && L->w > L->b)
+        swc = lv_color_make(L->w, L->w, L->w);
+    else
+        swc = lv_color_make(L->r, L->g, L->b);
+    lv_obj_t *sw = lv_obj_create(card);
+    lv_obj_set_size(sw, 28, 28);
+    lv_obj_set_style_bg_color(sw, swc, 0);
+    lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(sw, 4, 0);
+    lv_obj_set_style_border_color(sw, PP_BORDER, 0);
+    lv_obj_set_style_border_width(sw, 1, 0);
+    lv_obj_set_style_pad_all(sw, 0, 0);
+    lv_obj_align(sw, LV_ALIGN_TOP_LEFT, 0, 4);
+
+    lv_obj_t *nm = lv_label_create(card);
+    lv_label_set_text(nm, L->name);
+    lv_obj_set_style_text_color(nm, PP_TEXT, 0);
+    lv_obj_set_style_text_font(nm, PP_F16, 0);
+    lv_label_set_long_mode(nm, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(nm, (L->pwm || !L->dimmable) ? (card_w - 200) : (card_w - 356));
+    lv_obj_align(nm, LV_ALIGN_TOP_LEFT, 36, 0);
+
+    lv_obj_t *ty = lv_label_create(card);
+    if (L->pixels > 1) lv_label_set_text_fmt(ty, "%s · %d", L->type, L->pixels);
+    else               lv_label_set_text(ty, L->type);
+    lv_obj_set_style_text_color(ty, PP_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(ty, PP_F14, 0);
+    lv_obj_align(ty, LV_ALIGN_TOP_LEFT, 36, 22);
+
+    lv_obj_t *on = make_button(card, tr(STR_LED_ON), on_led_onoff,
+                               (void *)(intptr_t)((idx << 1) | 1), NULL);
+    lv_obj_set_size(on, 64, 40);
+    lv_obj_align(on, LV_ALIGN_TOP_RIGHT, -72, 2);
+    lv_obj_t *off = make_button(card, tr(STR_LED_OFF), on_led_onoff,
+                                (void *)(intptr_t)(idx << 1), NULL);
+    lv_obj_set_size(off, 64, 40);
+    lv_obj_align(off, LV_ALIGN_TOP_RIGHT, 0, 2);
+
+    if (!L->dimmable) return;
+
+    lv_obj_t *sl = lv_slider_create(card);
+    lv_obj_set_width(sl, card_w - 24);
+    lv_slider_set_range(sl, 0, 100);
+    lv_slider_set_value(sl, led_level_pct(L), LV_ANIM_OFF);
+    lv_obj_align(sl, LV_ALIGN_TOP_MID, 0, 52);
+    lv_obj_set_style_bg_color(sl, PP_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_user_data(sl, (void *)(intptr_t)idx);
+    lv_obj_add_event_cb(sl, on_led_bright, LV_EVENT_RELEASED, NULL);
+
+    if (L->pwm) return;
+
+    /* Color chips sit left of On/Off on the same row (8px gap, 40px chips). */
+    lv_obj_t *cW = led_chip(card, lv_color_make(230, 230, 230), tr(STR_LED_WHITE), on_led_preset,
+                            (void *)(intptr_t)((idx << 8) | 5));
+    lv_obj_align(cW, LV_ALIGN_TOP_RIGHT, -144, 4);
+    lv_obj_t *wl = lv_obj_get_child(cW, 0);
+    if (wl) lv_obj_set_style_text_color(wl, lv_color_make(40, 40, 40), 0);
+    lv_obj_t *cw = led_chip(card, lv_color_make(255, 160, 60), NULL, on_led_preset,
+                            (void *)(intptr_t)((idx << 8) | 4));
+    lv_obj_align(cw, LV_ALIGN_TOP_RIGHT, -192, 4);
+    lv_obj_t *cb = led_chip(card, lv_color_make(40, 80, 220), NULL, on_led_preset,
+                            (void *)(intptr_t)((idx << 8) | 3));
+    lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, -240, 4);
+    lv_obj_t *cg = led_chip(card, lv_color_make(40, 180, 60), NULL, on_led_preset,
+                            (void *)(intptr_t)((idx << 8) | 2));
+    lv_obj_align(cg, LV_ALIGN_TOP_RIGHT, -288, 4);
+    lv_obj_t *cr = led_chip(card, lv_color_make(200, 40, 40), NULL, on_led_preset,
+                            (void *)(intptr_t)((idx << 8) | 1));
+    lv_obj_align(cr, LV_ALIGN_TOP_RIGHT, -336, 4);
+}
+
+void ui_apply_leds(void *arg)
+{
+    pp_led_list_t *ll = (pp_led_list_t *)arg;
+    if (!ll) return;
+    int32_t sy = 0;
+    if (s_leds_grid) sy = lv_obj_get_scroll_y(s_leds_grid);
+    /* Keep last commanded effect state when Moonraker omits enabled/running. */
+    for (int i = 0; i < ll->count && i < PP_LED_MAX; i++) {
+        pp_led_t *N = &ll->items[i];
+        if (N->kind != PP_LED_KIND_EFFECT || N->on_known) continue;
+        for (int j = 0; j < s_led_n; j++) {
+            if (s_led_copy[j].kind == PP_LED_KIND_EFFECT &&
+                strcmp(s_led_copy[j].name, N->name) == 0) {
+                N->on = s_led_copy[j].on;
+                N->on_known = true;
+                break;
+            }
+        }
+    }
+    s_led_n = 0;
+    if (s_leds_grid) {
+        lv_obj_clean(s_leds_grid);
+        if (ll->count <= 0) {
+            if (s_leds_status) {
+                lv_label_set_text(s_leds_status, tr(STR_NO_LEDS));
+                lv_obj_clear_flag(s_leds_status, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            if (s_leds_status) lv_obj_add_flag(s_leds_status, LV_OBJ_FLAG_HIDDEN);
+            const int card_w = tw() - 32;
+            for (int i = 0; i < ll->count && i < PP_LED_MAX; i++) {
+                s_led_copy[i] = ll->items[i];
+                s_led_n++;
+                if (s_led_copy[i].kind != PP_LED_KIND_EFFECT)
+                    add_led_card(&s_led_copy[i], i, card_w);
+            }
+            for (int i = 0; i < s_led_n; i++) {
+                if (s_led_copy[i].kind == PP_LED_KIND_EFFECT)
+                    add_led_fx_btn(&s_led_copy[i], i);
+            }
+            lv_obj_update_layout(s_leds_grid);
+            lv_obj_scroll_to_y(s_leds_grid, sy, LV_ANIM_OFF);
+        }
+    }
+    free(ll);
+}
+
+static void build_lights(void)
+{
+    s_lights = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_lights, PP_BG, 0);
+    make_hdr(s_lights, tr(STR_LIGHTS), tools_go_back);
+    s_leds_status = lv_label_create(s_lights);
+    lv_label_set_text(s_leds_status, tr(STR_LOADING));
+    lv_obj_set_style_text_color(s_leds_status, PP_TEXT_MUTED, 0);
+    lv_obj_align(s_leds_status, LV_ALIGN_CENTER, 0, 0);
+    s_leds_grid = lv_obj_create(s_lights);
+    lv_obj_set_size(s_leds_grid, LV_PCT(100), th() - 56);
+    lv_obj_align(s_leds_grid, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_bg_color(s_leds_grid, PP_BG, 0);
+    lv_obj_set_style_border_width(s_leds_grid, 0, 0);
+    lv_obj_set_style_pad_all(s_leds_grid, 16, 0);
+    lv_obj_set_style_pad_row(s_leds_grid, 10, 0);
+    lv_obj_set_style_pad_column(s_leds_grid, 8, 0);
+    lv_obj_set_flex_flow(s_leds_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_add_flag(s_leds_grid, LV_OBJ_FLAG_SCROLLABLE);
+}
+
 /* ---- Tune ---- */
+static void tune_set_speed_lbl(void);
+static void tune_set_flow_lbl(void);
+
+static int bambu_pct_to_lvl(int pct)
+{
+    /* spd_mag / mapped %: Silent~50, Standard~100, Sport~124, Ludicrous~166. */
+    if (pct <= 60) return 1;
+    if (pct <= 110) return 2;
+    if (pct <= 140) return 3;
+    return 4;
+}
+
+static void bambu_spd_highlight(int lvl)
+{
+    if (lvl < 1) lvl = 1;
+    if (lvl > 4) lvl = 4;
+    s_bambu_spd_lvl = lvl;
+    for (int i = 0; i < 4; i++) {
+        if (!s_bambu_spd_btns[i]) continue;
+        bool on = (i + 1) == lvl;
+        lv_obj_set_style_border_color(s_bambu_spd_btns[i], on ? PP_ORANGE : PP_BORDER, 0);
+        lv_obj_set_style_border_width(s_bambu_spd_btns[i], on ? 2 : 1, 0);
+    }
+}
+
+static void tune_apply_backend(void)
+{
+    bool bambu = app_state_active_is_bambu();
+    if (s_tune_fdm) {
+        if (bambu) lv_obj_add_flag(s_tune_fdm, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(s_tune_fdm, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_tune_bambu) {
+        if (bambu) lv_obj_clear_flag(s_tune_bambu, LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_add_flag(s_tune_bambu, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (bambu) {
+        pp_status_t st;
+        app_state_get(&st);
+        bambu_spd_highlight(bambu_pct_to_lvl(st.speed));
+    } else {
+        pp_status_t st;
+        app_state_get(&st);
+        if (st.speed > 0) {
+            s_tune_speed = st.speed;
+            if (s_tune_speed_slider) {
+                int sv = s_tune_speed > 200 ? 200 : s_tune_speed;
+                lv_slider_set_value(s_tune_speed_slider, sv, LV_ANIM_OFF);
+            }
+            tune_set_speed_lbl();
+        }
+    }
+}
+
 static void tune_set_speed_lbl(void)
 {
     if (!s_tune_speed_val) return;
@@ -1573,75 +1972,118 @@ static void on_flow(lv_event_t *e)
     app_state_post_cmd_n(PP_CMD_SET_FLOW, 0, v, 0);
 }
 
+static void on_bambu_spd(lv_event_t *e)
+{
+    if (ui_locked_block_public()) return;
+    int lvl = (int)(intptr_t)lv_event_get_user_data(e);
+    bambu_spd_highlight(lvl);
+    app_state_post_cmd_n(PP_CMD_SET_SPEED, 0, lvl, 0);
+}
+
 static void build_tune(void)
 {
     s_tune = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_tune, PP_BG, 0);
     make_hdr(s_tune, tr(STR_TUNE), tools_go_back);
 
-    lv_obj_t *sl = lv_label_create(s_tune);
+    /* Moonraker / Connect: continuous % speed + flow */
+    s_tune_fdm = lv_obj_create(s_tune);
+    lv_obj_set_size(s_tune_fdm, tw(), th() - 56);
+    lv_obj_align(s_tune_fdm, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_bg_opa(s_tune_fdm, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_tune_fdm, 0, 0);
+    lv_obj_set_style_pad_all(s_tune_fdm, 0, 0);
+    lv_obj_clear_flag(s_tune_fdm, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *sl = lv_label_create(s_tune_fdm);
     lv_label_set_text(sl, tr(STR_SPEED_FACTOR));
     lv_obj_set_style_text_color(sl, PP_TEXT_MUTED, 0);
-    lv_obj_align(sl, LV_ALIGN_TOP_LEFT, 16, 70);
+    lv_obj_align(sl, LV_ALIGN_TOP_LEFT, 16, 14);
 
-    s_tune_speed_val = lv_label_create(s_tune);
+    s_tune_speed_val = lv_label_create(s_tune_fdm);
     lv_obj_set_style_text_color(s_tune_speed_val, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_tune_speed_val, PP_F20, 0);
-    lv_obj_align(s_tune_speed_val, LV_ALIGN_TOP_RIGHT, -100, 66);
+    lv_obj_align(s_tune_speed_val, LV_ALIGN_TOP_RIGHT, -100, 10);
     lv_obj_add_flag(s_tune_speed_val, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_tune_speed_val, on_speed_val_click, LV_EVENT_CLICKED, NULL);
     tune_set_speed_lbl();
-    lv_obj_t *sp_set = make_button(s_tune, "Set...", on_speed_val_click, NULL, NULL);
+    lv_obj_t *sp_set = make_button(s_tune_fdm, "Set...", on_speed_val_click, NULL, NULL);
     lv_obj_set_size(sp_set, 72, 36);
-    lv_obj_align(sp_set, LV_ALIGN_TOP_RIGHT, -16, 64);
+    lv_obj_align(sp_set, LV_ALIGN_TOP_RIGHT, -16, 8);
 
-    s_tune_speed_slider = lv_slider_create(s_tune);
+    s_tune_speed_slider = lv_slider_create(s_tune_fdm);
     lv_obj_set_width(s_tune_speed_slider, tw() - 32);
     lv_slider_set_range(s_tune_speed_slider, 1, 200);
     lv_slider_set_value(s_tune_speed_slider, s_tune_speed, LV_ANIM_OFF);
-    lv_obj_align(s_tune_speed_slider, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_align(s_tune_speed_slider, LV_ALIGN_TOP_MID, 0, 44);
     lv_obj_set_style_bg_color(s_tune_speed_slider, PP_ORANGE, LV_PART_INDICATOR);
     lv_obj_add_event_cb(s_tune_speed_slider, on_speed_slider, LV_EVENT_RELEASED, NULL);
 
     const int sp[] = {50, 100, 150, 200};
     for (int i = 0; i < 4; i++) {
         char buf[8]; snprintf(buf, sizeof(buf), "%d%%", sp[i]);
-        lv_obj_t *b = make_button(s_tune, buf, on_speed, (void *)(intptr_t)sp[i], NULL);
+        lv_obj_t *b = make_button(s_tune_fdm, buf, on_speed, (void *)(intptr_t)sp[i], NULL);
         lv_obj_set_size(b, 70, 40);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 140);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 84);
     }
 
-    lv_obj_t *fl = lv_label_create(s_tune);
+    lv_obj_t *fl = lv_label_create(s_tune_fdm);
     lv_label_set_text(fl, tr(STR_FLOW_FACTOR));
     lv_obj_set_style_text_color(fl, PP_TEXT_MUTED, 0);
-    lv_obj_align(fl, LV_ALIGN_TOP_LEFT, 16, 200);
+    lv_obj_align(fl, LV_ALIGN_TOP_LEFT, 16, 144);
 
-    s_tune_flow_val = lv_label_create(s_tune);
+    s_tune_flow_val = lv_label_create(s_tune_fdm);
     lv_obj_set_style_text_color(s_tune_flow_val, PP_ORANGE, 0);
     lv_obj_set_style_text_font(s_tune_flow_val, PP_F20, 0);
-    lv_obj_align(s_tune_flow_val, LV_ALIGN_TOP_RIGHT, -100, 196);
+    lv_obj_align(s_tune_flow_val, LV_ALIGN_TOP_RIGHT, -100, 140);
     lv_obj_add_flag(s_tune_flow_val, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_tune_flow_val, on_flow_val_click, LV_EVENT_CLICKED, NULL);
     tune_set_flow_lbl();
-    lv_obj_t *fl_set = make_button(s_tune, "Set...", on_flow_val_click, NULL, NULL);
+    lv_obj_t *fl_set = make_button(s_tune_fdm, "Set...", on_flow_val_click, NULL, NULL);
     lv_obj_set_size(fl_set, 72, 36);
-    lv_obj_align(fl_set, LV_ALIGN_TOP_RIGHT, -16, 194);
+    lv_obj_align(fl_set, LV_ALIGN_TOP_RIGHT, -16, 138);
 
-    s_tune_flow_slider = lv_slider_create(s_tune);
+    s_tune_flow_slider = lv_slider_create(s_tune_fdm);
     lv_obj_set_width(s_tune_flow_slider, tw() - 32);
     lv_slider_set_range(s_tune_flow_slider, 1, 200);
     lv_slider_set_value(s_tune_flow_slider, s_tune_flow, LV_ANIM_OFF);
-    lv_obj_align(s_tune_flow_slider, LV_ALIGN_TOP_MID, 0, 230);
+    lv_obj_align(s_tune_flow_slider, LV_ALIGN_TOP_MID, 0, 174);
     lv_obj_set_style_bg_color(s_tune_flow_slider, PP_ORANGE, LV_PART_INDICATOR);
     lv_obj_add_event_cb(s_tune_flow_slider, on_flow_slider, LV_EVENT_RELEASED, NULL);
 
     const int flv[] = {95, 100, 105, 110};
     for (int i = 0; i < 4; i++) {
         char buf[8]; snprintf(buf, sizeof(buf), "%d%%", flv[i]);
-        lv_obj_t *b = make_button(s_tune, buf, on_flow, (void *)(intptr_t)flv[i], NULL);
+        lv_obj_t *b = make_button(s_tune_fdm, buf, on_flow, (void *)(intptr_t)flv[i], NULL);
         lv_obj_set_size(b, 70, 40);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 270);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 16 + i * 78, 214);
     }
+
+    /* Bambu: four named presets (Silent / Standard / Sport / Ludicrous) */
+    s_tune_bambu = lv_obj_create(s_tune);
+    lv_obj_set_size(s_tune_bambu, tw(), th() - 56);
+    lv_obj_align(s_tune_bambu, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_set_style_bg_opa(s_tune_bambu, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_tune_bambu, 0, 0);
+    lv_obj_set_style_pad_all(s_tune_bambu, 0, 0);
+    lv_obj_clear_flag(s_tune_bambu, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_tune_bambu, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *bl = lv_label_create(s_tune_bambu);
+    lv_label_set_text(bl, tr(STR_SPEED_FACTOR));
+    lv_obj_set_style_text_color(bl, PP_TEXT_MUTED, 0);
+    lv_obj_align(bl, LV_ALIGN_TOP_LEFT, 16, 12);
+
+    static const char *const names[] = {"Silent", "Standard", "Sport", "Ludicrous"};
+    const int btn_h = 48;
+    const int gap = 8;
+    for (int i = 0; i < 4; i++) {
+        s_bambu_spd_btns[i] = make_button(s_tune_bambu, names[i], on_bambu_spd,
+                                          (void *)(intptr_t)(i + 1), NULL);
+        lv_obj_set_size(s_bambu_spd_btns[i], tw() - 32, btn_h);
+        lv_obj_align(s_bambu_spd_btns[i], LV_ALIGN_TOP_MID, 0, 40 + i * (btn_h + gap));
+    }
+    bambu_spd_highlight(2);
 }
 
 /* ---- Calibration ---- */
@@ -1896,9 +2338,12 @@ void ui_tools_show_fault_if_needed(const char *state)
 void ui_tools_refresh_menu(void)
 {
     bool moon = app_state_active_is_moonraker();
-    for (int i = 0; i < 4; i++) {
+    bool bambu = app_state_active_is_bambu();
+    for (int i = 0; i < 5; i++) {
         if (!s_hub_moon_btns[i]) continue;
-        if (moon) lv_obj_clear_flag(s_hub_moon_btns[i], LV_OBJ_FLAG_HIDDEN);
+        /* Tune (2) and Lights (4) are available for Moonraker and Bambu. */
+        bool show = moon || (bambu && (i == 2 || i == 4));
+        if (show) lv_obj_clear_flag(s_hub_moon_btns[i], LV_OBJ_FLAG_HIDDEN);
         else      lv_obj_add_flag(s_hub_moon_btns[i], LV_OBJ_FLAG_HIDDEN);
     }
     /* AFC visibility driven by ui_apply_afc */
@@ -1912,6 +2357,7 @@ void ui_tools_init(void)
     build_afc();
     build_console();
     build_macros();
+    build_lights();
     build_tune();
     build_calib();
     build_fault();
@@ -1936,7 +2382,11 @@ void ui_tools_open_afc(void)
 
 void ui_tools_open_move(void)   { lv_screen_load(s_move); }
 void ui_tools_open_temp(void)   { lv_screen_load(s_temp); }
-void ui_tools_open_tune(void)   { lv_screen_load(s_tune); }
+void ui_tools_open_tune(void)
+{
+    tune_apply_backend();
+    lv_screen_load(s_tune);
+}
 void ui_tools_open_calib(void)  { lv_screen_load(s_calib); }
 
 void ui_tools_open_webcam(void)
@@ -1957,6 +2407,17 @@ void ui_tools_open_macros(void)
 {
     app_state_post_cmd(PP_CMD_LIST_MACROS, NULL);
     lv_screen_load(s_macros);
+}
+
+void ui_tools_open_lights(void)
+{
+    if (s_leds_status) {
+        lv_label_set_text(s_leds_status, tr(STR_LOADING));
+        lv_obj_clear_flag(s_leds_status, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_leds_grid) lv_obj_clean(s_leds_grid);
+    app_state_post_cmd(PP_CMD_LIST_LEDS, NULL);
+    lv_screen_load(s_lights);
 }
 
 lv_obj_t *ui_tools_hub_screen(void) { return s_hub; }

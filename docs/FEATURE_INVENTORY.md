@@ -16,15 +16,16 @@ Living checklist. Legend: **Have** / **Partial** / **Missing** / **Skip** / **We
 | Calibration (endstops/PID/Z/mesh) | Have | |
 | E-stop chrome | Have | Moonraker |
 | Klipper fault page | Have | RESTART / FIRMWARE_RESTART |
-| Multi-cam / LED notes | Web-only | Notes textarea only — see multi-LED backlog |
-| Multi-fan / multi-LED Tools | Missing | Backlog below (COSMOS + SV08) |
+| Multi-cam / LED notes | Partial | Notes textarea remains; live LED control on touch + web |
+| Multi-fan Tools | Missing | Single `M106` — fan backlog below |
+| Multi-LED Tools | Have | Discover `led` / `neopixel` / `led_effect` / `AFC_led`; Lights screen + `/api/leds` |
 | LAN Moonraker scan | Deferred | Manual host/port only |
 | Prusa / Bambu backends | Have | Kept, demoted in Tools |
 | Panda PWR / battery HW | Skip | |
 
 ## Backlog — multi-fan & multi-LED (COSMOS + SV08)
 
-Today: one part-cooling fan via `M106`. LEDs are freeform web notes only.
+Today: one part-cooling fan via `M106`. LEDs: Tools → **Lights** plus web Advanced live controls (`SET_LED`). Notes textarea is optional labels only.
 
 ### Printer object map (from `/printer/objects/list`)
 
@@ -48,11 +49,9 @@ Today: one part-cooling fan via `M106`. LEDs are freeform web notes only.
 | | `AFC_led AFC_Indicator`, `neopixel Turtle` |
 | | macros `TURN_ON/OFF_AFC_LED`, `STATUS_*` |
 
-### Future work
+### Future work (fans)
 
-1. **Discover** — Moonraker: list fan-like objects (`fan`, `fan_generic`, `heater_fan`, `temperature_fan`, `controller_fan`) and LED-like (`led`, `neopixel`, `led_effect`, `AFC_led`); skip underscore-hidden where appropriate.
+1. **Discover** — Moonraker: list fan-like objects (`fan`, `fan_generic`, `heater_fan`, `temperature_fan`, `controller_fan`); skip underscore-hidden where appropriate.
 2. **Fan Tools screen** — Per-fan speed (0–100%) via `SET_FAN_SPEED FAN=<name> SPEED=…` (not only `M106`); show readback from object query; hide or mark auto fans (`heater_fan` / `controller_fan` / `temperature_fan`) as info-only or capped control.
-3. **LED Tools screen** — Per-target on/off, brightness, RGB where supported (`SET_LED` / printer macros); SV08: optional presets via existing `STATUS_*` / `led_effect` macros; AFC indicator as separate chip when present.
-4. **Hub tiles** — Add Fans + Lights tiles (Moonraker-only), similar to Macros/Tune.
-5. **Prefs (optional)** — Pin favorite fans/LEDs per printer (macro-pin pattern).
-6. **Web** — Replace or supplement Advanced “LED notes” with live controls; keep notes as optional labels only.
+3. **Hub tile** — Add Fans (Moonraker-only).
+4. **Prefs (optional)** — Pin favorite fans per printer (macro-pin pattern).

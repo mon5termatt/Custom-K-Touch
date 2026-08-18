@@ -49,6 +49,13 @@ if not exist "build\klipper-touch.elf" goto :build_fail
 if not exist "build\klipper-touch.bin" goto :build_fail
 rem Confirm main lib was rebuilt this run (ninja updates it when sources compile).
 if not exist "build\esp-idf\main\libmain.a" goto :build_fail
+rem eim sometimes returns 0 even when ninja fails; do not flash a stale .bin.
+for /f "delims=" %%F in ('dir /b /o-d "build\log\idf_py_stdout_output_*" 2^>nul') do (
+  findstr /C:"ninja failed" "build\log\%%F" >nul 2>&1
+  if not errorlevel 1 goto :build_fail
+  goto :log_ok
+)
+:log_ok
 
 echo.
 echo === Flashing %PORT% @ %BAUD% (NVS preserved) ===

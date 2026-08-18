@@ -140,6 +140,22 @@ bool app_state_active_is_bambu(void)
     return detect_backend(aidx, &apr) == PP_BK_BAMBU;
 }
 
+/* Push AFC/AMS snapshot to UI when it differs from the cached copy. */
+static void publish_afc_if_changed(const pp_afc_t *fresh)
+{
+    bool changed = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    changed = (memcmp(&s_afc, fresh, sizeof(*fresh)) != 0);
+    s_afc = *fresh;
+    xSemaphoreGive(s_lock);
+
+    if (!changed) return;
+    pp_afc_t *copy = malloc(sizeof(*copy));
+    if (!copy) return;
+    *copy = *fresh;
+    if (pt_display_schedule_ui(ui_apply_afc, copy) != LV_RESULT_OK) free(copy);
+}
+
 /* Refresh AFC for the active Moonraker printer and push to the UI when it changes. */
 static void refresh_afc_active(void)
 {
@@ -151,18 +167,7 @@ static void refresh_afc_active(void)
         if (aidx >= 0 && detect_backend(aidx, &apr) == PP_BK_MOONRAKER)
             moonraker_get_afc(&apr, &fresh);
     }
-
-    bool changed = false;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    changed = (memcmp(&s_afc, &fresh, sizeof(fresh)) != 0);
-    s_afc = fresh;
-    xSemaphoreGive(s_lock);
-
-    if (!changed) return;
-    pp_afc_t *copy = malloc(sizeof(*copy));
-    if (!copy) return;
-    *copy = fresh;
-    if (pt_display_schedule_ui(ui_apply_afc, copy) != LV_RESULT_OK) free(copy);
+    publish_afc_if_changed(&fresh);
 }
 
 void app_state_printers_changed(void)
@@ -241,6 +246,13 @@ void app_state_apply_update(void)
 void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b)
 {
     pp_cmd_t cmd = { .kind = kind, .index = index, .i32a = i32a, .i32b = i32b };
+    if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
+}
+
+void app_state_post_cmd_ex(pp_cmd_kind_t kind, const char *path, int index, int i32a, int i32b)
+{
+    pp_cmd_t cmd = { .kind = kind, .index = index, .i32a = i32a, .i32b = i32b };
+    if (path) strlcpy(cmd.path, path, sizeof(cmd.path));
     if (s_cmds) xQueueSend(s_cmds, &cmd, 0);
 }
 
@@ -407,6 +419,9 @@ static bool poll_printer(int i)
     int active = printer_store_active();
     pp_backend_t bk = detect_backend(i, &pr);
     pp_status_t fresh;
+    pp_afc_t ams_snap;
+    bool have_ams = false;
+    memset(&ams_snap, 0, sizeof(ams_snap));
 
     if (bk == PP_BK_PRUSA_CONNECT) {
         /* Local PrusaLink is a FALLBACK, used ONLY when the Connect session has expired.
@@ -431,10 +446,13 @@ static bool poll_printer(int i)
     }
 
     if (bk == PP_BK_BAMBU) {
-        if (bambu_get_status_of(&pr, &fresh) != ESP_OK) {
+        /* Active: also parse AMS trays for the AFC panel (display-only). */
+        esp_err_t br = bambu_get_status_afc(&pr, &fresh, (i == active) ? &ams_snap : NULL);
+        if (br != ESP_OK) {
             /* Unreachable (off, wrong access code, or Developer Mode disabled): show offline. */
             return mark_printer_offline(i, &pr, active);
         }
+        if (i == active) have_ams = true;
         /* The report carries identity inline; cache model + firmware for the fleet card. */
         if (i >= 0 && i < PP_MAX_PRINTERS) {
             bool need = (s_info_model[i][0] == '\0' ||
@@ -579,8 +597,16 @@ static bool poll_printer(int i)
     if (i == active) s_status = fresh;
     xSemaphoreGive(s_lock);
 
-    /* AFC lanes: only for the active Moonraker printer (Control / Status consumers). */
-    if (i == active && bk == PP_BK_MOONRAKER && fresh.online) refresh_afc_active();
+    /* AFC/AMS lanes for the active printer (Control / Status consumers). */
+    if (i == active && fresh.online) {
+        if (bk == PP_BK_MOONRAKER) refresh_afc_active();
+        else if (bk == PP_BK_BAMBU && have_ams) publish_afc_if_changed(&ams_snap);
+        else if (bk != PP_BK_MOONRAKER && bk != PP_BK_BAMBU) {
+            pp_afc_t empty;
+            memset(&empty, 0, sizeof(empty));
+            publish_afc_if_changed(&empty);
+        }
+    }
     return changed;
 }
 
@@ -934,8 +960,13 @@ static void run_command(const pp_cmd_t *cmd)
         return;
     }
     case PP_CMD_SET_SPEED: {
-        char g[20]; snprintf(g, sizeof(g), "M220 S%d", cmd->i32a);
-        if (have_apr) be_gcode(abk, &apr, g);
+        if (bambu && have_apr) {
+            /* i32a = Bambu preset level 1–4 (Silent/Standard/Sport/Ludicrous). */
+            bambu_set_speed(&apr, cmd->i32a);
+        } else if (have_apr) {
+            char g[20]; snprintf(g, sizeof(g), "M220 S%d", cmd->i32a);
+            be_gcode(abk, &apr, g);
+        }
         return;
     }
     case PP_CMD_SET_FLOW: {
@@ -1002,6 +1033,39 @@ static void run_command(const pp_cmd_t *cmd)
         if (!ml) return;
         if (moonraker_list_macros(&apr, ml) != ESP_OK) { free(ml); return; }
         if (pt_display_schedule_ui(ui_apply_macros, ml) != LV_RESULT_OK) free(ml);
+        return;
+    }
+    case PP_CMD_SET_LED: {
+        if (!have_apr || !cmd->path[0]) return;
+        if (bambu) {
+            bool on = (cmd->index != 2) &&
+                      (cmd->index == 1 || cmd->i32a != 0 || (cmd->i32b & 0xFF) != 0);
+            bambu_set_light(&apr, cmd->path, on);
+        } else if (moon) {
+            if (cmd->index == 1) moonraker_set_led_effect(&apr, cmd->path, false);
+            else if (cmd->index == 2) moonraker_set_led_effect(&apr, cmd->path, true);
+            else {
+                float r = ((cmd->i32a >> 16) & 0xFF) / 255.f;
+                float g = ((cmd->i32a >>  8) & 0xFF) / 255.f;
+                float b = ( cmd->i32a        & 0xFF) / 255.f;
+                float w = (cmd->i32b & 0xFF) / 255.f;
+                moonraker_set_led(&apr, cmd->path, r, g, b, w);
+            }
+        } else return;
+        pp_led_list_t *lls = malloc(sizeof(*lls));
+        if (!lls) return;
+        esp_err_t lr = bambu ? bambu_list_leds(&apr, lls) : moonraker_list_leds(&apr, lls);
+        if (lr != ESP_OK) { free(lls); return; }
+        if (pt_display_schedule_ui(ui_apply_leds, lls) != LV_RESULT_OK) free(lls);
+        return;
+    }
+    case PP_CMD_LIST_LEDS: {
+        if (!have_apr || (!moon && !bambu)) return;
+        pp_led_list_t *ll = malloc(sizeof(*ll));
+        if (!ll) return;
+        esp_err_t lr = bambu ? bambu_list_leds(&apr, ll) : moonraker_list_leds(&apr, ll);
+        if (lr != ESP_OK) { free(ll); return; }
+        if (pt_display_schedule_ui(ui_apply_leds, ll) != LV_RESULT_OK) free(ll);
         return;
     }
     case PP_CMD_KLIPPER_RESTART:

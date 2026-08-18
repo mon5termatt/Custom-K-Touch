@@ -52,6 +52,7 @@ void sim_set_active(int idx) { if (idx >= 0 && idx < s_mock_n) s_active = idx; }
 /* ---------- app_state (no backend in sim) ---------- */
 void app_state_post_cmd(pp_cmd_kind_t k, const char *p) { (void)k; (void)p; }
 void app_state_post_cmd_n(pp_cmd_kind_t k, int i, int a, int b) { (void)k; (void)i; (void)a; (void)b; }
+void app_state_post_cmd_ex(pp_cmd_kind_t k, const char *p, int i, int a, int b) { (void)k; (void)p; (void)i; (void)a; (void)b; }
 void app_state_dialog_action(int id, const char *btn) { (void)id; (void)btn; }
 void app_state_select_printer(int i) { (void)i; }
 void app_state_refresh_dashboard(void) {}

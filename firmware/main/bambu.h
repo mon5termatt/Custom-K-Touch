@@ -14,14 +14,22 @@
  * The mqtt session helpers are parameterized by broker URI + credentials so the planned Bambu
  * Cloud backend can reuse the same report parser and command payloads. */
 #include "pandaprusa.h"
+#include "moonraker.h"
 #include "esp_err.h"
 
 bool      bambu_is(const pp_printer_t *pr);              /* host starts with "bambu:" */
 esp_err_t bambu_get_status_of(const pp_printer_t *pr, pp_status_t *out);
+/* Same as get_status_of; when afc != NULL, fills AMS trays (display-only, present=false if none). */
+esp_err_t bambu_get_status_afc(const pp_printer_t *pr, pp_status_t *out, pp_afc_t *afc);
 esp_err_t bambu_pause(const pp_printer_t *pr);
 esp_err_t bambu_resume(const pp_printer_t *pr);
 esp_err_t bambu_stop(const pp_printer_t *pr);
 esp_err_t bambu_gcode(const pp_printer_t *pr, const char *gcode);   /* raw M/G-code via gcode_line */
+/* Print speed preset: 1=Silent, 2=Standard, 3=Sport, 4=Ludicrous (MQTT print_speed). */
+esp_err_t bambu_set_speed(const pp_printer_t *pr, int level);
+/* Chamber / work light from print.lights_report; SET via MQTT system.ledctrl. */
+esp_err_t bambu_list_leds(const pp_printer_t *pr, pp_led_list_t *out);
+esp_err_t bambu_set_light(const pp_printer_t *pr, const char *node, bool on);
 
 /* LAN only (FTPS :990): list printable .3mf / .gcode on printer storage (/, /cache). */
 esp_err_t bambu_list(const pp_printer_t *pr, pp_file_t *arr, int max, int *count);

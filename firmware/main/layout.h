@@ -17,6 +17,7 @@ typedef enum {
     LT_PAUSE, LT_STOP, LT_FILES, LT_TOOLS,
     LT_MOVE, LT_TEMP, LT_WEBCAM, LT_MACROS, LT_CONSOLE, LT_TUNE, LT_CALIB, LT_AFC,
     LT_LAYER_PROGRESS,
+    LT_LIGHTS,
     LT_COUNT
 } pp_tile_type_t;
 

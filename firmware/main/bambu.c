@@ -74,9 +74,122 @@ static double num(const cJSON *o, const char *k)
     return cJSON_IsNumber(v) ? v->valuedouble : 0.0;
 }
 
+/* Bambu often encodes ids as strings ("0") in AMS payloads. */
+static int jid(const cJSON *o, const char *k, int def)
+{
+    const cJSON *v = cJSON_GetObjectItem(o, k);
+    if (cJSON_IsNumber(v)) return (int)v->valuedouble;
+    if (cJSON_IsString(v) && v->valuestring) return atoi(v->valuestring);
+    return def;
+}
+
+/* Parse AMS trays from print.ams into *out (display-only AFC snapshot). */
+static void parse_ams(const cJSON *p, pp_afc_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    const cJSON *ams = cJSON_GetObjectItem(p, "ams");
+    if (!cJSON_IsObject(ams)) return;
+
+    const cJSON *units = cJSON_GetObjectItem(ams, "ams");
+    if (!cJSON_IsArray(units) || cJSON_GetArraySize(units) == 0) return;
+
+    int tray_now = jid(ams, "tray_now", 255);   /* 0–15, 254=ext, 255=none */
+    out->present = true;
+    out->is_ams = true;
+    strlcpy(out->state, "AMS", sizeof(out->state));
+
+    const cJSON *unit;
+    cJSON_ArrayForEach(unit, units) {
+        if (!cJSON_IsObject(unit) || out->n >= PP_AFC_MAX_LANES) break;
+        int uid = jid(unit, "id", 0);
+        const cJSON *trays = cJSON_GetObjectItem(unit, "tray");
+        if (!cJSON_IsArray(trays)) continue;
+
+        const cJSON *tray;
+        cJSON_ArrayForEach(tray, trays) {
+            if (!cJSON_IsObject(tray) || out->n >= PP_AFC_MAX_LANES) break;
+            int sid = jid(tray, "id", out->n % 4);
+            /* Absolute index: prefer tray id when it already looks global; else unit*4+slot. */
+            int abs = sid;
+            if (sid >= 0 && sid <= 3 && uid >= 0)
+                abs = uid * 4 + sid;
+
+            pp_afc_lane_t *L = &out->lanes[out->n];
+            L->num = abs + 1;
+            snprintf(L->name, sizeof(L->name), "%c%d", 'A' + (uid < 0 ? 0 : uid), (sid % 4) + 1);
+
+            const cJSON *tt = cJSON_GetObjectItem(tray, "tray_type");
+            if (cJSON_IsString(tt) && tt->valuestring && tt->valuestring[0])
+                strlcpy(L->material, tt->valuestring, sizeof(L->material));
+
+            const cJSON *tc = cJSON_GetObjectItem(tray, "tray_color");
+            if (cJSON_IsString(tc) && tc->valuestring && strlen(tc->valuestring) >= 6) {
+                snprintf(L->color, sizeof(L->color), "#%.6s", tc->valuestring);
+            }
+
+            int remain = jid(tray, "remain", -1);
+            if (remain >= 0 && remain <= 100)
+                snprintf(L->map, sizeof(L->map), "%d%%", remain);
+
+            L->ready = L->material[0] != '\0';
+            L->tool_loaded = (tray_now >= 0 && tray_now <= 15 && tray_now == abs);
+            if (L->tool_loaded)
+                strlcpy(out->current, L->name, sizeof(out->current));
+            if (L->ready) strlcpy(L->status, "Ready", sizeof(L->status));
+            else          strlcpy(L->status, "Empty", sizeof(L->status));
+            out->n++;
+        }
+    }
+
+    if (out->n == 0) {
+        memset(out, 0, sizeof(*out));
+        return;
+    }
+
+    /* External spool active → note in current when no AMS tray selected. */
+    if (tray_now == 254 && !out->current[0])
+        strlcpy(out->current, "Ext", sizeof(out->current));
+}
+
+static void bambu_led_add(pp_led_list_t *out, const char *node, bool on)
+{
+    if (!out || !node || !node[0] || out->count >= PP_LED_MAX) return;
+    pp_led_t *L = &out->items[out->count];
+    memset(L, 0, sizeof(*L));
+    strlcpy(L->name, node, sizeof(L->name));
+    strlcpy(L->type, "light", sizeof(L->type));
+    L->pwm = true;
+    L->on = on;
+    L->on_known = true;
+    L->w = on ? 255 : 0;
+    out->count++;
+}
+
+static void parse_lights(const cJSON *p, pp_led_list_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    const cJSON *lr = cJSON_GetObjectItem(p, "lights_report");
+    if (cJSON_IsArray(lr)) {
+        const cJSON *it;
+        cJSON_ArrayForEach(it, lr) {
+            if (!cJSON_IsObject(it)) continue;
+            const cJSON *node = cJSON_GetObjectItem(it, "node");
+            const cJSON *mode = cJSON_GetObjectItem(it, "mode");
+            if (!cJSON_IsString(node) || !node->valuestring || !node->valuestring[0]) continue;
+            const char *m = (cJSON_IsString(mode) && mode->valuestring) ? mode->valuestring : "off";
+            bambu_led_add(out, node->valuestring, strcmp(m, "off") != 0);
+        }
+    }
+    if (out->count == 0)
+        bambu_led_add(out, "chamber_light", false);
+}
+
 /* Parse one report payload into *out. Returns true if it carried a usable status (a print
  * object with at least the nozzle temperature, which every full pushall response includes). */
-static bool parse_report(const char *json, int len, pp_status_t *out)
+static bool parse_report(const char *json, int len, pp_status_t *out, pp_afc_t *afc,
+                         pp_led_list_t *leds)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) return false;
@@ -95,9 +208,15 @@ static bool parse_report(const char *json, int len, pp_status_t *out)
     strlcpy(out->state, state, sizeof(out->state));
     out->has_job = (!strcmp(state, "PRINTING") || !strcmp(state, "PAUSED"));
 
-    /* Speed: spd_mag is a percentage when present; otherwise leave 100. */
-    int spd = (int)num(p, "spd_mag");
-    out->speed = spd > 0 ? spd : 100;
+    /* Speed: prefer spd_lvl (1–4 presets); fall back to spd_mag %. */
+    int lvl = (int)num(p, "spd_lvl");
+    if (lvl >= 1 && lvl <= 4) {
+        static const int pct[] = {0, 50, 100, 124, 166};
+        out->speed = pct[lvl];
+    } else {
+        int spd = (int)num(p, "spd_mag");
+        out->speed = spd > 0 ? spd : 100;
+    }
 
     const cJSON *sub = cJSON_GetObjectItem(p, "subtask_name");
     const cJSON *gf  = cJSON_GetObjectItem(p, "gcode_file");
@@ -108,6 +227,8 @@ static bool parse_report(const char *json, int len, pp_status_t *out)
         strlcpy(out->job_thumb, out->job_name, sizeof(out->job_thumb));
 
     out->has_control = true;   /* pause/stop/gcode all available over MQTT */
+    if (afc) parse_ams(p, afc);
+    if (leds) parse_lights(p, leds);
     cJSON_Delete(root);
     return true;
 }
@@ -170,6 +291,8 @@ typedef struct {
     const char  *serial;
     const char  *payload;     /* PUBLISH mode: the request JSON */
     pp_status_t *out;         /* FETCH mode: filled from the report */
+    pp_afc_t    *afc;         /* FETCH mode: optional AMS snapshot */
+    pp_led_list_t *leds;      /* FETCH mode: optional lights_report */
     SemaphoreHandle_t done;
     volatile bool got;        /* FETCH: report parsed; PUBLISH: publish accepted */
     volatile bool got_fw;     /* FETCH: info.get_version ota.sw_ver parsed */
@@ -200,8 +323,18 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data)
         } else {
             snprintf(topic, sizeof(topic), "device/%s/request", c->serial);
             int mid = esp_mqtt_client_publish(e->client, topic, c->payload, 0, 1, 0);
-            c->got = (mid >= 0);
-            xSemaphoreGive(c->done);   /* command flushed; we're done */
+            if (mid < 0) {
+                c->got = false;
+                xSemaphoreGive(c->done);
+            }
+            /* Wait for MQTT_EVENT_PUBLISHED so QoS 1 actually leaves before we tear down. */
+        }
+        break;
+
+    case MQTT_EVENT_PUBLISHED:
+        if (c->mode == BAMBU_PUBLISH) {
+            c->got = true;
+            xSemaphoreGive(c->done);
         }
         break;
 
@@ -216,7 +349,7 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data)
         if (e->current_data_offset + e->data_len >= e->total_data_len) {
             if (parse_version(c->acc, c->acc_len, c->out))
                 c->got_fw = true;
-            if (parse_report(c->acc, c->acc_len, c->out)) {
+            if (parse_report(c->acc, c->acc_len, c->out, c->afc, c->leds)) {
                 c->got = true;
                 xSemaphoreGive(c->done);
             }
@@ -235,9 +368,10 @@ static void on_mqtt(void *args, esp_event_base_t base, int32_t id, void *data)
 /* Run a single MQTT session against broker `uri` (mqtts://host:8883) with the given credentials. */
 static esp_err_t mqtt_session(const char *uri, const char *user, const char *pass,
                               const char *serial, bambu_mode_t mode, const char *payload,
-                              pp_status_t *out)
+                              pp_status_t *out, pp_afc_t *afc, pp_led_list_t *leds)
 {
-    bambu_ctx_t ctx = { .mode = mode, .serial = serial, .payload = payload, .out = out };
+    bambu_ctx_t ctx = { .mode = mode, .serial = serial, .payload = payload,
+                        .out = out, .afc = afc, .leds = leds };
     ctx.done = xSemaphoreCreateBinary();
     if (!ctx.done) return ESP_FAIL;
     if (mode == BAMBU_FETCH) {
@@ -284,14 +418,20 @@ static esp_err_t mqtt_session(const char *uri, const char *user, const char *pas
 
 esp_err_t bambu_get_status_of(const pp_printer_t *pr, pp_status_t *out)
 {
+    return bambu_get_status_afc(pr, out, NULL);
+}
+
+esp_err_t bambu_get_status_afc(const pp_printer_t *pr, pp_status_t *out, pp_afc_t *afc)
+{
     if (!bambu_is(pr) || !pr->uuid[0]) return ESP_FAIL;
     memset(out, 0, sizeof(*out));
+    if (afc) memset(afc, 0, sizeof(*afc));
     out->current_layer = -1;
     out->total_layer   = -1;
     char uri[64]; const char *user, *pass;
     if (!session_params(pr, uri, sizeof(uri), &user, &pass)) return ESP_FAIL;
 
-    esp_err_t r = mqtt_session(uri, user, pass, pr->uuid, BAMBU_FETCH, NULL, out);
+    esp_err_t r = mqtt_session(uri, user, pass, pr->uuid, BAMBU_FETCH, NULL, out, afc, NULL);
     if (r != ESP_OK) return r;
 
     out->online = true;
@@ -309,7 +449,7 @@ static esp_err_t bambu_cmd(const pp_printer_t *pr, const char *payload)
     if (!bambu_is(pr) || !pr->uuid[0]) return ESP_FAIL;
     char uri[64]; const char *user, *pass;
     if (!session_params(pr, uri, sizeof(uri), &user, &pass)) return ESP_FAIL;
-    return mqtt_session(uri, user, pass, pr->uuid, BAMBU_PUBLISH, payload, NULL);
+    return mqtt_session(uri, user, pass, pr->uuid, BAMBU_PUBLISH, payload, NULL, NULL, NULL);
 }
 
 esp_err_t bambu_pause(const pp_printer_t *pr)
@@ -325,6 +465,53 @@ esp_err_t bambu_gcode(const pp_printer_t *pr, const char *gcode)
     char payload[256];
     snprintf(payload, sizeof(payload),
         "{\"print\":{\"sequence_id\":\"1\",\"command\":\"gcode_line\",\"param\":\"%s\\n\"}}", gcode);
+    return bambu_cmd(pr, payload);
+}
+
+esp_err_t bambu_set_speed(const pp_printer_t *pr, int level)
+{
+    if (level < 1) level = 1;
+    if (level > 4) level = 4;
+    char payload[128];
+    snprintf(payload, sizeof(payload),
+        "{\"print\":{\"sequence_id\":\"1\",\"command\":\"print_speed\",\"param\":\"%d\"}}", level);
+    return bambu_cmd(pr, payload);
+}
+
+esp_err_t bambu_list_leds(const pp_printer_t *pr, pp_led_list_t *out)
+{
+    if (!out) return ESP_FAIL;
+    memset(out, 0, sizeof(*out));
+    if (!bambu_is(pr) || !pr->uuid[0]) return ESP_FAIL;
+    pp_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.current_layer = -1;
+    st.total_layer = -1;
+    char uri[64]; const char *user, *pass;
+    if (!session_params(pr, uri, sizeof(uri), &user, &pass)) return ESP_FAIL;
+    return mqtt_session(uri, user, pass, pr->uuid, BAMBU_FETCH, NULL, &st, NULL, out);
+}
+
+esp_err_t bambu_set_light(const pp_printer_t *pr, const char *node, bool on)
+{
+    if (!node || !node[0]) return ESP_FAIL;
+    char safe[32];
+    size_t n = 0;
+    for (const char *p = node; *p && n + 1 < sizeof(safe); p++) {
+        char c = *p;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_'))
+            return ESP_FAIL;
+        safe[n++] = c;
+    }
+    safe[n] = '\0';
+    if (!safe[0]) return ESP_FAIL;
+    char payload[320];
+    snprintf(payload, sizeof(payload),
+             "{\"system\":{\"sequence_id\":\"0\",\"command\":\"ledctrl\","
+             "\"led_node\":\"%s\",\"led_mode\":\"%s\","
+             "\"led_on_time\":500,\"led_off_time\":500,\"loop_times\":0,\"interval_time\":0}}",
+             safe, on ? "on" : "off");
     return bambu_cmd(pr, payload);
 }
 

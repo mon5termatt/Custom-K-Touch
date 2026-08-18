@@ -78,8 +78,10 @@ void ui_apply_afc(void *arg);
 void ui_apply_gcode_log(void *arg);   /* pp_gcode_log_t* */
 void ui_apply_macros(void *arg);      /* pp_macro_list_t* */
 void ui_apply_endstops(void *arg);    /* pp_endstop_list_t* */
+void ui_apply_leds(void *arg);        /* pp_led_list_t* */
 
 /* Build Tools hub + child screens (called from ui_init). */
+void ui_tools_leave(void);
 void ui_tools_init(void);
 void ui_tools_open(void);
 void ui_tools_open_afc(void);
@@ -87,6 +89,7 @@ void ui_tools_open_move(void);
 void ui_tools_open_temp(void);
 void ui_tools_open_webcam(void);
 void ui_tools_open_macros(void);
+void ui_tools_open_lights(void);
 void ui_tools_open_console(void);
 void ui_tools_open_tune(void);
 void ui_tools_open_calib(void);

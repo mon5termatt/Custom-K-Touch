@@ -71,6 +71,31 @@ typedef struct {
 } pp_endstop_list_t;
 esp_err_t moonraker_query_endstops(const pp_printer_t *pr, pp_endstop_list_t *out);
 
+/* LED / neopixel / led_effect objects from /printer/objects/list + color_data query. */
+#define PP_LED_MAX      16
+#define PP_LED_NAME_LEN 32
+#define PP_LED_TYPE_LEN 16
+typedef enum { PP_LED_KIND_COLOR = 0, PP_LED_KIND_EFFECT = 1 } pp_led_kind_t;
+typedef struct {
+    char    name[PP_LED_NAME_LEN];   /* SET_LED LED= / SET_LED_EFFECT EFFECT= */
+    char    type[PP_LED_TYPE_LEN];   /* led, neopixel, led_effect, … */
+    uint8_t kind;
+    bool    pwm;                     /* [led …] PWM (often white_pin only) */
+    bool    dimmable;                /* brightness slider (false for Bambu on/off lights) */
+    bool    on;                      /* any channel > 0, or led_effect enabled */
+    bool    on_known;                /* true if `on` came from printer status */
+    uint8_t r, g, b, w;              /* 0..255 from first pixel */
+    int     pixels;
+} pp_led_t;
+typedef struct {
+    int     count;
+    pp_led_t items[PP_LED_MAX];
+} pp_led_list_t;
+esp_err_t moonraker_list_leds(const pp_printer_t *pr, pp_led_list_t *out);
+esp_err_t moonraker_set_led(const pp_printer_t *pr, const char *name,
+                            float r, float g, float b, float w);
+esp_err_t moonraker_set_led_effect(const pp_printer_t *pr, const char *name, bool stop);
+
 /* AFC (BoxTurtle etc.): query lane status; change/unload via BT_* macros. */
 esp_err_t moonraker_get_afc(const pp_printer_t *pr, pp_afc_t *out);
 esp_err_t moonraker_afc_change(const pp_printer_t *pr, int lane_num);  /* BT_CHANGE_TOOL LANE=N */

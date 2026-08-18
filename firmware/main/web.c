@@ -219,14 +219,16 @@ static const char INDEX_HTML[] =
 "<div class=ptile onclick=\"t(4)\"><b>&#128241; Screen &amp; Language</b><small>Live screen, dim timeout, and UI language.</small></div>"
 "<div class=ptile onclick=\"t(7)\"><b>&#127912; Theme</b><small>Colors, fonts, wordmark.</small></div>"
 "<div class=ptile onclick=\"t(8)\"><b>&#9783; Layout</b><small>Arrange the status tiles.</small></div>"
-"<div class=ptile onclick=\"t(10)\"><b>&#9881; Advanced</b><small>Multi-camera index, LED notes (touch stays simple).</small></div>"
+"<div class=ptile onclick=\"t(10)\"><b>&#9881; Advanced</b><small>Webcam index, live LEDs, optional notes.</small></div>"
 "</div></div></div>"
 "<div class=tab id=t10><div class=card><b>Advanced setup</b>"
-"<p class=muted>Dense printer configuration lives here. The touchscreen only uses the defaults you pick.</p>"
+"<p class=muted>Webcam pick and optional LED notes. Live LED controls talk to Moonraker on the active printer; the touchscreen Lights tool does the same.</p>"
 "<label style='display:block;margin:8px 0 2px'>Default webcam index (Moonraker /server/webcams/list)</label>"
 "<input id=advcam type=number min=0 max=15 value=0 style=width:100px>"
-"<label style='display:block;margin:12px 0 2px'>LED / neopixel assignment notes</label>"
-"<textarea id=advled rows=5 style='width:100%;background:#2a2a2a;color:#f2f2f2;border:1px solid #4e4e4e;border-radius:6px;padding:8px'></textarea>"
+"<div style='margin:16px 0 6px'><b>Lights</b> <button onclick=advleds() style=margin-left:8px>Refresh</button></div>"
+"<div id=ledlive class=muted>Open this tab on a Klipper printer to load led / neopixel objects.</div>"
+"<label style='display:block;margin:12px 0 2px'>LED notes (optional labels)</label>"
+"<textarea id=advled rows=3 style='width:100%;background:#2a2a2a;color:#f2f2f2;border:1px solid #4e4e4e;border-radius:6px;padding:8px'></textarea>"
 "<button class=p onclick=advsave() style=margin-top:10px>Save advanced</button>"
 "<div id=advmsg class=muted style=margin-top:8px></div></div></div>"
 "<div id=snapm style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99;align-items:center;justify-content:center' onclick=\"if(event.target==this)snapx()\">"
@@ -241,7 +243,7 @@ static const char INDEX_HTML[] =
 "function t(i,push){i=i|0;if(i<0||i>10)i=0;"
 "for(let n=0;n<11;n++){let el=document.getElementById('t'+n);if(el)el.className='tab'+(n==i?' on':'')}"
 "document.getElementById('nvst').className=i==0?'on':'';document.getElementById('nvpr').className=i==1?'on':'';document.getElementById('nvse').className=i>=2?'on':'';"
-"if(i==1)lp();if(i==4){shot();lgload();dimload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10)advload();"
+"if(i==1)lp();if(i==4){shot();lgload();dimload()}if(i==5)la();if(i==3)rbload();if(i==6)lf_init();if(i==7)tf_load();if(i==8)ly_load();if(i==10){advload();advleds();}"
 "if(push!==false&&i!==CURTAB){var st=Object.assign({},history.state||{},{tab:i});delete st.form;delete st.snap;"
 "history.pushState(st,'','#'+TABN[i]);}"
 "CURTAB=i;}"
@@ -256,6 +258,17 @@ static const char INDEX_HTML[] =
 "async function advload(){try{let a=await fetch('/api/advanced').then(x=>x.json());document.getElementById('advcam').value=a.webcam_index||0;document.getElementById('advled').value=a.led_notes||'';document.getElementById('advmsg').textContent=''}catch(e){}}"
 "async function advsave(){let body=JSON.stringify({webcam_index:+document.getElementById('advcam').value||0,led_notes:document.getElementById('advled').value||''});"
 "await fetch('/api/advanced',{method:'POST',headers:{'Content-Type':'application/json'},body:body});document.getElementById('advmsg').textContent='Saved.';}"
+"function ledsw(L){var r=L.r|0,g=L.g|0,b=L.b|0,w=L.w|0;if(w>r&&w>g&&w>b)r=g=b=w;return 'rgb('+r+','+g+','+b+')'}"
+"async function ledset(name,r,g,b,w){await fetch('/api/leds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,r:r,g:g,b:b,w:w})});advleds()}"
+"async function ledfx(name,on){await fetch('/api/leds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,effect:on?'stop':'start'})});advleds()}"
+"async function advleds(){var box=document.getElementById('ledlive');if(!box)return;try{var j=await fetch('/api/leds').then(x=>x.json());var a=j.leds||[];if(!a.length){box.innerHTML='No led / neopixel objects on the active printer.';return}"
+"box.innerHTML=a.map(function(L){var n=L.name;var row='<div style=\"display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0;padding:8px;background:#222;border:1px solid #4e4e4e;border-radius:6px\">';"
+"row+='<span style=\"width:18px;height:18px;border-radius:4px;background:'+ledsw(L)+';border:1px solid #666\"></span>';"
+"row+='<b style=min-width:90px>'+n+'</b><span class=muted>'+L.type+(L.pixels>1?(' · '+L.pixels):'')+'</span>';"
+"if(L.effect){row+='<button onclick=ledfx(\\''+n+'\\','+(L.on?1:0)+')>'+(L.on?'On':'Off')+'</button>';}"
+"else{row+='<button onclick=ledset(\\''+n+'\\','+(L.pwm?'0,0,0,255':'255,255,255,255')+')>On</button><button onclick=ledset(\\''+n+'\\',0,0,0,0)>Off</button>';"
+"if(!L.pwm){row+='<button onclick=ledset(\\''+n+'\\',255,0,0,0)>R</button><button onclick=ledset(\\''+n+'\\',0,255,0,0)>G</button><button onclick=ledset(\\''+n+'\\',0,0,255,0)>B</button><button onclick=ledset(\\''+n+'\\',255,140,40,0)>Warm</button><button onclick=ledset(\\''+n+'\\',0,0,0,255)>W</button>';}}"
+"return row+'</div>'}).join('')}catch(e){box.innerHTML='LED query failed (Moonraker / Klipper only).'}}"
 "function shot(){document.getElementById('shot').src='/api/screen.bmp?t='+Date.now()}"
 "async function st(){let L=await fetch('/api/fleet').then(x=>x.json());FL=L;"
 "const sc=s=>{s=(s||'').toUpperCase();if(s=='PRINTING'||s=='ATTENTION')return'orange';if(s=='PAUSED')return'yellow';if(s=='FINISHED')return'green';if(s=='READY')return'olive';if(s=='ERROR'||s=='STOPPED')return'red';if(s=='BUSY'||s=='PREPARING')return'blue';return'gray'};"
@@ -277,7 +290,7 @@ static const char INDEX_HTML[] =
 "'<div class=c-cell><b>NOZZLE</b><div>'+(r.online?r.nozzle+(r.tnozzle>0?'/'+r.tnozzle:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>HEATBED</b><div>'+(r.online?r.bed+(r.tbed>0?'/'+r.tbed:''):'--')+'&deg;C</div></div>'+"
 "'<div class=c-cell><b>SPEED</b><div>'+(r.online?r.speed+'%':'--')+'</div></div>'+"
-"'<div class=c-cell><b>Z AXIS</b><div>'+(r.online?r.z.toFixed(2)+'mm':'--')+'</div></div>'+"
+"'<div class=c-cell><b>ETA</b><div>'+(r.online?eta:'--')+'</div></div>'+"
 "'<div class=c-cell style=grid-column:span 2><b>PROGRESS</b><div>'+(r.printing?r.progress+'%':'--')+'</div></div>'+"
 "'</div>'"
 ");"
@@ -320,11 +333,11 @@ static const char INDEX_HTML[] =
 "async function loadAfc(i){try{let a=await fetch('/api/printer/afc?i='+i).then(x=>x.json());var el=document.getElementById('afc'+i);if(!el)return;"
 "if(!a.present){if(AFCC[i]){delete AFCC[i];el.innerHTML=''}return;}"
 "var sig=JSON.stringify(a);if(AFCC[i]&&AFCC[i].sig===sig){if(el.innerHTML!==AFCC[i].html)el.innerHTML=AFCC[i].html;return;}"
-"el.innerHTML='<div class=lbl style=margin-top:8px>AFC '+(a.current?('· '+a.current):'')+(a.state&&a.state!=='Idle'?(' · '+a.state):'')+'</div><div>'+"
+"el.innerHTML='<div class=lbl style=margin-top:8px>'+(a.is_ams?'AMS':'AFC')+' '+(a.current?('· '+a.current):'')+(a.state&&a.state!=='Idle'&&a.state!=='AMS'?(' · '+a.state):'')+'</div><div>'+"
 "a.lanes.map(function(L){var sty=L.tool_loaded||L.name===a.current?'border-color:var(--o);border-width:2px':'';"
 "var sw=L.color?'<span style=\"display:inline-block;width:10px;height:10px;border-radius:50%;background:'+L.color+';margin-right:4px\"></span>':'';"
-"return '<button style=\"'+sty+'\" onclick=cafc('+i+','+L.num+')>'+sw+'L'+L.num+(L.material?(' '+L.material):'')+'</button>'}).join('')+"
-"'<button onclick=cafcu('+i+')>Unload</button><button onclick=cafcp('+i+')>Prep</button><button onclick=cafcr('+i+')>Resume</button><button onclick=cafcc('+i+')>Clear</button><button onclick=cestop('+i+')>E-STOP</button></div>';"
+"return '<button style=\"'+sty+'\" '+(a.is_ams?'disabled':'onclick=cafc('+i+','+L.num+')')+'>'+sw+'L'+L.num+(L.material?(' '+L.material):'')+'</button>'}).join('')+"
+"(a.is_ams?'':('<button onclick=cafcu('+i+')>Unload</button><button onclick=cafcp('+i+')>Prep</button><button onclick=cafcr('+i+')>Resume</button><button onclick=cafcc('+i+')>Clear</button><button onclick=cestop('+i+')>E-STOP</button>'))+'</div>';"
 "AFCC[i]={sig:sig,html:el.innerHTML}}catch(e){}}"
 "function loadAllAfc(){FL.forEach(function(p,i){if(p&&p.ctl)loadAfc(i)})}"
 "function restoreAfc(){FL.forEach(function(p,i){var el=document.getElementById('afc'+i);if(el&&AFCC[i])el.innerHTML=AFCC[i].html})}"
@@ -485,9 +498,9 @@ static const char INDEX_HTML[] =
 /* ---- Layout designer (issue #6 Phase 4): a chunk-grid editor. Single-quotes + backtick templates
  * + data-attributes only, so it embeds with no escaping. ---- */
 "var LAY={cols:6,rows:0,tiles:[]},LYTYPES=[],LYSEL=-1;"
-"var LYMIN={name:[1,1],model:[1,1],state:[1,1],nozzle:[1,1],bed:[1,1],speed:[1,1],z:[1,1],progress:[1,1],eta:[1,1],thumb:[1,1],header:[1,1],job:[1,1],pause:[1,1],stop:[1,1],files:[1,1],tools:[1,1],move:[1,1],temp:[1,1],webcam:[1,1],macros:[1,1],console:[1,1],tune:[1,1],calib:[1,1],afc:[1,1],layer_progress:[1,1]};"
-"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview',header:'Header',job:'File',pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC',layer_progress:'Layer'};"
-"var LYBTN={pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC'};"
+"var LYMIN={name:[1,1],model:[1,1],state:[1,1],nozzle:[1,1],bed:[1,1],speed:[1,1],z:[1,1],progress:[1,1],eta:[1,1],thumb:[1,1],header:[1,1],job:[1,1],pause:[1,1],stop:[1,1],files:[1,1],tools:[1,1],move:[1,1],temp:[1,1],webcam:[1,1],macros:[1,1],console:[1,1],tune:[1,1],calib:[1,1],afc:[1,1],layer_progress:[1,1],lights:[1,1]};"
+"var LYLBL={name:'Name',model:'Model',state:'State',nozzle:'Nozzle',bed:'Bed',speed:'Speed',z:'Z Axis',progress:'Progress',eta:'ETA',thumb:'Preview',header:'Header',job:'File',pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC',layer_progress:'Layer',lights:'Lights'};"
+"var LYBTN={pause:'Pause',stop:'Stop',files:'Files',tools:'Tools',move:'Move',temp:'Temp',webcam:'Webcam',macros:'Macros',console:'Console',tune:'Tune',calib:'Calib',afc:'AFC',lights:'Lights'};"
 "var LYSAMPLE={name:'Apollo',model:'CORE One',state:'PRINTING',nozzle:'215\\u00b0',bed:'60\\u00b0',speed:'100%',z:'12.4',progress:'64%',eta:'1h 04m',layer_progress:'L 120/300',thumb:'',header:'Apollo',job:'benchy.gcode'};"
 "function ly_setcols(v){var c=parseInt(v);if(c>=1&&c<=12){LAY.cols=c;ly_render()}}"
 "function ly_setrows(v){var r=parseInt(v);if(r<1||r>16)return;var need=ly_tilerows();if(r<need){alert('Need at least '+need+' rows for existing tiles.');var re=document.getElementById('lyrows');if(re)re.value=LAY.rows||need;return}LAY.rows=r;ly_render()}"
@@ -1000,6 +1013,7 @@ static esp_err_t fleet_get(httpd_req_t *req)
             cJSON_AddNumberToObject(e, "bed", (int)arr[i].temp_bed);
             cJSON_AddNumberToObject(e, "tbed", (int)arr[i].target_bed);
             cJSON_AddNumberToObject(e, "speed", arr[i].speed);
+            cJSON_AddNumberToObject(e, "eta", arr[i].time_remaining);
             cJSON_AddNumberToObject(e, "z", arr[i].axis_z);
         }
         cJSON_AddBoolToObject(e, "printing", arr[i].has_job);
@@ -1357,13 +1371,17 @@ static esp_err_t printer_afc_get(httpd_req_t *req)
 
     pp_afc_t afc;
     memset(&afc, 0, sizeof(afc));
-    /* Only Moonraker hosts speak AFC; probe/port avoids hammering PrusaLink/Bambu. */
-    if (pr.port == 7125 || moonraker_probe(&pr))
+    if (bambu_is(&pr)) {
+        pp_status_t st;
+        bambu_get_status_afc(&pr, &st, &afc);
+    } else if (pr.port == 7125 || moonraker_probe(&pr)) {
         moonraker_get_afc(&pr, &afc);
+    }
 
     cJSON *o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "present", afc.present);
     cJSON_AddBoolToObject(o, "error", afc.error);
+    cJSON_AddBoolToObject(o, "is_ams", afc.is_ams);
     cJSON_AddStringToObject(o, "state", afc.state);
     cJSON_AddStringToObject(o, "current", afc.current);
     cJSON *arr = cJSON_AddArrayToObject(o, "lanes");
@@ -1384,6 +1402,118 @@ static esp_err_t printer_afc_get(httpd_req_t *req)
     httpd_resp_sendstr(req, js ? js : "{}");
     free(js);
     cJSON_Delete(o);
+    return ESP_OK;
+}
+
+static void leds_json_send(httpd_req_t *req, const pp_led_list_t *ll)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(o, "leds");
+    if (ll) {
+        for (int i = 0; i < ll->count; i++) {
+            const pp_led_t *L = &ll->items[i];
+            cJSON *e = cJSON_CreateObject();
+            cJSON_AddStringToObject(e, "name", L->name);
+            cJSON_AddStringToObject(e, "type", L->type);
+            cJSON_AddBoolToObject(e, "pwm", L->pwm);
+            cJSON_AddBoolToObject(e, "effect", L->kind == PP_LED_KIND_EFFECT);
+            cJSON_AddBoolToObject(e, "on", L->on);
+            cJSON_AddNumberToObject(e, "r", L->r);
+            cJSON_AddNumberToObject(e, "g", L->g);
+            cJSON_AddNumberToObject(e, "b", L->b);
+            cJSON_AddNumberToObject(e, "w", L->w);
+            cJSON_AddNumberToObject(e, "pixels", L->pixels);
+            cJSON_AddItemToArray(arr, e);
+        }
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, js ? js : "{\"leds\":[]}");
+    free(js);
+    cJSON_Delete(o);
+}
+
+static bool leds_printer(int idx, pp_printer_t *pr)
+{
+    if (idx < 0) idx = printer_store_active();
+    if (!printer_store_get(idx, pr)) return false;
+    if (bambu_is(pr)) return true;
+    if (strncmp(pr->host, "cloud:", 6) == 0 || strncmp(pr->host, "sdcp:", 5) == 0)
+        return false;
+    return (pr->port == 7125 || moonraker_probe(pr));
+}
+
+static esp_err_t leds_get(httpd_req_t *req)
+{
+    char q[64] = {0}, v[16];
+    int idx = -1;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+        httpd_query_key_value(q, "i", v, sizeof(v)) == ESP_OK)
+        idx = atoi(v);
+    pp_printer_t pr;
+    pp_led_list_t ll;
+    memset(&ll, 0, sizeof(ll));
+    if (leds_printer(idx, &pr)) {
+        if (bambu_is(&pr)) bambu_list_leds(&pr, &ll);
+        else               moonraker_list_leds(&pr, &ll);
+    }
+    leds_json_send(req, &ll);
+    return ESP_OK;
+}
+
+static esp_err_t leds_post(httpd_req_t *req)
+{
+    char *body = recv_body(req);
+    if (!body) return ESP_FAIL;
+    cJSON *j = cJSON_Parse(body);
+    free(body);
+    if (!j) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+    int idx = -1;
+    cJSON *ji = cJSON_GetObjectItem(j, "i");
+    if (cJSON_IsNumber(ji)) idx = ji->valueint;
+    const cJSON *jn = cJSON_GetObjectItem(j, "name");
+    const char *name = (cJSON_IsString(jn) && jn->valuestring) ? jn->valuestring : "";
+    pp_printer_t pr;
+    if (!name[0] || !leds_printer(idx, &pr)) {
+        cJSON_Delete(j);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad printer/name");
+    }
+    const cJSON *fx = cJSON_GetObjectItem(j, "effect");
+    esp_err_t err;
+    if (bambu_is(&pr)) {
+        bool on = true;
+        if (cJSON_IsString(fx) && fx->valuestring)
+            on = strcmp(fx->valuestring, "stop") != 0;
+        else {
+            const cJSON *jr = cJSON_GetObjectItem(j, "r");
+            const cJSON *jg = cJSON_GetObjectItem(j, "g");
+            const cJSON *jb = cJSON_GetObjectItem(j, "b");
+            const cJSON *jw = cJSON_GetObjectItem(j, "w");
+            int r = cJSON_IsNumber(jr) ? jr->valueint : 0;
+            int g = cJSON_IsNumber(jg) ? jg->valueint : 0;
+            int b = cJSON_IsNumber(jb) ? jb->valueint : 0;
+            int w = cJSON_IsNumber(jw) ? jw->valueint : 0;
+            on = (r || g || b || w);
+        }
+        err = bambu_set_light(&pr, name, on);
+    } else if (cJSON_IsString(fx) && fx->valuestring) {
+        err = moonraker_set_led_effect(&pr, name, strcmp(fx->valuestring, "stop") == 0);
+    } else {
+        float r = 0, g = 0, b = 0, w = 0;
+        const cJSON *jr = cJSON_GetObjectItem(j, "r");
+        const cJSON *jg = cJSON_GetObjectItem(j, "g");
+        const cJSON *jb = cJSON_GetObjectItem(j, "b");
+        const cJSON *jw = cJSON_GetObjectItem(j, "w");
+        if (cJSON_IsNumber(jr)) r = (float)jr->valuedouble / 255.f;
+        if (cJSON_IsNumber(jg)) g = (float)jg->valuedouble / 255.f;
+        if (cJSON_IsNumber(jb)) b = (float)jb->valuedouble / 255.f;
+        if (cJSON_IsNumber(jw)) w = (float)jw->valuedouble / 255.f;
+        err = moonraker_set_led(&pr, name, r, g, b, w);
+    }
+    cJSON_Delete(j);
+    if (err != ESP_OK) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "gcode");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
 
@@ -2156,6 +2286,8 @@ void web_start(void)
         { "/api/connect/control", HTTP_POST, connect_control_post },
         { "/api/printer/control", HTTP_POST, printer_control_post },
         { "/api/printer/afc", HTTP_GET, printer_afc_get },
+        { "/api/leds", HTTP_GET, leds_get },
+        { "/api/leds", HTTP_POST, leds_post },
         { "/api/advanced", HTTP_GET, advanced_get },
         { "/api/advanced", HTTP_POST, advanced_post },
         { "/api/connect/snapshot", HTTP_GET, connect_snapshot_get },

@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PP_FW_VERSION "0.8.6"
+#define PP_FW_VERSION "0.8.7"
 
 /* Which host API a printer speaks (auto-detected on first contact). */
 typedef enum { PP_BK_UNKNOWN = 0, PP_BK_PRUSALINK, PP_BK_MOONRAKER, PP_BK_PRUSA_CONNECT, PP_BK_BAMBU, PP_BK_SDCP } pp_backend_t;
@@ -89,12 +89,12 @@ typedef struct {
     struct { char name[40]; int done, total, attn; } orders[8];
 } pp_farm_t;
 
-/* AFC (Armored Turtle / BoxTurtle) lane snapshot — Moonraker printers only. */
+/* AFC (Armored Turtle / BoxTurtle) or Bambu AMS lane snapshot. */
 #define PP_AFC_MAX_LANES 8
 typedef struct {
-    char name[12];            /* "lane1"                                     */
-    int  num;                 /* 1..N for BT_CHANGE_TOOL LANE=N              */
-    char map[8];              /* tool map e.g. "T0"                          */
+    char name[12];            /* "lane1" / "A1"                              */
+    int  num;                 /* 1..N for BT_CHANGE_TOOL / AMS slot display  */
+    char map[8];              /* tool map e.g. "T0" / remain "80%"           */
     char material[12];
     char color[10];           /* "#RRGGBB" or empty                          */
     char status[16];          /* filament_status e.g. "Ready"                */
@@ -105,7 +105,8 @@ typedef struct {
 typedef struct {
     bool present;
     bool error;
-    char state[20];           /* AFC current_state e.g. "Idle"               */
+    bool is_ams;              /* Bambu AMS — display only (no lane controls) */
+    char state[20];           /* AFC current_state e.g. "Idle" / "AMS"       */
     char current[12];         /* loaded lane name, or empty                  */
     int  n;
     pp_afc_lane_t lanes[PP_AFC_MAX_LANES];

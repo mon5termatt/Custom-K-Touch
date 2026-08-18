@@ -25,7 +25,8 @@ Wi-Fi, and portrait layouts.
   thumbnails and start a print with a tap. Plugged a USB stick into the printer? Switch the
   Files header between the printer's storage and the USB drive, the way the stock K-Touch
   screen does.
-- **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Macros, Console
+- **Tools hub (Klipper).** Tile grid for Move, Temperature, Webcam, Lights (PWM `led` and
+  `neopixel` via `SET_LED`), Macros, Console
   (gcode log + entry via USB-A keyboard on the experimental HID path), Tune, Calibration
   (endstops / PID / Z-offset / bed mesh), and AFC when BoxTurtle lanes are detected.
   Underscore macros (`_NAME`) stay hidden. Commands run on a dedicated worker so jog /

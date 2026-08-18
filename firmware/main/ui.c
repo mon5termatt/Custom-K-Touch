@@ -174,6 +174,7 @@ static lv_obj_t *make_header_ex(lv_obj_t *parent, const char *text, bool brand);
 static lv_obj_t *make_barbtn(lv_obj_t *bar, const char *text, lv_event_cb_t cb,
                              void *user_data, lv_coord_t w);
 static void make_wordmark(lv_obj_t *parent);
+static void ui_status_show(void);
 
 static void thumb_show_loading(bool on)
 {
@@ -246,7 +247,7 @@ static void on_files_clicked(lv_event_t *e)
 
 static void on_back_clicked(lv_event_t *e)
 {
-    lv_screen_load(s_scr_status);
+    ui_status_show();
 }
 
 static void on_control_back(lv_event_t *e)
@@ -372,7 +373,7 @@ static void status_layout_sync(void);
 
 static bool layout_is_button(uint8_t type)
 {
-    return type >= LT_PAUSE && type <= LT_AFC;
+    return (type >= LT_PAUSE && type <= LT_AFC) || type == LT_LIGHTS;
 }
 
 static const char *layout_button_label(uint8_t type)
@@ -390,6 +391,7 @@ static const char *layout_button_label(uint8_t type)
     case LT_TUNE:    return tr(STR_TUNE);
     case LT_CALIB:   return tr(STR_CALIBRATION);
     case LT_AFC:     return tr(STR_AFC);
+    case LT_LIGHTS:  return tr(STR_LIGHTS);
     default:         return "";
     }
 }
@@ -406,6 +408,7 @@ static void on_lbtn_console(lv_event_t *e){ (void)e; ui_tools_set_back_to_status
 static void on_lbtn_tune(lv_event_t *e)    { (void)e; ui_tools_set_back_to_status(); ui_tools_open_tune(); }
 static void on_lbtn_calib(lv_event_t *e)   { (void)e; ui_tools_set_back_to_status(); ui_tools_open_calib(); }
 static void on_lbtn_afc(lv_event_t *e)     { (void)e; ui_tools_set_back_to_status(); ui_tools_open_afc(); }
+static void on_lbtn_lights(lv_event_t *e) { (void)e; ui_tools_set_back_to_status(); ui_tools_open_lights(); }
 
 static lv_event_cb_t layout_button_cb(uint8_t type)
 {
@@ -422,18 +425,38 @@ static lv_event_cb_t layout_button_cb(uint8_t type)
     case LT_TUNE:    return on_lbtn_tune;
     case LT_CALIB:   return on_lbtn_calib;
     case LT_AFC:     return on_lbtn_afc;
+    case LT_LIGHTS:  return on_lbtn_lights;
     default:         return NULL;
     }
 }
 
-/** Scroll horizontally when text is wider than the label (static when it fits). */
+/** Scroll horizontally when text is wider than the label; otherwise clip with dots. */
 static void layout_label_scroll(lv_obj_t *lbl, lv_coord_t w)
 {
     const lv_font_t *f = lv_obj_get_style_text_font(lbl, LV_PART_MAIN);
     lv_coord_t lh = f ? lv_font_get_line_height(f) : lv_font_get_line_height(PP_F16);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL);
     if (w > 0) lv_obj_set_width(lbl, w);
     lv_obj_set_height(lbl, lh);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    const char *txt = lv_label_get_text(lbl);
+    if (w > 0 && txt && txt[0]) {
+        lv_coord_t tw = lv_text_get_width(txt, (int)strlen(txt), f, 0);
+        if (tw > w) lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL);
+    }
+}
+
+static void ui_status_repaint(void)
+{
+    if (s_status_content) lv_obj_invalidate(s_status_content);
+    lv_display_t *disp = lv_display_get_default();
+    if (disp) lv_refr_now(disp);
+}
+
+static void ui_status_show(void)
+{
+    ui_tools_leave();
+    lv_screen_load(s_scr_status);
+    ui_status_repaint();
 }
 
 static lv_obj_t *make_layout_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
@@ -458,6 +481,24 @@ static lv_obj_t *make_layout_button(lv_obj_t *parent, const char *text, lv_event
     lv_obj_center(l);
     if (out_lbl) *out_lbl = l;
     return b;
+}
+
+static void layout_btn_set_enabled(lv_obj_t *lbl, bool enabled)
+{
+    if (!lbl) return;
+    lv_obj_t *btn = lv_obj_get_parent(lbl);
+    if (!btn) return;
+    if (enabled) {
+        lv_obj_remove_state(btn, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(lbl, PP_TEXT, 0);
+        lv_obj_set_style_border_color(btn, PP_BORDER, 0);
+        lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
+    } else {
+        lv_obj_add_state(btn, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(lbl, PP_TEXT_MUTED, 0);
+        lv_obj_set_style_border_color(btn, PP_BORDER, 0);
+        lv_obj_set_style_opa(btn, LV_OPA_50, 0);
+    }
 }
 
 static void status_thumb_clear(void)
@@ -743,45 +784,14 @@ static void fd_print_do(void)
     if (!s_sel_path[0]) return;
     if (s_files_usb_mode) app_state_post_cmd(PP_CMD_UPLOAD, s_sel_path);
     else                  app_state_post_cmd(PP_CMD_PRINT, s_sel_path);
-    lv_screen_load(s_scr_status);
-}
-
-static void fd_print_confirm_cb(lv_event_t *e)
-{
-    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
-    lv_msgbox_close(mbox);
-    fd_print_do();
-}
-
-static void fd_print_cancel_cb(lv_event_t *e)
-{
-    lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
-    lv_msgbox_close(mbox);
+    ui_status_show();
 }
 
 static void on_fd_print(lv_event_t *e)
 {
     (void)e;
     if (ui_locked_block()) return;
-    if (!s_sel_path[0]) return;
-
-    const char *name = s_files_usb_mode ? s_sel_path : s_sel_path;
-    if (s_fd_name) name = lv_label_get_text(s_fd_name);
-    if (!name || !name[0]) name = s_sel_path;
-
-    char body[192];
-    snprintf(body, sizeof(body),
-             s_files_usb_mode ? "Upload and print\n%s?" : "Start printing\n%s?",
-             name);
-
-    lv_obj_t *mbox = lv_msgbox_create(NULL);
-    lv_msgbox_add_title(mbox, "Print");
-    lv_msgbox_add_text(mbox, body);
-    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, "Print");
-    lv_obj_set_style_bg_color(ok, PP_ORANGE, 0);
-    lv_obj_add_event_cb(ok, fd_print_confirm_cb, LV_EVENT_CLICKED, mbox);
-    lv_obj_t *cancel = lv_msgbox_add_footer_button(mbox, "Cancel");
-    lv_obj_add_event_cb(cancel, fd_print_cancel_cb, LV_EVENT_CLICKED, mbox);
+    fd_print_do();
 }
 
 static void build_filedetail_screen(void)
@@ -1181,7 +1191,7 @@ static void on_wifi_connect_clicked(lv_event_t *e)
     if (s_wifi_selected[0]) {
         app_state_wifi_connect(s_wifi_selected, lv_textarea_get_text(s_wifi_ta_pass));
     }
-    lv_screen_load(s_scr_status);
+    ui_status_show();
 }
 
 /* Update the Wi-Fi status line. Three states, in priority order: connected (show
@@ -1337,7 +1347,7 @@ static void open_printer_at(int idx)
         pp_status_t *copy = malloc(sizeof(*copy));
         if (copy) { *copy = s_dash_items[idx]; ui_apply_status(copy); }
     }
-    lv_screen_load(s_scr_status);
+    ui_status_show();
 }
 
 static void on_card_clicked(lv_event_t *e)
@@ -1391,13 +1401,15 @@ static const lv_image_dsc_t *card_model_icon(const pp_status_t *s, int idx)
 }
 
 /* One Connect-style telemetry cell: muted uppercase label over a bold white value. */
-static lv_obj_t *card_cell(lv_obj_t *parent, int x, int y, const char *label, const char *value)
+static lv_obj_t *card_cell(lv_obj_t *parent, int x, int y, const char *label, const char *value,
+                           lv_obj_t **out_cap)
 {
     lv_obj_t *l = lv_label_create(parent);
     lv_label_set_text(l, label);
     lv_obj_set_style_text_color(l, PP_TEXT_MUTED, 0);
     lv_obj_set_style_text_font(l, PP_F12, 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, x, y);
+    if (out_cap) *out_cap = l;
 
     lv_obj_t *v = lv_label_create(parent);
     lv_label_set_text(v, value);
@@ -1408,7 +1420,7 @@ static lv_obj_t *card_cell(lv_obj_t *parent, int x, int y, const char *label, co
 }
 
 /* Format the 4 telemetry values exactly as the card shows them (shared by build + in-place update). */
-static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, char *zx)
+static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, char *eta)
 {
     if (s->online) {
         if ((int)s->target_nozzle >= 1) sprintf(nz, "%d/%d\xC2\xB0""C", (int)s->temp_nozzle, (int)s->target_nozzle);
@@ -1416,8 +1428,8 @@ static void fmt_telemetry(const pp_status_t *s, char *nz, char *hb, char *sp, ch
         if ((int)s->target_bed >= 1) sprintf(hb, "%d/%d\xC2\xB0""C", (int)s->temp_bed, (int)s->target_bed);
         else sprintf(hb, "%d\xC2\xB0""C", (int)s->temp_bed);
         sprintf(sp, "%d%%", s->speed);
-        sprintf(zx, "%.2fmm", s->axis_z);
-    } else { strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(zx, "--"); }
+        fmt_eta(s->time_remaining, eta, 16);
+    } else { strcpy(nz, "--"); strcpy(hb, "--"); strcpy(sp, "--"); strcpy(eta, "--"); }
 }
 
 /* Compact only exact thousands/millions (60000→60K); leave non-round values as-is. */
@@ -1468,7 +1480,7 @@ static bool printer_is_sdcp(int idx)
  * them in place (gist #11) instead of destroying + rebuilding every card (flicker + CPU). */
 typedef struct {
     lv_obj_t *strip, *badge, *badge_lbl, *name_lbl, *model_lbl;
-    lv_obj_t *v_noz, *v_speed, *v_bed, *v_z, *prog_bar, *prog_lbl;
+    lv_obj_t *v_noz, *v_speed, *v_bed, *v_z, *v_eta_cap, *prog_bar, *prog_lbl;
     bool resin;   /* SDCP card layout (UV/layer/film/ETA) */
 } dash_refs_t;
 static dash_refs_t s_dref[PP_MAX_PRINTERS];
@@ -1549,6 +1561,7 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
     }
     ch |= lbl_set_if_changed(r->name_lbl, s->printer_name[0] ? s->printer_name : "Printer");
     ch |= lbl_set_if_changed(r->model_lbl, s->model[0] ? s->model : (online ? "Printer" : ""));
+    ch |= lbl_set_if_changed(r->v_eta_cap, tr(STR_ETA));
     if (r->resin) {
         char uv[24], ly[24], fl[24], et[16];
         fmt_telemetry_sdcp(s, uv, ly, fl, et);
@@ -1557,12 +1570,12 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
         ch |= lbl_set_if_changed(r->v_bed, fl);
         ch |= lbl_set_if_changed(r->v_z, et);
     } else {
-        char nz[24], hb[24], sp[16], zx[16];
-        fmt_telemetry(s, nz, hb, sp, zx);
+        char nz[24], hb[24], sp[16], et[16];
+        fmt_telemetry(s, nz, hb, sp, et);
         ch |= lbl_set_if_changed(r->v_noz, nz);
         ch |= lbl_set_if_changed(r->v_speed, sp);
         ch |= lbl_set_if_changed(r->v_bed, hb);
-        ch |= lbl_set_if_changed(r->v_z, zx);
+        ch |= lbl_set_if_changed(r->v_z, et);
     }
     if (s->has_job && r->prog_bar) {
         int pct = (int)(s->progress + 0.5f);
@@ -1581,10 +1594,12 @@ static bool update_dash_card(const dash_refs_t *r, const pp_status_t *s)
 
 /* Structural fingerprint: which printers, in what order, online/job/firmware/thumbnail state.
  * Excludes the churning values (temps/progress/...) so those go through the in-place path. */
+#define DASH_CARD_REV 2   /* bump when fleet card anatomy changes (2 = Z→ETA) */
 static uint32_t dash_sig(const pp_dash_t *d, const int *order, int n, bool hide_off)
 {
     uint32_t h = 2166136261u;
 #define MIX(x) do { h ^= (uint32_t)(x); h *= 16777619u; } while (0)
+    MIX(DASH_CARD_REV);
     MIX(d->conn_expired ? 1 : 0); MIX(hide_off ? 1 : 0);
     int shown = 0;
     for (int k = 0; k < n; k++) {
@@ -1758,50 +1773,51 @@ static void make_printer_card(lv_obj_t *parent, const pp_status_t *s, int idx, d
         lv_obj_align(fwl, LV_ALIGN_TOP_LEFT, 66, 59);
     }
 
-    /* ---- labeled telemetry grid (FDM: nozzle/speed/bed/Z — resin: UV/layer/film/ETA) ---- */
+    /* ---- labeled telemetry grid (FDM: nozzle/speed/bed/ETA — resin: UV/layer/film/ETA) ---- */
     const bool resin = printer_is_sdcp(idx);
     if (r) r->resin = resin;
     const int X1 = 14, X2 = 140, X3 = 266, R1 = 86, R2 = 124;
     if (resin) {
         char uv[24], ly[24], fl[24], et[16];
         fmt_telemetry_sdcp(s, uv, ly, fl, et);
-        lv_obj_t *v1 = card_cell(c, X1, R1, tr(STR_UV_LED), uv);
-        lv_obj_t *v2 = card_cell(c, X2, R1, tr(STR_LAYER),  ly);
-        lv_obj_t *v3 = card_cell(c, X3, R1, tr(STR_FILM),   fl);
-        lv_obj_t *v4 = card_cell(c, X1, R2, tr(STR_ETA),    et);
+        lv_obj_t *v1 = card_cell(c, X1, R1, tr(STR_UV_LED), uv, NULL);
+        lv_obj_t *v2 = card_cell(c, X2, R1, tr(STR_LAYER),  ly, NULL);
+        lv_obj_t *v3 = card_cell(c, X3, R1, tr(STR_FILM),   fl, NULL);
+        lv_obj_t *v4 = card_cell(c, X1, R2, tr(STR_ETA),    et, r ? &r->v_eta_cap : NULL);
         if (r) { r->v_noz = v1; r->v_speed = v2; r->v_bed = v3; r->v_z = v4; }
     } else {
-        char nz[24], hb[24], sp[16], zx[16];
-        fmt_telemetry(s, nz, hb, sp, zx);
-        lv_obj_t *vn = card_cell(c, X1, R1, tr(STR_NOZZLE), nz);
-        lv_obj_t *vs = card_cell(c, X2, R1, tr(STR_SPEED),  sp);   /* Connect column order: NOZZLE / SPEED / BED */
-        lv_obj_t *vb = card_cell(c, X3, R1, tr(STR_BED),    hb);
-        lv_obj_t *vz = card_cell(c, X1, R2, tr(STR_Z_AXIS), zx);
-        if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = vz; }
+        char nz[24], hb[24], sp[16], et[16];
+        fmt_telemetry(s, nz, hb, sp, et);
+        lv_obj_t *vn = card_cell(c, X1, R1, tr(STR_NOZZLE), nz, NULL);
+        lv_obj_t *vs = card_cell(c, X2, R1, tr(STR_SPEED),  sp, NULL);   /* Connect column order: NOZZLE / SPEED / BED */
+        lv_obj_t *vb = card_cell(c, X3, R1, tr(STR_BED),    hb, NULL);
+        lv_obj_t *ve = card_cell(c, X1, R2, tr(STR_ETA),    et, r ? &r->v_eta_cap : NULL);
+        if (r) { r->v_noz = vn; r->v_speed = vs; r->v_bed = vb; r->v_z = ve; }
     }
 
     /* progress (when printing) fills the 2nd/3rd column of row 2 */
     if (s->has_job) {
         int pct = (int)(s->progress + 0.5f);
+        const int card_w = 380, pad_r = 14, pct_w = 48;
         lv_obj_t *pl = lv_label_create(c);
         lv_label_set_text(pl, tr(STR_PROGRESS));
         lv_obj_set_style_text_color(pl, PP_TEXT_MUTED, 0);
         lv_obj_set_style_text_font(pl, PP_F12, 0);
         lv_obj_align(pl, LV_ALIGN_TOP_LEFT, X2, R2);
 
+        lv_obj_t *pv = lv_label_create(c);
+        lv_label_set_text_fmt(pv, "%d%%", pct);
+        lv_obj_set_style_text_color(pv, PP_TEXT, 0);
+        lv_obj_set_style_text_font(pv, PP_F16, 0);
+        lv_obj_align(pv, LV_ALIGN_TOP_RIGHT, -pad_r, R2 + 16);
+
         lv_obj_t *bar = lv_bar_create(c);
-        lv_obj_set_size(bar, 140, 10);
+        lv_obj_set_size(bar, card_w - pad_r - X2 - pct_w, 10);
         lv_obj_align(bar, LV_ALIGN_TOP_LEFT, X2, R2 + 20);
         lv_bar_set_range(bar, 0, 100);
         lv_bar_set_value(bar, pct, LV_ANIM_OFF);
         lv_obj_set_style_bg_color(bar, PP_SURFACE_HI, 0);
         lv_obj_set_style_bg_color(bar, PP_ORANGE, LV_PART_INDICATOR);
-
-        lv_obj_t *pv = lv_label_create(c);
-        lv_label_set_text_fmt(pv, "%d%%", pct);
-        lv_obj_set_style_text_color(pv, PP_TEXT, 0);
-        lv_obj_set_style_text_font(pv, PP_F16, 0);
-        lv_obj_align(pv, LV_ALIGN_TOP_LEFT, X3, R2 + 14);
         if (r) { r->prog_bar = bar; r->prog_lbl = pv; }
     }
 }
@@ -2321,18 +2337,19 @@ void ui_status_set_afc_chip(const pp_afc_t *a)
         lv_obj_add_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
         return;
     }
+    const char *tag = a->is_ams ? "AMS" : "AFC";
     if (a->current[0]) {
         char buf[48];
         const char *mat = "";
         for (int i = 0; i < a->n; i++) {
             if (!strcmp(a->lanes[i].name, a->current)) { mat = a->lanes[i].material; break; }
         }
-        if (mat && mat[0]) snprintf(buf, sizeof(buf), "AFC: %s (%s)", a->current, mat);
-        else snprintf(buf, sizeof(buf), tr(STR_AFC_LANE_FMT), a->current);
+        if (mat && mat[0]) snprintf(buf, sizeof(buf), "%s: %s (%s)", tag, a->current, mat);
+        else snprintf(buf, sizeof(buf), "%s: %s", tag, a->current);
         lv_label_set_text(s_afc_chip, buf);
         lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_label_set_text_fmt(s_afc_chip, tr(STR_AFC_LANE_FMT), a->state[0] ? a->state : "-");
+        lv_label_set_text_fmt(s_afc_chip, "%s: %s", tag, a->state[0] ? a->state : "-");
         lv_obj_clear_flag(s_afc_chip, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -2410,6 +2427,9 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
         lv_obj_set_style_border_width(card, 0, 0);
         lv_obj_set_style_radius(card, 6, 0);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+#ifdef LV_OBJ_FLAG_OVERFLOW_VISIBLE
+        lv_obj_remove_flag(card, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+#endif
 
         lv_obj_t *val = NULL, *barw = NULL, *img = NULL, *bdg = NULL;
 
@@ -2588,7 +2608,17 @@ static void layout_render_into(lv_obj_t *parent, const pp_layout_t *L, const pp_
                 lv_label_set_text(val, buf);
             }
             break;
-        case LT_SPEED: if (val) { snprintf(buf, sizeof(buf), "%d%%", st->speed); lv_label_set_text(val, buf); } break;
+        case LT_SPEED: if (val) {
+            if (app_state_active_is_bambu()) {
+                const char *n = (st->speed <= 60) ? "Silent"
+                               : (st->speed <= 110) ? "Standard"
+                               : (st->speed <= 140) ? "Sport" : "Ludicrous";
+                lv_label_set_text(val, n);
+            } else {
+                snprintf(buf, sizeof(buf), "%d%%", st->speed);
+                lv_label_set_text(val, buf);
+            }
+        } break;
         case LT_ZAXIS: if (val) { snprintf(buf, sizeof(buf), "%.2fmm", st->axis_z); lv_label_set_text(val, buf); } break;
         case LT_PROGRESS: {
             int pct = (int)st->progress;
@@ -2652,7 +2682,10 @@ static void layout_bind(const pp_status_t *s)
         case LT_HEADER:
             if (s_lay[i].card)
                 lv_obj_set_style_bg_color(s_lay[i].card, s->online ? pp_state_strip(s->state) : PP_STRIP_GRAY, 0);
-            if (v) lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer");
+            if (v) {
+                lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer");
+                layout_label_scroll(v, lv_obj_get_width(s_lay[i].card) - 20);
+            }
             if (s_lay[i].badge)
                 lv_obj_set_style_bg_color(s_lay[i].badge, s->online ? pp_state_badge(s->state) : PP_BADGE_GRAY, 0);
             if (s_lay[i].bar) {   /* badge label */
@@ -2660,12 +2693,23 @@ static void layout_bind(const pp_status_t *s)
                 lv_label_set_text(s_lay[i].bar, tr_state(stxt));
             }
             break;
-        case LT_NAME:  if (v) lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer"); break;
-        case LT_MODEL: if (v) lv_label_set_text(v, s->model[0] ? s->model : ""); break;
+        case LT_NAME:
+            if (v) {
+                lv_label_set_text(v, s->printer_name[0] ? s->printer_name : "Printer");
+                layout_label_scroll(v, lv_obj_get_width(s_lay[i].card) - 4);
+            }
+            break;
+        case LT_MODEL:
+            if (v) {
+                lv_label_set_text(v, s->model[0] ? s->model : "");
+                layout_label_scroll(v, lv_obj_get_width(s_lay[i].card) - 4);
+            }
+            break;
         case LT_JOB:
             if (v) {
                 if (s->has_job) lv_label_set_text(v, s->job_name[0] ? s->job_name : tr(STR_PRINTING_PAREN));
                 else            lv_label_set_text(v, s->online ? tr(STR_NO_ACTIVE_PRINT) : "");
+                layout_label_scroll(v, lv_obj_get_width(s_lay[i].card) - 4);
             }
             break;
         case LT_STATE: if (v) {
@@ -2690,7 +2734,15 @@ static void layout_bind(const pp_status_t *s)
         case LT_SPEED:
             if (v) {
                 if (!s->online) lv_label_set_text(v, "--");
-                else { snprintf(buf, sizeof(buf), "%d%%", s->speed); lv_label_set_text(v, buf); }
+                else if (app_state_active_is_bambu()) {
+                    const char *n = (s->speed <= 60) ? "Silent"
+                                   : (s->speed <= 110) ? "Standard"
+                                   : (s->speed <= 140) ? "Sport" : "Ludicrous";
+                    lv_label_set_text(v, n);
+                } else {
+                    snprintf(buf, sizeof(buf), "%d%%", s->speed);
+                    lv_label_set_text(v, buf);
+                }
             }
             break;
         case LT_ZAXIS:
@@ -2751,8 +2803,8 @@ static void layout_bind(const pp_status_t *s)
             break;
         case LT_TOOLS:
             if (s_lay[i].card) {
-                if (s->has_control) lv_obj_remove_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
-                else                lv_obj_add_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_flag(s_lay[i].card, LV_OBJ_FLAG_HIDDEN);
+                layout_btn_set_enabled(s_lay[i].val, s->has_control);
             }
             break;
         case LT_AFC: {
@@ -3376,7 +3428,7 @@ static void ui_apply_nav(void *arg)
     char *name = (char *)arg;
     if (name) {
         if      (!strcmp(name, "dash")   || !strcmp(name, "fleet"))   lv_screen_load(s_scr_dash);
-        else if (!strcmp(name, "status") || !strcmp(name, "printer")) lv_screen_load(s_scr_status);
+        else if (!strcmp(name, "status") || !strcmp(name, "printer")) ui_status_show();
         else if (!strcmp(name, "control") || !strcmp(name, "tools")) ui_tools_open();
         else if (!strcmp(name, "files"))  { app_state_post_cmd(s_files_usb_mode ? PP_CMD_LIST_USB : PP_CMD_LIST, NULL); lv_screen_load(s_scr_files); }
         else if (!strcmp(name, "printers") || !strcmp(name, "settings")) { refresh_printers_list(); lv_screen_load(s_scr_printers); }

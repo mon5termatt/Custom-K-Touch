@@ -21,15 +21,34 @@
 #include "lwip/inet.h"
 #include "cJSON.h"
 #include "i18n.h"
+#include "libs/lodepng/lodepng.h"   /* BMP covers → PNG for LVGL */
 
 static const char *TAG = "sdcp";
 
 #define SDCP_PREFIX      "sdcp:"
 #define SDCP_DISC_PORT   3000
 #define SDCP_WS_PORT     3030
+#define SDCP_HTTP_PORT   3030   /* thumbs / upload — not :80 */
 #define SDCP_DISC_MS     2500
 #define SDCP_WAIT_MS     6000
 #define SDCP_RX_CAP      16384
+
+/* Elegoo/Chitu job covers live under /media/mmcblk0p1/file_info/.
+ * PrintInfo.Filename "foo.goo" → .../file_info/foo_goo.bmp (last '.' → '_'). */
+static void sdcp_file_info_thumb(const char *ip, const char *fname, char *out, size_t n)
+{
+    if (!out || n == 0) return;
+    out[0] = '\0';
+    if (!ip || !ip[0] || !fname || !fname[0]) return;
+    const char *base = strrchr(fname, '/');
+    base = base ? base + 1 : fname;
+    char stem[120];
+    strlcpy(stem, base, sizeof(stem));
+    char *dot = strrchr(stem, '.');
+    if (dot && dot != stem) *dot = '_';
+    snprintf(out, n, "http://%s:%d/media/mmcblk0p1/file_info/%s.bmp",
+             ip, SDCP_HTTP_PORT, stem);
+}
 
 /* Synthetic dialog_ids for the Prusa-style attention banner (Connect uses real ids). */
 #define SDCP_DID_PRINT   900000   /* + PrintInfo.ErrorNumber */
@@ -332,7 +351,7 @@ static int machine_primary(const cJSON *cur)
     return have ? best : SDCP_MS_IDLE;
 }
 
-static void map_status(const cJSON *status, pp_status_t *out, const char *ip)
+static void map_status(const cJSON *status, pp_status_t *out, const char *ip, char *task_id_out, size_t task_id_n)
 {
     const cJSON *ms = cJSON_GetObjectItem(status, "CurrentStatus");
     int machine = machine_primary(ms);
@@ -353,6 +372,10 @@ static void map_status(const cJSON *status, pp_status_t *out, const char *ip)
         if ((v = cJSON_GetObjectItem(pi, "Filename")) && cJSON_IsString(v)) fname = v->valuestring;
         if ((v = cJSON_GetObjectItem(pi, "TaskId")) && cJSON_IsString(v) && v->valuestring[0])
             task_id = v->valuestring;
+    }
+    if (task_id_out && task_id_n) {
+        task_id_out[0] = '\0';
+        if (task_id) strlcpy(task_id_out, task_id, task_id_n);
     }
 
     /* Coarse UI state vocabulary. */
@@ -418,14 +441,13 @@ static void map_status(const cJSON *status, pp_status_t *out, const char *ip)
         strlcpy(out->job_name, base ? base + 1 : fname, sizeof(out->job_name));
     }
 
-    /* Cover preview: TaskId → history_image; otherwise shared /thumb.jpg while a job is active.
-     * Elegoo/Chitu V3 often serve the current cover at /thumb.jpg. */
-    if (ip && ip[0] && (has_job || (task_id && task_id[0]))) {
-        if (task_id && task_id[0])
-            snprintf(out->job_thumb, sizeof(out->job_thumb),
-                     "http://%s/board-resource/history_image/%s.png", ip, task_id);
-        else
-            snprintf(out->job_thumb, sizeof(out->job_thumb), "http://%s/thumb.jpg", ip);
+    /* Cover: /media/mmcblk0p1/file_info/<name_ext>.bmp on :3030 (Elegoo Saturn etc.). */
+    if (ip && ip[0] && fname && fname[0])
+        sdcp_file_info_thumb(ip, fname, out->job_thumb, sizeof(out->job_thumb));
+    else if (ip && ip[0] && task_id && task_id[0]) {
+        snprintf(out->job_thumb, sizeof(out->job_thumb),
+                 "http://%s:%d/board-resource/history_image/%s.png",
+                 ip, SDCP_HTTP_PORT, task_id);
     }
 
     const cJSON *t;
@@ -448,7 +470,8 @@ typedef enum {
     SDCP_OP_STATUS = 0,
     SDCP_OP_LIST,
     SDCP_OP_PRINT,
-    SDCP_OP_SIMPLE,   /* pause/stop/resume — Cmd + empty Data, wait Ack */
+    SDCP_OP_SIMPLE,   /* pause/stop/resume / video — Cmd + Data, wait Ack */
+    SDCP_OP_HISTORY,  /* Cmd 321 — Thumbnail for TaskId */
 } sdcp_op_t;
 
 typedef struct {
@@ -463,8 +486,10 @@ typedef struct {
     char  brand_id[40];
     char  request_id[33];
     char  ip[48];
-    /* STATUS */
+    /* STATUS / HISTORY */
     pp_status_t *out_status;
+    char  task_id[48];    /* PrintInfo.TaskId — for Cmd 321 cover URL */
+    int   video_streams;  /* NumberOfVideoStreamConnected (-1 unknown) */
     /* LIST */
     pp_file_t *files;
     int max_files;
@@ -475,6 +500,7 @@ typedef struct {
     /* PRINT / SIMPLE */
     int  ack;         /* -1 pending, else Ack code */
     int  simple_cmd;  /* Cmd number for SDCP_OP_SIMPLE */
+    int  video_enable;/* for Cmd 386: 0=close stream, 1=open */
 } sdcp_ws_ctx_t;
 
 static void sdcp_make_ids(char *rid, size_t rn, uint32_t *ts_out)
@@ -515,6 +541,8 @@ static void sdcp_parse_file_list(sdcp_ws_ctx_t *ctx, const cJSON *inner)
         strlcpy(f->path, name, sizeof(f->path));
         const char *base = strrchr(name, '/');
         strlcpy(f->display, base ? base + 1 : name, sizeof(f->display));
+        if (ctx->ip[0])
+            sdcp_file_info_thumb(ctx->ip, name, f->thumb, sizeof(f->thumb));
         f->is_print = true;
         f->is_folder = false;
         if (used >= 0) {
@@ -595,6 +623,10 @@ static void sdcp_handle_attributes(sdcp_ws_ctx_t *ctx, const cJSON *root)
         if (ctx->out_status) ctx->out_status->release_film_max = film_max;
         ESP_LOGI(TAG, "ReleaseFilmMax=%d", film_max);
     }
+
+    /* Camera RTSP slot count — printers typically allow only 1 stream. */
+    int streams = sdcp_json_intish(cJSON_GetObjectItem(attrs, "NumberOfVideoStreamConnected"), -1);
+    if (streams >= 0) ctx->video_streams = streams;
 }
 
 static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
@@ -618,7 +650,7 @@ static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
         if (strstr(tstr, "sdcp/status/") == tstr) {
             const cJSON *st = cJSON_GetObjectItem(root, "Status");
             if (cJSON_IsObject(st) && ctx->out_status) {
-                map_status(st, ctx->out_status, ctx->ip);
+                map_status(st, ctx->out_status, ctx->ip, ctx->task_id, sizeof(ctx->task_id));
                 sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
                 ctx->ok = true;
                 xSemaphoreGive(ctx->done);
@@ -633,9 +665,58 @@ static void sdcp_try_parse_msg(sdcp_ws_ctx_t *ctx, const char *data, int len)
         if (!ctx->ok) {
             const cJSON *st = cJSON_GetObjectItem(root, "Status");
             if (cJSON_IsObject(st) && ctx->out_status) {
-                map_status(st, ctx->out_status, ctx->ip);
+                map_status(st, ctx->out_status, ctx->ip, ctx->task_id, sizeof(ctx->task_id));
                 sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
                 ctx->ok = true;
+                xSemaphoreGive(ctx->done);
+            }
+        }
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (ctx->op == SDCP_OP_HISTORY) {
+        const cJSON *d = cJSON_GetObjectItem(root, "Data");
+        const cJSON *inner = cJSON_IsObject(d) ? cJSON_GetObjectItem(d, "Data") : NULL;
+        if (!cJSON_IsObject(inner) && cJSON_IsObject(d)) inner = d;
+        const cJSON *hd = cJSON_IsObject(inner) ? cJSON_GetObjectItem(inner, "HistoryDetail") : NULL;
+        if (!cJSON_IsArray(hd) && cJSON_IsObject(inner))
+            hd = cJSON_GetObjectItem(inner, "Details");
+        if (cJSON_IsArray(hd) && ctx->out_status) {
+            const cJSON *it;
+            cJSON_ArrayForEach(it, hd) {
+                if (!cJSON_IsObject(it)) continue;
+                const cJSON *th = cJSON_GetObjectItem(it, "Thumbnail");
+                if (!cJSON_IsString(th) || !th->valuestring || !th->valuestring[0]) continue;
+                /* Rewrite host-only URLs onto :3030 (printer HTTP is never :80). */
+                const char *tu = th->valuestring;
+                if (!strncmp(tu, "http://", 7)) {
+                    const char *host = tu + 7;
+                    const char *slash = strchr(host, '/');
+                    const char *colon = strchr(host, ':');
+                    if (slash && (!colon || colon > slash) && ctx->ip[0]) {
+                        snprintf(ctx->out_status->job_thumb, sizeof(ctx->out_status->job_thumb),
+                                 "http://%s:%d%s", ctx->ip, SDCP_HTTP_PORT, slash);
+                    } else {
+                        strlcpy(ctx->out_status->job_thumb, tu, sizeof(ctx->out_status->job_thumb));
+                    }
+                } else if (tu[0] == '/') {
+                    snprintf(ctx->out_status->job_thumb, sizeof(ctx->out_status->job_thumb),
+                             "http://%s:%d%s", ctx->ip, SDCP_HTTP_PORT, tu);
+                } else {
+                    snprintf(ctx->out_status->job_thumb, sizeof(ctx->out_status->job_thumb),
+                             "http://%s:%d/%s", ctx->ip, SDCP_HTTP_PORT, tu);
+                }
+                ESP_LOGI(TAG, "cover %s", ctx->out_status->job_thumb);
+                break;
+            }
+            ctx->ok = true;
+            xSemaphoreGive(ctx->done);
+        } else {
+            const cJSON *ack = cJSON_IsObject(inner) ? cJSON_GetObjectItem(inner, "Ack") : NULL;
+            if (cJSON_IsNumber(ack)) {
+                ctx->ack = ack->valueint;
+                ctx->ok = (ctx->ack == 0);
                 xSemaphoreGive(ctx->done);
             }
         }
@@ -704,10 +785,9 @@ static void sdcp_send_request(sdcp_ws_ctx_t *ctx)
     sdcp_make_ids(ctx->request_id, sizeof(ctx->request_id), &ts);
 
     if (ctx->op == SDCP_OP_STATUS) {
-        /* Cmd 0 = status; Cmd 1 = attributes (ReleaseFilmMax lives here). */
+        /* Cmd 0 = status; Cmd 1 = attributes (ReleaseFilmMax + video stream count). */
         sdcp_send_cmd(ctx, 0);
-        if (sdcp_film_max_get(ctx->mainboard_id) <= 0)
-            sdcp_send_cmd(ctx, 1);
+        sdcp_send_cmd(ctx, 1);
         ctx->sent_cmd = true;
         return;
     } else if (ctx->op == SDCP_OP_LIST) {
@@ -717,13 +797,31 @@ static void sdcp_send_request(sdcp_ws_ctx_t *ctx)
                  "\"Topic\":\"sdcp/request/%s\"}",
                  id, ctx->list_url, ctx->request_id, ctx->mainboard_id,
                  (unsigned long)ts, ctx->mainboard_id);
-    } else if (ctx->op == SDCP_OP_SIMPLE) {
+    } else if (ctx->op == SDCP_OP_HISTORY) {
+        /* Cmd 321 — history detail for one TaskId (includes Thumbnail URL). */
         snprintf(req, sizeof(req),
-                 "{\"Id\":\"%s\",\"Data\":{\"Cmd\":%d,\"Data\":{},\"RequestID\":\"%s\","
-                 "\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
+                 "{\"Id\":\"%s\",\"Data\":{\"Cmd\":321,\"Data\":{\"Id\":[\"%s\"]},"
+                 "\"RequestID\":\"%s\",\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
                  "\"Topic\":\"sdcp/request/%s\"}",
-                 id, ctx->simple_cmd, ctx->request_id, ctx->mainboard_id,
+                 id, ctx->task_id, ctx->request_id, ctx->mainboard_id,
                  (unsigned long)ts, ctx->mainboard_id);
+    } else if (ctx->op == SDCP_OP_SIMPLE) {
+        if (ctx->simple_cmd == 386) {
+            /* Enable/Disable Video Stream — Data.Enable 0|1 */
+            snprintf(req, sizeof(req),
+                     "{\"Id\":\"%s\",\"Data\":{\"Cmd\":386,\"Data\":{\"Enable\":%d},"
+                     "\"RequestID\":\"%s\",\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
+                     "\"Topic\":\"sdcp/request/%s\"}",
+                     id, ctx->video_enable ? 1 : 0, ctx->request_id, ctx->mainboard_id,
+                     (unsigned long)ts, ctx->mainboard_id);
+        } else {
+            snprintf(req, sizeof(req),
+                     "{\"Id\":\"%s\",\"Data\":{\"Cmd\":%d,\"Data\":{},\"RequestID\":\"%s\","
+                     "\"MainboardID\":\"%s\",\"TimeStamp\":%lu,\"From\":0},"
+                     "\"Topic\":\"sdcp/request/%s\"}",
+                     id, ctx->simple_cmd, ctx->request_id, ctx->mainboard_id,
+                     (unsigned long)ts, ctx->mainboard_id);
+        }
     } else { /* PRINT */
         snprintf(req, sizeof(req),
                  "{\"Id\":\"%s\",\"Data\":{\"Cmd\":128,\"Data\":{\"Filename\":\"%s\",\"StartLayer\":0},"
@@ -825,23 +923,36 @@ static esp_err_t sdcp_ws_rpc(const char *ip, const sdcp_disc_t *disc, sdcp_ws_ct
     esp_err_t st = esp_websocket_client_start(cl);
     if (st == ESP_OK) {
         xSemaphoreTake(ctx->done, pdMS_TO_TICKS(SDCP_WAIT_MS));
-        /* Only linger for attributes when we still need ReleaseFilmMax — holding the
-         * socket longer burns one of the printer's scarce WebSocket slots (~5). */
-        if (ctx->op == SDCP_OP_STATUS && ctx->ok &&
-            ctx->out_status && ctx->out_status->release_film_max <= 0 &&
-            sdcp_film_max_get(ctx->mainboard_id) <= 0) {
-            for (int i = 0; i < 10; i++) {
-                if (ctx->out_status->release_film_max > 0) break;
-                if (sdcp_film_max_get(ctx->mainboard_id) > 0) {
-                    sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
-                    break;
-                }
+        if (ctx->op == SDCP_OP_STATUS && ctx->ok) {
+            /* Attributes (Cmd 1) often arrive after status — wait briefly for film max
+             * and camera stream count before we tear down the socket. */
+            for (int i = 0; i < 8; i++) {
+                bool have_film = (ctx->out_status && ctx->out_status->release_film_max > 0) ||
+                                 sdcp_film_max_get(ctx->mainboard_id) > 0;
+                if (have_film && ctx->video_streams >= 0) break;
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
             if (ctx->out_status)
                 sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
-        } else if (ctx->op == SDCP_OP_STATUS && ctx->ok && ctx->out_status) {
-            sdcp_apply_film_max(ctx->out_status, ctx->mainboard_id);
+
+            /* Close leftover RTSP camera sessions only when attributes report them open. */
+            if (ctx->client && ctx->video_streams > 0) {
+                ESP_LOGI(TAG, "closing %d camera stream(s)", ctx->video_streams);
+                ctx->op = SDCP_OP_SIMPLE;
+                ctx->simple_cmd = 386;
+                ctx->video_enable = 0;
+                ctx->ack = -1;
+                ctx->ok = false;
+                ctx->sent_cmd = false;
+                xSemaphoreTake(ctx->done, 0);
+                sdcp_send_request(ctx);
+                xSemaphoreTake(ctx->done, pdMS_TO_TICKS(1500));
+                if (ctx->ack == 0)
+                    ESP_LOGI(TAG, "camera stream closed");
+                else
+                    ESP_LOGW(TAG, "camera stream close Ack=%d", ctx->ack);
+                ctx->ok = true;   /* status itself succeeded; close is best-effort */
+            }
         }
     }
 
@@ -880,6 +991,7 @@ esp_err_t sdcp_get_status_ex(const pp_printer_t *pr, pp_status_t *out, bool refr
     sdcp_ws_ctx_t ctx = {0};
     ctx.op = SDCP_OP_STATUS;
     ctx.out_status = out;
+    ctx.video_streams = -1;
     esp_err_t r = sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
     /* One quick retry — printers with a 5-slot WS limit often reject a reconnect
      * that races a previous close (TIME_WAIT / "too many client"). */
@@ -894,6 +1006,7 @@ esp_err_t sdcp_get_status_ex(const pp_printer_t *pr, pp_status_t *out, bool refr
         ctx = (sdcp_ws_ctx_t){0};
         ctx.op = SDCP_OP_STATUS;
         ctx.out_status = out;
+        ctx.video_streams = -1;
         r = sdcp_ws_rpc(sdcp_ip(pr), &disc, &ctx);
     }
     if (r != ESP_OK) return r;
@@ -1000,6 +1113,60 @@ esp_err_t sdcp_resume(const pp_printer_t *pr) { return sdcp_simple_cmd(pr, 131);
 
 typedef struct { uint8_t *buf; int len; int cap; } sdcp_http_acc_t;
 
+/* LVGL only decodes PNG/JPEG from memory — convert Elegoo BMP covers to PNG. */
+static esp_err_t sdcp_bmp_to_png(const uint8_t *bmp, int bmp_len, uint8_t **out_png, int *out_len)
+{
+    if (!bmp || bmp_len < 54 || bmp[0] != 'B' || bmp[1] != 'M' || !out_png || !out_len)
+        return ESP_FAIL;
+    *out_png = NULL;
+    *out_len = 0;
+
+    uint32_t offset = 0;
+    int32_t w = 0, h_signed = 0;
+    uint16_t bpp = 0;
+    memcpy(&offset, bmp + 10, 4);
+    memcpy(&w, bmp + 18, 4);
+    memcpy(&h_signed, bmp + 22, 4);
+    memcpy(&bpp, bmp + 28, 2);
+    bool top_down = h_signed < 0;
+    int h = top_down ? -h_signed : h_signed;
+    if (w < 1 || h < 1 || w > 2048 || h > 2048) return ESP_FAIL;
+    if (bpp != 24 && bpp != 32) return ESP_FAIL;
+    int bpp_bytes = bpp / 8;
+    int row_bytes = ((bpp * w + 31) / 32) * 4;
+    if ((int64_t)offset + (int64_t)row_bytes * h > bmp_len) return ESP_FAIL;
+
+    size_t rgba_n = (size_t)w * (size_t)h * 4u;
+    uint8_t *rgba = heap_caps_malloc(rgba_n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rgba) rgba = malloc(rgba_n);
+    if (!rgba) return ESP_ERR_NO_MEM;
+
+    for (int y = 0; y < h; y++) {
+        int src_y = top_down ? y : (h - 1 - y);
+        const uint8_t *row = bmp + offset + (size_t)src_y * (size_t)row_bytes;
+        uint8_t *dst = rgba + (size_t)y * (size_t)w * 4u;
+        for (int x = 0; x < w; x++) {
+            const uint8_t *px = row + x * bpp_bytes;
+            dst[x * 4 + 0] = px[2];
+            dst[x * 4 + 1] = px[1];
+            dst[x * 4 + 2] = px[0];
+            dst[x * 4 + 3] = (bpp == 32) ? px[3] : 255;
+        }
+    }
+
+    unsigned char *png = NULL;
+    size_t png_sz = 0;
+    unsigned err = lodepng_encode32(&png, &png_sz, rgba, (unsigned)w, (unsigned)h);
+    free(rgba);
+    if (err || !png || png_sz == 0) {
+        free(png);
+        return ESP_FAIL;
+    }
+    *out_png = png;
+    *out_len = (int)png_sz;
+    return ESP_OK;
+}
+
 static esp_err_t sdcp_http_event(esp_http_client_event_t *e)
 {
     if (e->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
@@ -1043,9 +1210,19 @@ static esp_err_t sdcp_http_get_url(const char *url, uint8_t **out, int *out_len)
         free(acc.buf);
         return ESP_FAIL;
     }
-    /* Accept PNG or JPEG. */
     bool png = (acc.len >= 8 && memcmp(acc.buf, "\x89PNG\r\n\x1a\n", 8) == 0);
     bool jpg = (acc.len >= 3 && acc.buf[0] == 0xFF && acc.buf[1] == 0xD8);
+    bool bmp = (acc.len >= 2 && acc.buf[0] == 'B' && acc.buf[1] == 'M');
+    if (bmp) {
+        uint8_t *png_buf = NULL;
+        int png_len = 0;
+        esp_err_t r = sdcp_bmp_to_png(acc.buf, acc.len, &png_buf, &png_len);
+        free(acc.buf);
+        if (r != ESP_OK) return r;
+        *out = png_buf;
+        *out_len = png_len;
+        return ESP_OK;
+    }
     if (!png && !jpg) {
         free(acc.buf);
         return ESP_FAIL;
@@ -1063,9 +1240,9 @@ static void sdcp_abs_url(const char *ip, const char *path_or_url, char *out, siz
         return;
     }
     if (path_or_url[0] == '/')
-        snprintf(out, n, "http://%s%s", ip, path_or_url);
+        snprintf(out, n, "http://%s:%d%s", ip, SDCP_HTTP_PORT, path_or_url);
     else
-        snprintf(out, n, "http://%s/%s", ip, path_or_url);
+        snprintf(out, n, "http://%s:%d/%s", ip, SDCP_HTTP_PORT, path_or_url);
 }
 
 esp_err_t sdcp_fetch_thumb(const pp_printer_t *pr, const char *ref, uint8_t **out, int *out_len)
@@ -1076,15 +1253,27 @@ esp_err_t sdcp_fetch_thumb(const pp_printer_t *pr, const char *ref, uint8_t **ou
 
     const char *ip = sdcp_ip(pr);
     char url[192];
-    sdcp_abs_url(ip, ref, url, sizeof(url));
-    if (sdcp_http_get_url(url, out, out_len) == ESP_OK) return ESP_OK;
+    /* Bare job name (no URL / slash) → file_info BMP path. */
+    if (!strchr(ref, '/') && strncmp(ref, "http", 4) != 0) {
+        sdcp_file_info_thumb(ip, ref, url, sizeof(url));
+    } else {
+        sdcp_abs_url(ip, ref, url, sizeof(url));
+    }
+    if (url[0] && sdcp_http_get_url(url, out, out_len) == ESP_OK) return ESP_OK;
 
-    /* Fallbacks used by Elegoo/Chitu V3 firmwares. */
-    char alt[96];
-    snprintf(alt, sizeof(alt), "http://%s/thumb.jpg", ip);
-    if (strcmp(url, alt) != 0 && sdcp_http_get_url(alt, out, out_len) == ESP_OK) return ESP_OK;
-    snprintf(alt, sizeof(alt), "http://%s/thumb.png", ip);
-    if (sdcp_http_get_url(alt, out, out_len) == ESP_OK) return ESP_OK;
+    /* Fallbacks used by some Elegoo/Chitu firmwares. */
+    static const char *const alts[] = {
+        "/thumb.jpg",
+        "/thumb.png",
+        "/board-resource/thumb.jpg",
+        "/board-resource/print.png",
+    };
+    for (int i = 0; i < (int)(sizeof(alts) / sizeof(alts[0])); i++) {
+        char alt[96];
+        snprintf(alt, sizeof(alt), "http://%s:%d%s", ip, SDCP_HTTP_PORT, alts[i]);
+        if (url[0] && strcmp(url, alt) == 0) continue;
+        if (sdcp_http_get_url(alt, out, out_len) == ESP_OK) return ESP_OK;
+    }
     return ESP_FAIL;
 }
 

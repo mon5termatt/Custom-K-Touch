@@ -127,6 +127,23 @@ and rollback safety net). Unaffected by the auto-update opt-in.
 Manual firmware upload — POST a raw `klipper-touch.bin` / `klipper-touch-app.bin` app image
 (multipart/binary) to flash the inactive OTA slot. Always keep the USB-C recovery path available.
 
+### `GET /api/printer/afc`
+AFC / AMS lanes for fleet index `i` (default 0).
+
+### `GET /api/leds`
+Klipper LED / neopixel objects on the active printer (or `?i=<fleet-index>`). Moonraker only.
+```json
+{ "leds": [
+  { "name":"case", "type":"led", "pwm":true, "effect":false, "r":0, "g":0, "b":0, "w":255, "pixels":1 },
+  { "name":"screen", "type":"neopixel", "pwm":false, "effect":false, "r":0, "g":0, "b":0, "w":0, "pixels":3 }
+]}
+```
+
+### `POST /api/leds`
+Set color or a `led_effect`. Body: `{ "name":"hotend", "r":0, "g":0, "b":0, "w":255, "i":0 }`
+with RGBW 0–255. PWM `[led]` chains use `w`. Effects: `{ "name":"rainbow", "effect":"start"|"stop" }`.
+Sends `SET_LED` / `SET_LED_EFFECT` via Moonraker.
+
 ## Troubleshooting checklist
 
 | Symptom | Check |

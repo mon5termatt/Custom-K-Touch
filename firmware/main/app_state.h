@@ -40,7 +40,7 @@ typedef enum {
     PP_CMD_FAN,           /* i32a = 0..100 percent                                               */
     PP_CMD_UNLOCK,        /* M84 motors off                                                      */
     PP_CMD_EXTRUDE,       /* i32a=length*100 mm (signed), i32b=feed mm/min                       */
-    PP_CMD_SET_SPEED,     /* i32a = M220 percent                                                 */
+    PP_CMD_SET_SPEED,     /* i32a = M220 percent, or Bambu speed level 1–4                     */
     PP_CMD_SET_FLOW,      /* i32a = M221 percent                                                 */
     PP_CMD_SET_TEMP,      /* index=0 nozzle / 1 bed, i32a=temp C                                 */
     PP_CMD_PID,           /* index=0 extruder / 1 bed, i32a=target C                             */
@@ -51,6 +51,8 @@ typedef enum {
     PP_CMD_ENDSTOPS,      /* query -> ui_apply_endstops                                          */
     PP_CMD_GCODE_LOG,     /* fetch store -> ui_apply_gcode_log                                   */
     PP_CMD_LIST_MACROS,   /* -> ui_apply_macros                                                  */
+    PP_CMD_LIST_LEDS,     /* -> ui_apply_leds                                                    */
+    PP_CMD_SET_LED,       /* path=name; index=0 color (i32a RGB, i32b W 0..255) / 1 start / 2 stop */
     PP_CMD_KLIPPER_RESTART,      /* RESTART                                                      */
     PP_CMD_FIRMWARE_RESTART,     /* FIRMWARE_RESTART                                             */
 } pp_cmd_kind_t;
@@ -86,7 +88,7 @@ void app_state_start(void);
 /* Thread-safe snapshot of the active printer's latest status. */
 void app_state_get(pp_status_t *out);
 
-/* Thread-safe snapshot of AFC lanes for the active Moonraker printer (present=false if N/A). */
+/* Thread-safe snapshot of AFC/AMS lanes for the active printer (present=false if N/A). */
 void app_state_get_afc(pp_afc_t *out);
 
 /* True when the active printer's detected backend is Moonraker. */
@@ -103,6 +105,7 @@ void app_state_get_fleet(pp_status_t *arr, int max, int *count);
 void app_state_post_cmd(pp_cmd_kind_t kind, const char *path);
 /* Post a command carrying numeric args (preheat index, jog axis/distance/feedrate). */
 void app_state_post_cmd_n(pp_cmd_kind_t kind, int index, int i32a, int i32b);
+void app_state_post_cmd_ex(pp_cmd_kind_t kind, const char *path, int index, int i32a, int i32b);
 
 /* Answer the active printer's attention dialog (Connect DIALOG_ACTION). */
 void app_state_dialog_action(int dialog_id, const char *button);
